@@ -1,0 +1,12 @@
+{
+  "name": "raui-ru",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RAUI.RU real estate platform monorepo",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "echo \"Workspace scaffold only\"",
+    "test": "echo \"Tests not configured yet\"",
+    "lint": "echo \"Lint not configured yet\""
+  }
+}
