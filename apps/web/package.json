@@ -10,10 +10,19 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@raui/types": "workspace:*",
+    "@raui/ui": "workspace:*",
+    "leaflet": "1.9.4",
     "next": "16.3.8",
     "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "@raui/types": "workspace:*",
-    "@raui/ui": "workspace:*"
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/leaflet": "^1.9.22",
+    "jsdom": "^30.1.2"
   }
 }

@@ -20,7 +20,12 @@
     "test:integration": "pnpm --filter @raui/api test:integration",
     "db:migrate": "pnpm --filter @raui/api db:migrate",
     "worker:media": "pnpm --filter @raui/api worker",
-    "smoke:core": "pnpm --filter @raui/api smoke:core"
+    "smoke:core": "pnpm --filter @raui/api smoke:core",
+    "worker:search": "pnpm --filter @raui/api worker:search",
+    "search:reindex": "pnpm --filter @raui/api worker:search --reindex --once",
+    "search:reconcile": "pnpm --filter @raui/api worker:search --reconcile --once",
+    "test:e2e": "pnpm --filter @raui/api test:e2e",
+    "smoke:search": "node scripts/search-smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

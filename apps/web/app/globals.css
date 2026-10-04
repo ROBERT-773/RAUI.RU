@@ -1,0 +1,259 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #f5f7f9;
+  color: #152b3a;
+  font-family: Arial, sans-serif;
+  line-height: 1.5;
+}
+a {
+  color: #07537b;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  background: #fff;
+  padding: 1rem max(1rem, calc((100vw - 1200px) / 2));
+  border-bottom: 1px solid #d7e1e7;
+}
+header nav {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+main {
+  max-width: 1200px;
+  margin: auto;
+  padding: 1.25rem;
+}
+h1 {
+  font-size: clamp(1.8rem, 5vw, 3rem);
+}
+h2 {
+  font-size: 1.2rem;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  border: 1px solid #748592;
+  border-radius: 0.5rem;
+  padding: 0.7rem;
+  min-height: 44px;
+}
+button {
+  background: #fff;
+  color: #17384b;
+  cursor: pointer;
+}
+button[aria-pressed='true'],
+.primary {
+  background: #07537b;
+  color: white;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+button:hover {
+  border-color: #07537b;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  background: #fff;
+}
+label {
+  display: block;
+  font-weight: 600;
+}
+label input,
+label select,
+label textarea {
+  margin-top: 0.3rem;
+  font-weight: 400;
+}
+:focus-visible {
+  outline: 3px solid #d97800;
+  outline-offset: 3px;
+}
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  background: #fff;
+  border-radius: 1rem;
+}
+.toolbar,
+.map-controls,
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 1rem;
+}
+.card {
+  border: 1px solid #d7e1e7;
+  background: white;
+  border-radius: 1rem;
+  overflow: hidden;
+}
+.card img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+}
+.card-body {
+  padding: 1rem;
+}
+.photo-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4/3;
+  background: #e0e8ef;
+  color: #3e596c;
+  font-size: 2rem;
+}
+.price {
+  font-size: 1.4rem;
+  font-weight: bold;
+}
+.skeleton {
+  padding: 2rem;
+  background: #e0e8ef;
+  border-radius: 1rem;
+}
+.coordinate-map {
+  height: 400px;
+  position: relative;
+  border: 1px solid #9aaebd;
+  border-radius: 1rem;
+  background-color: #e9f0e7;
+  background-image:
+    linear-gradient(#cedaca 1px, transparent 1px),
+    linear-gradient(90deg, #cedaca 1px, transparent 1px);
+  background-size: 10% 10%;
+  overflow: hidden;
+}
+.coordinate-map button {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: #07537b;
+  color: white;
+  font-size: 0.8rem;
+  max-width: 160px;
+}
+.skip {
+  position: absolute;
+  left: -10000px;
+}
+.skip:focus {
+  left: 1rem;
+  top: 0.5rem;
+  background: white;
+  z-index: 10;
+}
+.panel {
+  padding: 1rem;
+  background: #fff;
+  border-radius: 1rem;
+  margin: 1rem 0;
+}
+.detail-photo {
+  max-width: 100%;
+  height: auto;
+}
+dl {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 0.5rem;
+}
+dd {
+  margin: 0;
+}
+.account-form {
+  max-width: 480px;
+}
+.account-form label {
+  margin: 1rem 0;
+}
+footer {
+  padding: 2rem;
+  text-align: center;
+  color: #435b6d;
+}
+@media (max-width: 500px) {
+  header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .coordinate-map {
+    height: 320px;
+  }
+}
+
+.leaflet-map {
+  height: 450px;
+  border-radius: 1rem;
+  border: 1px solid #9aaebd;
+  background: #e5ece5;
+}
+.price-marker span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  border-radius: 0.75rem;
+  background: #07537b;
+  color: #fff;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 5px #456;
+  white-space: nowrap;
+}
+.leaflet-marker-icon:focus-visible {
+  outline: 3px solid #d97800;
+}
+.leaflet-control-attribution {
+  color: #152b3a;
+}
+.leaflet-container a {
+  color: #07537b;
+}
+
+.advanced-filters {
+  grid-column: 1/-1;
+}
+summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 0.7rem;
+}
+fieldset {
+  border: 1px solid #9aaebd;
+  border-radius: 0.5rem;
+  min-width: 0;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+td,
+th {
+  border: 1px solid #9aaebd;
+  padding: 0.7rem;
+  text-align: left;
+}

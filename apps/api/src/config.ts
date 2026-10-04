@@ -14,6 +14,12 @@ export const envSchema = z
     REDIS_URL: z
       .url()
       .refine((v) => ['redis:', 'rediss:'].includes(new URL(v).protocol)),
+    OPENSEARCH_URL: z.url().default('http://127.0.0.1:9200'),
+    OPENSEARCH_ALIAS: z
+      .string()
+      .regex(/^[a-z][a-z0-9_-]{2,80}$/)
+      .default('raui-listings'),
+    OPENSEARCH_TOKEN: z.string().optional(),
     SESSION_DAYS: z.coerce.number().int().min(1).max(30).default(7),
     LOCAL_PRIVATE_DIR: z.string().default('.cache/private'),
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
@@ -33,6 +39,15 @@ export const envSchema = z
     GEOCODER_TOKEN: z.string().optional(),
   })
   .superRefine((value, context) => {
+    if (
+      value.NODE_ENV === 'production' &&
+      new URL(value.OPENSEARCH_URL).protocol !== 'https:'
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['OPENSEARCH_URL'],
+        message: 'Production OpenSearch requires TLS',
+      });
     if (
       value.NODE_ENV === 'production' &&
       value.S3_ENDPOINT &&

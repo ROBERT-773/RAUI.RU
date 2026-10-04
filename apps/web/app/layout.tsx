@@ -1,3 +1,6 @@
+import 'leaflet/dist/leaflet.css';
+import './globals.css';
+import Link from 'next/link';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 export const metadata: Metadata = {
@@ -7,7 +10,22 @@ export const metadata: Metadata = {
 export default function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="ru">
-      <body>{children}</body>
+      <body>
+        <a className="skip" href="#content">
+          К содержимому
+        </a>
+        <header>
+          <Link href="/" aria-label="RAUI.RU — главная">
+            RAUI.RU
+          </Link>
+          <nav aria-label="Основная навигация">
+            <Link href="/search">Недвижимость</Link>
+            <Link href="/account">Мой аккаунт</Link>
+          </nav>
+        </header>
+        {children}
+        <footer>RAUI.RU · Недвижимость</footer>
+      </body>
     </html>
   );
 }

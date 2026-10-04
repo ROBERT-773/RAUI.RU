@@ -1,0 +1,42 @@
+import { afterEach, expect, test, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import SearchProduct from './search';
+vi.mock('next/dynamic', () => ({ default: () => () => null }));
+vi.mock('next/link', () => ({
+  default: ({
+    children,
+    href,
+  }: {
+    children: React.ReactNode;
+    href: string;
+  }) => <a href={href}>{children}</a>,
+}));
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+test('loading → empty results and accessible filters', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0, cursor: null, facets: {} }),
+    }),
+  );
+  render(<SearchProduct />);
+  expect(screen.getByRole('status').textContent).toContain('Загрузка');
+  expect(await screen.findByText(/Объявления не найдены/)).toBeTruthy();
+  expect(screen.getByLabelText('Цена до')).toBeTruthy();
+});
+test('API error is actionable and retry reissues the request', async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+  vi.stubGlobal('fetch', fetch);
+  render(<SearchProduct />);
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+  await vi.waitFor(() =>
+    expect(
+      fetch.mock.calls.filter((call) => call[0] === '/api/v1/search'),
+    ).toHaveLength(2),
+  );
+});

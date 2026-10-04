@@ -1,3 +1,4 @@
+import { searchSchema } from '../modules/search/contracts';
 import { z } from 'zod';
 import type { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
 import {
@@ -14,6 +15,39 @@ const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/geo/layers': object({
+    bounds: searchSchema.shape.bounds.unwrap(),
+    locality: z.string().max(150).optional(),
+    kind: z.enum(['district', 'okrug']).default('district'),
+  }),
+  'post /v1/search': searchSchema,
+  'post /v1/search/map': searchSchema,
+  'post /v1/search/selection': object({
+    ids: z.array(uuid).min(1).max(2000),
+    definition: searchSchema,
+  }),
+  'post /v1/account/collections/{kind}': object({ listingId: uuid }),
+  'post /v1/account/saved-searches': object({
+    name: z.string().min(1).max(100),
+    definition: searchSchema.omit({ cursor: true }),
+  }),
+  'patch /v1/account/saved-searches/{id}': object({
+    name: z.string().min(1).max(100),
+    definition: searchSchema.omit({ cursor: true }),
+  }),
+  'post /v1/account/inquiries/{id}': object({
+    body: z.string().min(1).max(4000),
+  }),
+  'post /v1/account/threads/{id}/messages': object({
+    body: z.string().min(1).max(4000),
+  }),
+  'patch /v1/account/preferences': object({
+    in_app: z.boolean(),
+    email: z.boolean(),
+    sms: z.boolean(),
+    push: z.boolean(),
+  }),
+
   'post /v1/auth/register': registerSchema,
   'post /v1/auth/login': loginSchema,
   'post /v1/auth/verification/phone': object({

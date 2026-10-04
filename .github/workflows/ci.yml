@@ -29,6 +29,8 @@ jobs:
       - run: pnpm build
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm test:integration
+      - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm test:e2e
       - run: pnpm db:migrate
       - name: Production smoke
         run: |
@@ -45,6 +47,8 @@ jobs:
           done
           pnpm smoke
           pnpm smoke:core
+          pnpm search:reconcile
+          pnpm smoke:search
       - name: Diagnostics
         if: failure()
         run: cat /tmp/api.log /tmp/web.log /tmp/media-worker.log 2>/dev/null || true
