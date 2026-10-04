@@ -1,13 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { loadConfig } from './config';
+import { configure } from './bootstrap';
 async function bootstrap() {
   const config = loadConfig();
-  const app = await NestFactory.create(AppModule);
-  app.use(helmet());
-  app.enableCors({ origin: config.WEB_ORIGIN });
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  configure(app);
   app.enableShutdownHooks();
   await app.listen(config.API_PORT, '127.0.0.1');
 }

@@ -1,0 +1,174 @@
+import { z } from 'zod';
+import type { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
+import {
+  registerSchema,
+  loginSchema,
+  passwordSchema,
+} from '../modules/auth/auth';
+import { uploadSchema } from '../modules/media/media';
+import { createSchema } from '../modules/properties/properties';
+import { fields } from '../modules/listings/listings';
+import { addressSchema } from '../modules/geo/geo';
+import { uuid } from './security';
+const object = (shape: z.ZodRawShape) => z.object(shape).strict();
+const version = z.number().int().positive();
+const name = z.string().min(1).max(200);
+const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/auth/register': registerSchema,
+  'post /v1/auth/login': loginSchema,
+  'post /v1/auth/verification/phone': object({
+    phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
+  }),
+  'post /v1/auth/verification/phone/confirm': object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  }),
+  'post /v1/auth/verification/email/confirm': object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  }),
+  'post /v1/auth/password-reset': object({ email: z.email().max(254) }),
+  'post /v1/auth/password-reset/confirm': object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    password: passwordSchema,
+  }),
+  'post /v1/organizations': object({
+    name: z.string().min(2).max(200),
+    kind: z.enum(['agency', 'developer']),
+  }),
+  'patch /v1/organizations/{id}/members': object({
+    userId: uuid,
+    role: z.enum(['admin', 'member']),
+    active: z.boolean(),
+  }),
+  'post /v1/properties': createSchema,
+  'patch /v1/properties/{id}': object({
+    version,
+    attributes: z
+      .record(
+        z.string().max(50),
+        z.union([z.string().max(2000), z.number(), z.boolean()]),
+      )
+      .optional(),
+    address: addressSchema.optional(),
+  }),
+  'post /v1/listings': object({
+    propertyId: uuid,
+    dealType: z.enum(['sale', 'long_rent', 'short_rent']),
+    title: fields.title.default(''),
+    price: fields.price.optional(),
+    description: fields.description.default(''),
+    terms: fields.terms.default({}),
+  }),
+  'patch /v1/listings/{id}': object({
+    version,
+    title: fields.title.optional(),
+    price: fields.price.optional(),
+    description: fields.description.optional(),
+    terms: fields.terms.optional(),
+  }),
+  'post /v1/listings/{id}/transitions': object({
+    version,
+    status: z.enum([
+      'draft',
+      'processing',
+      'moderation',
+      'paused',
+      'archived',
+      'sold',
+      'rented',
+    ]),
+  }),
+  'post /v1/media': uploadSchema,
+  'post /v1/structures/complexes': object({
+    organizationId: uuid,
+    name,
+    address: addressSchema,
+  }),
+  'post /v1/structures/buildings': object({
+    organizationId: uuid,
+    name,
+    address: addressSchema,
+    complexId: uuid.optional(),
+    completionDate: z.iso.date().optional(),
+  }),
+  'post /v1/structures/sections': object({
+    buildingId: uuid,
+    name: z.string().min(1).max(100),
+  }),
+  'post /v1/structures/floors': object({
+    sectionId: uuid,
+    number: z.number().int().min(-10).max(200),
+  }),
+  'post /v1/admin/moderation/{id}/decision': object({
+    decision: z.enum(['approve', 'reject']),
+    reason: z.string().min(3).max(2000),
+  }),
+  'patch /v1/admin/users/{id}': object({
+    active: z.boolean().optional(),
+    role: z
+      .enum(['buyer', 'owner', 'agent', 'agency', 'developer', 'admin'])
+      .optional(),
+  }),
+  'patch /v1/admin/organizations/{id}': object({ active: z.boolean() }),
+  'put /v1/categories/{code}/attributes': object({
+    code: z.string().regex(/^[a-z][a-z0-9_]{0,49}$/),
+    name: z.string().min(1).max(100),
+    kind: z.enum(['string', 'number', 'boolean', 'enum']),
+    required: z.boolean(),
+    options: z.array(z.string().max(100)).max(100).default([]),
+  }),
+};
+export function enrichOpenApi(document: OpenAPIObject) {
+  for (const [path, methods] of Object.entries(document.paths))
+    for (const [method, operation] of Object.entries(methods)) {
+      if (!operation || typeof operation !== 'object') continue;
+      const publicEndpoint =
+        path === '/health' ||
+        path === '/health/ready' ||
+        (method === 'get' &&
+          (path.startsWith('/v1/categories') ||
+            path.endsWith('/public') ||
+            path === '/v1/media/{id}/{variant}')) ||
+        [
+          '/v1/auth/register',
+          '/v1/auth/login',
+          '/v1/auth/password-reset',
+          '/v1/auth/password-reset/confirm',
+          '/v1/auth/verification/email/confirm',
+        ].includes(path);
+      operation.security = publicEndpoint
+        ? []
+        : [{ bearer: [] }, { cookie: [] }];
+      const schema = bodyContracts[`${method} ${path}`];
+      if (schema)
+        operation.requestBody = {
+          required: true,
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(schema, {
+                io: 'input',
+                unrepresentable: 'any',
+              }) as SchemaObject,
+            },
+          },
+        };
+      if (method === 'post' && !path.startsWith('/v1/auth/'))
+        operation.parameters = [
+          ...(operation.parameters ?? []),
+          {
+            in: 'header',
+            name: 'Idempotency-Key',
+            required: true,
+            schema: { type: 'string', minLength: 8, maxLength: 100 },
+          },
+        ];
+      operation.responses = {
+        ...operation.responses,
+        '400': { description: 'Validation error' },
+        '401': { description: 'Authentication required' },
+        '403': { description: 'Authorization/CSRF failure' },
+        '409': { description: 'Conflict/stale version' },
+        '429': { description: 'Rate limit' },
+      };
+    }
+  return document;
+}

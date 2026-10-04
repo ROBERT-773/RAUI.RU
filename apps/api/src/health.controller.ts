@@ -1,3 +1,4 @@
+import { Public } from './common/security';
 import {
   Controller,
   Get,
@@ -5,6 +6,7 @@ import {
   Header,
 } from '@nestjs/common';
 import { Dependencies } from './dependencies';
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly dependencies: Dependencies) {}

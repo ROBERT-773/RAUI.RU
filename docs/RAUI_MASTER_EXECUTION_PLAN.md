@@ -31,6 +31,7 @@ This file is the authoritative staged implementation plan for Codex.
 Status: COMPLETE and merged to master.
 
 Delivered:
+
 - pnpm monorepo;
 - Next.js web;
 - NestJS API;
@@ -49,6 +50,7 @@ Delivered:
 Goal: implement the secure domain core.
 
 Required:
+
 - registration/login/logout/password reset/email verification/phone verification abstraction;
 - secure sessions and revocation;
 - role model: guest, buyer/renter, owner, agent, agency, developer, platform admin;
@@ -66,6 +68,7 @@ Required:
 Authoritative detailed requirements: docs/RAUI_TZ_v1.0.md and GitHub Issue #2.
 
 Exit gate:
+
 - verified/authorized user can create and publish a listing;
 - unauthorized actions are blocked;
 - migrations apply cleanly;
@@ -80,6 +83,7 @@ Exit gate:
 ## Phase 3 — Search, map and product experience
 
 After Phase 2 is merged:
+
 - OpenSearch indexing, relevance, typo/synonym handling;
 - configurable filters and sorting;
 - list/map synchronization;
@@ -94,6 +98,7 @@ After Phase 2 is merged:
 ## Phase 4 — Monetization, AI, analytics and production hardening
 
 After Phase 3 is merged:
+
 - payments and billing;
 - configurable promotion products (Premium/VIP/SuperVIP/Top etc.);
 - advertising placements/campaigns;
@@ -108,6 +113,7 @@ After Phase 3 is merged:
 ## Definition of phase completion
 
 A phase is complete only when:
+
 - planned scope is implemented;
 - tests exist and pass;
 - docs/migrations updated;

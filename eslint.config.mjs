@@ -24,6 +24,7 @@ export default ts.config(
     languageOptions: {
       globals: {
         AbortSignal: 'readonly',
+        URL: 'readonly',
         process: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
