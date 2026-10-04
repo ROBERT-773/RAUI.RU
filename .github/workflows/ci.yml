@@ -1,0 +1,48 @@
+name: Foundation CI
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+concurrency:
+  group: foundation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: cp .env.example .env && pnpm infra:up
+      - name: Production smoke
+        run: |
+          pnpm --filter @raui/api start > /tmp/api.log 2>&1 &
+          API_PID=$!
+          pnpm --filter @raui/web start > /tmp/web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill "$API_PID" "$WEB_PID" || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3001/health >/dev/null && curl -fsS http://127.0.0.1:3000/health >/dev/null; then break; fi
+            sleep 1
+          done
+          pnpm smoke
+      - name: Diagnostics
+        if: failure()
+        run: cat /tmp/api.log /tmp/web.log 2>/dev/null || true
+      - name: Stop local services
+        if: always()
+        run: docker compose --env-file .env -f infra/compose.yaml down || true

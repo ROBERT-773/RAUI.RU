@@ -34,3 +34,5 @@ venv/
 # Misc
 tmp/
 .cache/
+
+*.tsbuildinfo

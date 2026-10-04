@@ -1,0 +1,31 @@
+name: raui-local
+services:
+  postgres:
+    image: postgis/postgis:17-3.5@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required}
+      POSTGRES_DB: ${POSTGRES_DB:?Required}
+    ports: ['127.0.0.1:5432:5432']
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    command: ['redis-server', '--appendonly', 'yes']
+    ports: ['127.0.0.1:6379:6379']
+    volumes: ['redis-data:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  redis-data:
