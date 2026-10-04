@@ -1,0 +1,16 @@
+{
+  "name": "@raui/ui",
+  "private": true,
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit"
+  }
+}
