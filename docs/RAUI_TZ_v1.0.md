@@ -5,6 +5,7 @@
 RAUI.RU is a real-estate portal for Moscow and Moscow Region intended to match the core capabilities of leading property portals while simplifying user flows and maximizing automation.
 
 Core principles:
+
 - automation-first;
 - API-first;
 - modular architecture;
@@ -17,6 +18,7 @@ Core principles:
 ## 2. Main property categories
 
 Initial categories:
+
 - apartments;
 - rooms;
 - apartments/aparthotel units;
@@ -29,6 +31,7 @@ Initial categories:
 - garages and parking spaces.
 
 Deal types:
+
 - sale;
 - long-term rent;
 - short-term rent.
@@ -38,6 +41,7 @@ Category-specific attributes must be extensible/configurable.
 ## 3. User roles
 
 Support:
+
 - guest;
 - buyer/renter;
 - owner;
@@ -53,6 +57,7 @@ Authorization model: RBAC plus contextual rules where needed.
 ## 4. Search and filters
 
 Future search must support:
+
 - property/deal type;
 - price and price per m²;
 - rooms;
@@ -82,6 +87,7 @@ Search state must have stable URLs and support sorting, cursor pagination and sa
 Map is a first-class search mode, not a secondary widget.
 
 Required future behavior:
+
 - markers and price labels;
 - clustering;
 - dynamic loading by viewport;
@@ -98,6 +104,7 @@ Required future behavior:
 The listing form should ask only for what cannot be reliably inferred.
 
 Flow foundation:
+
 1. deal type;
 2. property type;
 3. address/autocomplete;
@@ -121,15 +128,19 @@ All automatic values must be editable.
 Critical rule: physical object, commercial offer and source are separate entities.
 
 ### Property
+
 Physical real-estate object.
 
 ### Listing
+
 Commercial offer: deal type, price, terms, seller, status.
 
 ### ListingSource
+
 Origin: direct user, agency, developer, feed/API.
 
 Supporting domain:
+
 - buildings;
 - residential complexes;
 - addresses;
@@ -146,6 +157,7 @@ Target statuses:
 draft -> processing -> moderation -> published -> paused -> archived / sold / rented / rejected
 
 Required:
+
 - validated transitions;
 - auditable history;
 - actor and timestamp;
@@ -155,12 +167,14 @@ Required:
 ## 9. Media
 
 Media types:
+
 - photos;
 - future video;
 - floor plans;
 - future 3D.
 
 Image pipeline:
+
 - MIME/extension validation;
 - size limits;
 - EXIF orientation correction;
@@ -179,6 +193,7 @@ Do not store large binaries in PostgreSQL.
 ## 10. Trust, moderation and deduplication
 
 Foundation must support:
+
 - moderation cases;
 - basic automated rule hooks;
 - source tracking;
@@ -191,6 +206,7 @@ Full AI moderation/anti-fraud is later phase work.
 ## 11. Personal accounts
 
 Buyer/renter:
+
 - favorites;
 - compare;
 - history;
@@ -201,6 +217,7 @@ Buyer/renter:
 - future AI selection.
 
 Owner:
+
 - listings and drafts;
 - statistics;
 - leads;
@@ -210,6 +227,7 @@ Owner:
 - listing quality recommendations.
 
 Professional:
+
 - portfolio;
 - organization users;
 - bulk operations;
@@ -220,6 +238,7 @@ Professional:
 ## 12. Agencies and developers
 
 Agencies:
+
 - organization details;
 - members and roles;
 - portfolio;
@@ -231,6 +250,7 @@ Agencies:
 - integration logs.
 
 Developers:
+
 - residential complex -> building -> section -> floor -> unit hierarchy;
 - prices;
 - availability;
@@ -244,6 +264,7 @@ Developers:
 ## 13. Notifications
 
 Channels:
+
 - in-app;
 - email;
 - SMS;
@@ -251,6 +272,7 @@ Channels:
 - mobile push later.
 
 Events:
+
 - new lead;
 - new message;
 - matching object;
@@ -266,6 +288,7 @@ Delivery should use queues with retries/backoff/DLQ.
 ## 14. Monetization
 
 Future promotion products must be configurable, not hard-coded:
+
 - Standard;
 - Highlighted;
 - Premium;
@@ -275,6 +298,7 @@ Future promotion products must be configurable, not hard-coded:
 - special placements.
 
 Billing requirements later:
+
 - idempotent operations;
 - webhooks with signature/replay protection;
 - reconciliation;
@@ -285,6 +309,7 @@ Billing requirements later:
 ## 15. Advertising
 
 Future support:
+
 - banners;
 - native blocks;
 - promoted residential complexes/agencies;
@@ -294,6 +319,7 @@ Future support:
 ## 16. AI layer
 
 Future modules:
+
 - AI Search;
 - AI Realtor;
 - AI Valuation;
@@ -306,6 +332,7 @@ Future modules:
 - AI Support.
 
 Rules:
+
 - AI is never the source of truth for critical property facts;
 - model/prompt/rule versions are auditable;
 - latency/cost/fallback controls required;
@@ -314,6 +341,7 @@ Rules:
 ## 17. SEO and analytics
 
 SEO:
+
 - SSR/SSG where appropriate;
 - canonical;
 - sitemap;
@@ -324,6 +352,7 @@ SEO:
 - useful real-data landing pages.
 
 Analytics:
+
 - views;
 - unique views;
 - favorites;
@@ -337,6 +366,7 @@ Analytics:
 ## 18. Admin
 
 Protected admin foundation and later full admin for:
+
 - users;
 - organizations;
 - listings;
@@ -365,18 +395,22 @@ Critical admin actions must be audited.
 ## 19. Technology baseline
 
 Frontend:
+
 - Next.js;
 - React;
 - TypeScript.
 
 Core backend:
+
 - NestJS;
 - TypeScript.
 
 AI/data workers:
+
 - Python.
 
 Data:
+
 - PostgreSQL;
 - PostGIS;
 - Redis;
@@ -385,6 +419,7 @@ Data:
 - CDN.
 
 Architecture:
+
 - modular monolith first;
 - event-driven/background workers;
 - service extraction only when justified.
@@ -392,6 +427,7 @@ Architecture:
 ## 20. Database engineering
 
 Requirements:
+
 - versioned migrations;
 - transactions;
 - documented indexes based on query patterns;
@@ -403,6 +439,7 @@ Requirements:
 ## 21. API
 
 Requirements:
+
 - REST/JSON baseline;
 - versioning;
 - OpenAPI;
@@ -416,6 +453,7 @@ Requirements:
 ## 22. High-load and performance
 
 Use:
+
 - PostgreSQL connection pooling;
 - Redis cache/sessions;
 - OpenSearch for search;
@@ -433,6 +471,7 @@ Target server-side p95 for ordinary internal API operations: approximately <=300
 ## 23. Security
 
 Requirements:
+
 - adaptive password hashing;
 - secure sessions;
 - 2FA readiness;
@@ -450,6 +489,7 @@ Requirements:
 ## 24. Safe change framework
 
 All significant changes must support:
+
 - module boundaries;
 - public interfaces/events;
 - versioned migrations;
@@ -468,6 +508,7 @@ lint -> typecheck -> unit -> integration -> contract -> architecture checks -> m
 ## 25. Automated testing
 
 Required over project lifetime:
+
 - unit;
 - integration;
 - API contract;
@@ -484,6 +525,7 @@ Critical pipeline must be green before production.
 ## 26. Mobile-first and cross-browser
 
 Support current stable:
+
 - Chrome;
 - Safari;
 - Firefox;
@@ -492,6 +534,7 @@ Support current stable:
 - Android Chrome.
 
 Core flows must be mobile-first and accessible:
+
 - search;
 - map;
 - filters;
@@ -503,6 +546,7 @@ Core flows must be mobile-first and accessible:
 ## 27. Observability
 
 Required:
+
 - structured logs;
 - metrics;
 - tracing;
@@ -515,6 +559,7 @@ Required:
 ## 28. Backup and DR
 
 Required before production:
+
 - automated DB backup;
 - tested restore;
 - standby/failover strategy;
@@ -526,6 +571,7 @@ Required before production:
 ## 29. Phase 2 authoritative scope
 
 For the currently active Phase 2, implement only:
+
 - authentication/sessions;
 - users/roles/permissions;
 - organizations/membership;
@@ -545,6 +591,7 @@ Do NOT advance into search UX, payments, promotions, AI product features or prod
 ## 30. Phase 2 acceptance gate
 
 Phase 2 is accepted when:
+
 - a verified/authorized user can create and publish a valid listing;
 - unauthorized actions fail;
 - professional membership rules work;

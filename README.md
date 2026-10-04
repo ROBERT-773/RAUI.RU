@@ -1,6 +1,6 @@
 # RAUI.RU
 
-Проект недвижимости RAUI.RU. Foundation завершён; дальнейшая разработка ведётся по поэтапному плану и техническому заданию.
+Проект недвижимости RAUI.RU. Foundation завершён; API-first ядро Этапа 2 подготовлено для ревью. Дальнейшая разработка ведётся по поэтапному плану и техническому заданию.
 
 Актуальные управляющие документы:
 
@@ -8,6 +8,8 @@
 - `docs/RAUI_TZ_v1.0.md` — техническое задание;
 - GitHub Issues — рабочие задачи текущего этапа.
 
+Реализация Этапа 2: [модули, API и проверки](docs/PHASE_2_CORE.md),
+[миграции и rollback/forward-fix](docs/MIGRATIONS.md).
 
 ## Структура
 
@@ -33,9 +35,12 @@ pnpm install --frozen-lockfile
 cp .env.example .env # только если локального файла ещё нет
 pnpm infra:up
 pnpm build
+pnpm db:migrate
 pnpm dev:api
 # в другом терминале
 pnpm dev:web
+# media worker в отдельном терминале
+pnpm worker:media
 ```
 
 API watch отслеживает `dist`; при разработке API запустите дополнительно
@@ -49,8 +54,10 @@ Web: порт 3000, API: 3001. Сервисы слушают loopback; productio
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:integration # изолированная local DB; требуется CREATEDB
 pnpm build
 pnpm smoke # требует запущенные приложения и infra
+pnpm smoke:core # также требует отдельный media worker; создаёт local smoke fixtures
 pnpm infra:down # сохраняет данные
 ```
 
@@ -68,10 +75,13 @@ Compose предназначен исключительно для локаль�
 на 127.0.0.1; пароль примера нельзя использовать вне локального окружения.
 PostGIS включается стандартной инициализацией образа на новом volume.
 Для существующей базы проверьте наличие расширения отдельно.
-Никаких production migrations, deploy или бизнес-функций в Foundation нет.
+Production migrations/deploy не выполняются. Локальные verification/storage
+adapters запрещены при NODE_ENV=production; см. документацию Этапа 2.
 
 ## Текущий процесс разработки
 
 Работа ведётся по этапам из `docs/RAUI_MASTER_EXECUTION_PLAN.md`.
 Перед реализацией бизнес-функций сверяйтесь с `docs/RAUI_TZ_v1.0.md` и задачей текущего этапа.
 Каждый этап выполняется в отдельной ветке, проходит обязательные проверки и завершается Pull Request в `master`.
+
+После Этапа 2 разработка останавливается до отдельного разрешения на Этап 3.

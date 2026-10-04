@@ -16,7 +16,11 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && python3 -m unittest discover -s apps/ai/tests",
     "build": "pnpm -r build",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test:integration": "pnpm --filter @raui/api test:integration",
+    "db:migrate": "pnpm --filter @raui/api db:migrate",
+    "worker:media": "pnpm --filter @raui/api worker",
+    "smoke:core": "pnpm --filter @raui/api smoke:core"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
