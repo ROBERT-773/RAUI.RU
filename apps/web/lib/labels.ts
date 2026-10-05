@@ -1,0 +1,25 @@
+export const attributeLabels: Record<string, string> = {
+  area: 'Площадь, м²',
+  rooms: 'Комнаты',
+  floor: 'Этаж',
+  floors: 'Этажей в доме',
+  building_year: 'Год постройки',
+  building_type: 'Тип дома',
+  renovation: 'Ремонт',
+  bathroom: 'Санузел',
+  balcony: 'Балкон',
+  loggia: 'Лоджия',
+  ceiling_height: 'Высота потолков, м',
+  elevator: 'Лифт',
+  parking: 'Парковка',
+  furniture: 'Мебель',
+  equipment: 'Техника',
+  mortgage: 'Ипотека',
+  market: 'Рынок',
+  metro: 'Метро',
+  okrug: 'Округ',
+  highway: 'Шоссе',
+  highway_distance: 'До шоссе, км',
+};
+export const attributeValue = (value: unknown) =>
+  typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value ?? '—');

@@ -1,3 +1,6 @@
+import { SearchModule } from './modules/search/search';
+import { GeoLayersModule } from './modules/geo/layers';
+import { ProductModule } from './modules/product/product';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { HealthController } from './health.controller';
@@ -27,6 +30,9 @@ import { RateGuard, SessionGuard } from './common/security';
     MediaModule,
     ListingsModule,
     AdminModule,
+    SearchModule,
+    ProductModule,
+    GeoLayersModule,
   ],
   controllers: [HealthController],
   providers: [

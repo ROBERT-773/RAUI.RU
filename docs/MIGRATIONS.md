@@ -31,3 +31,5 @@ locking schema operations. Перед production migrations нужны backup/re
 только её. `pnpm infra:down` сохраняет volume; не используйте `down -v` для
 обычного сброса приложения. Audit/history удаления намеренно запрещены даже
 локально: для тестов используются изолированные базы.
+
+Phase 3 adds expand-only `002_search_product.sql`; see [search/product rollout](PHASE_3_SEARCH_PRODUCT.md). Migration 001 remains immutable. Integration suites use separate temporary databases and verify repeat execution.

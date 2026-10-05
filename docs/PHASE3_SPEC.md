@@ -16,6 +16,7 @@ Do not modify `master` directly. Do not begin Phase 4.
 - `AGENTS.md`
 
 Before implementation:
+
 1. summarize the approach;
 2. list affected modules/files;
 3. identify data/indexing/API contract changes;
@@ -24,6 +25,7 @@ Before implementation:
 ## 3.1 OpenSearch indexing and search API
 
 Implement:
+
 - OpenSearch index/mapping for public listings;
 - indexing pipeline from PostgreSQL source of truth;
 - create/update/publish/pause/archive/delete synchronization;
@@ -41,6 +43,7 @@ PostgreSQL remains source of truth. OpenSearch is derived.
 ## 3.2 Filters and sorting
 
 Support the core filters from the technical specification, including where data exists:
+
 - property/deal type;
 - price / price per m²;
 - rooms;
@@ -68,6 +71,7 @@ Filters must be configurable/extensible and must not require hard-coding one mon
 ## 3.3 Map search
 
 Implement map-search backend/frontend foundation:
+
 - viewport/bounds query;
 - clustering;
 - price markers;
@@ -84,6 +88,7 @@ Use PostGIS for geo queries and document important indexes.
 ## 3.4 Frontend product experience
 
 Build a production-quality, mobile-first experience for:
+
 - home/search entry;
 - search results list;
 - map mode;
@@ -101,6 +106,7 @@ Do not create a second frontend stack.
 ## 3.5 Favorites, comparison and saved searches
 
 Implement:
+
 - favorites;
 - compare;
 - saved search definitions;
@@ -113,6 +119,7 @@ Saved search model should be compatible with later notification subscriptions.
 ## 3.6 Messaging and notifications baseline
 
 Implement only the baseline needed for product UX:
+
 - listing inquiry/message thread foundation;
 - basic in-app notification model;
 - notification preference foundation;
@@ -124,6 +131,7 @@ Full CRM automation and omnichannel workflows belong later.
 ## 3.7 Accessibility, responsive and cross-browser
 
 Required:
+
 - mobile-first layouts;
 - keyboard navigation;
 - semantic structure;
@@ -136,6 +144,7 @@ Required:
 ## 3.8 Performance
 
 Requirements:
+
 - avoid N+1 API/data patterns;
 - pagination everywhere needed;
 - cache safe read paths where useful;
@@ -148,6 +157,7 @@ Requirements:
 ## 3.9 SEO foundation for public listing pages
 
 Implement:
+
 - SSR/metadata for public listing pages;
 - canonical URL;
 - basic structured data;
@@ -160,6 +170,7 @@ Full SEO/content automation belongs to Phase 4.
 ## 3.10 Analytics event foundation
 
 Create typed event contracts for:
+
 - search performed;
 - result viewed;
 - listing viewed;
@@ -173,6 +184,7 @@ Keep provider behind an adapter; no vendor lock-in.
 ## 3.11 Automated tests
 
 At minimum:
+
 - OpenSearch indexing tests;
 - search/filter/sort tests;
 - geo/bounds/polygon tests;
@@ -188,6 +200,7 @@ At minimum:
 - accessibility baseline checks where supported.
 
 Run and pass:
+
 - `pnpm lint`
 - `pnpm typecheck`
 - `pnpm test`
@@ -199,6 +212,7 @@ Run and pass:
 ## Non-goals
 
 Do not implement Phase 4:
+
 - payments/billing;
 - VIP/Premium/SuperVIP/Top;
 - advertising campaigns;
@@ -210,6 +224,7 @@ Do not implement Phase 4:
 ## Exit criteria
 
 Phase 3 is complete only when:
+
 - public user can search and filter listings;
 - results can be explored in list and map modes;
 - public listing detail works;
@@ -225,6 +240,7 @@ Phase 3 is complete only when:
 - implementation stops before Phase 4.
 
 Final report must include:
+
 - implementation summary;
 - search/index design;
 - migrations/schema changes;

@@ -85,3 +85,5 @@ adapters запрещены при NODE_ENV=production; см. документа
 Каждый этап выполняется в отдельной ветке, проходит обязательные проверки и завершается Pull Request в `master`.
 
 После Этапа 2 разработка останавливается до отдельного разрешения на Этап 3.
+
+Phase 3 search/product setup, API, privacy, tests and rollback: [docs/PHASE_3_SEARCH_PRODUCT.md](docs/PHASE_3_SEARCH_PRODUCT.md).
