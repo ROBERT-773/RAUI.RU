@@ -1,7 +1,8 @@
 import 'server-only';
 import { publicOrigin } from './security';
 import { cache } from 'react';
-export const apiBase = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:3001';
+import { headers } from 'next/headers';
+import { backendFetch } from './backend';
 export const site = publicOrigin(
   process.env.SITE_URL,
   process.env.DEPLOYMENT_ENV === 'production',
@@ -26,10 +27,14 @@ export interface Detail {
 }
 export const detail = cache(async (id: string): Promise<Detail | null> => {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
-  const response = await fetch(apiBase + '/v1/listings/' + id + '/public', {
-    cache: 'no-store',
-    signal: AbortSignal.timeout(10000),
-  });
+  const response = await backendFetch(
+    '/v1/listings/' + id + '/public',
+    await headers(),
+    {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    },
+  );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error('Listing unavailable');
   return (await response.json()) as Detail;

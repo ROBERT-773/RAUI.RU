@@ -1,8 +1,10 @@
 import type { MetadataRoute } from 'next';
-import { apiBase, site } from '../lib/server';
+import { site } from '../lib/server';
+import { headers } from 'next/headers';
+import { backendFetch } from '../lib/backend';
 export const dynamic = 'force-dynamic';
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const response = await fetch(apiBase + '/v1/search/sitemap', {
+  const response = await backendFetch('/v1/search/sitemap', await headers(), {
     cache: 'no-store',
     signal: AbortSignal.timeout(10000),
   });

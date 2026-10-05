@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-const base = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:3001';
+import { backendFetch } from '../../../lib/backend';
 async function proxy(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> },
@@ -43,16 +43,15 @@ async function proxy(
       process.env.WEB_ORIGIN ?? new URL(request.url).origin,
     );
   try {
-    const response = await fetch(
-      base + '/' + path.join('/') + request.nextUrl.search,
-      {
-        method: request.method,
-        headers,
-        ...(mutation ? { body: await request.arrayBuffer() } : {}),
-        cache: 'no-store',
-        signal: AbortSignal.timeout(15000),
-      },
-    );
+    const target = '/' + path.join('/') + request.nextUrl.search;
+    const response = await backendFetch(target, request.headers, {
+      method: request.method,
+      headers,
+      ...(mutation ? { body: await request.arrayBuffer() } : {}),
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(15000),
+    });
     const output = new NextResponse(response.body, {
       status: response.status,
       headers: {

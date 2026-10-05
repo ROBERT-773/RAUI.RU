@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js .cache/test/professional.test.js .cache/test/ai-trust.test.js .cache/test/ai-provider.test.js .cache/test/readiness.test.js .cache/test/operations.test.js && node --test scripts/readiness.test.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js .cache/test/professional.test.js .cache/test/ai-trust.test.js .cache/test/ai-provider.test.js .cache/test/readiness.test.js .cache/test/ingress.test.js .cache/test/operations.test.js && node --test scripts/readiness.test.mjs",
     "test:integration": "tsc -p tsconfig.test.json && node --env-file=../../.env scripts/integration.mjs",
     "db:migrate": "node --env-file=../../.env dist/modules/database/migrate.js",
     "worker": "node --env-file=../../.env dist/worker.js",
@@ -21,6 +21,7 @@
     "recovery:drill": "node --env-file=../../.env scripts/recovery-drill.mjs"
   },
   "dependencies": {
+    "@raui/config": "workspace:*",
     "@aws-sdk/client-s3": "^3.1146.0",
     "@nestjs/common": "12.1.2",
     "@nestjs/core": "12.1.2",

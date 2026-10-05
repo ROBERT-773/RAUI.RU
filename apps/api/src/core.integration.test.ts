@@ -17,6 +17,7 @@ import {
 } from './modules/auth/delivery';
 import { MediaWorker, WorkerModule } from './modules/media/worker';
 import { ObjectStorage } from './modules/media/storage';
+import { signIdentity } from '@raui/config/ingress';
 
 class CaptureDelivery extends VerificationDelivery {
   readonly messages: VerificationMessage[] = [];
@@ -281,6 +282,9 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         // local database above; these synthetic production URLs are never contacted.
         const production = {
           WEB_ORIGIN: 'https://raui.ru',
+          PROXY_IDENTITY_SECRET: 'synthetic-forwarding-key-'.repeat(2),
+          TRUSTED_PROXY_PEERS: '192.168.99.99',
+          TRUSTED_INGRESS_IP_HEADER: 'x-real-ip',
           SITE_URL: 'https://raui.ru',
           DATABASE_URL:
             'postgresql://service@db.internal/raui?sslmode=verify-full',
@@ -324,6 +328,85 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             if (value === undefined) delete process.env[key];
             else process.env[key] = value;
           }
+        }
+      },
+    );
+    await t.test(
+      'Signed proxy identities isolate real HTTP rate counters and reject spoofing',
+      async () => {
+        const previousSecret = process.env.PROXY_IDENTITY_SECRET;
+        const previousPeers = process.env.TRUSTED_PROXY_PEERS;
+        const secret = 'synthetic-forwarding-key-'.repeat(2);
+        process.env.PROXY_IDENTITY_SECRET = secret;
+        process.env.TRUSTED_PROXY_PEERS = '127.0.0.1';
+        try {
+          for (let n = 0; n < 160; n++) {
+            for (const ip of ['8.8.8.8', '8.8.4.4']) {
+              const response = await call(
+                '/categories',
+                'GET',
+                undefined,
+                undefined,
+                undefined,
+                signIdentity('GET', '/v1/categories', ip, secret),
+              );
+              assert.equal(response.status, 200);
+            }
+          }
+          assert.deepEqual(
+            (
+              await pool.query(
+                "SELECT key,count FROM rate_limits WHERE key IN ('api:8.8.8.8','api:8.8.4.4') ORDER BY key",
+              )
+            ).rows,
+            [
+              { key: 'api:8.8.4.4', count: 160 },
+              { key: 'api:8.8.8.8', count: 160 },
+            ],
+          );
+          const bad = signIdentity('GET', '/v1/categories', '8.8.8.8', secret);
+          bad['x-raui-forwarded-signature'] = '0'.repeat(64);
+          assert.equal(
+            (
+              await call(
+                '/categories',
+                'GET',
+                undefined,
+                undefined,
+                undefined,
+                bad,
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await call(
+                '/categories',
+                'GET',
+                undefined,
+                undefined,
+                undefined,
+                { 'x-forwarded-for': '8.8.4.4' },
+              )
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await pool.query(
+                "SELECT count FROM rate_limits WHERE key='api:8.8.4.4'",
+              )
+            ).rows[0].count,
+            160,
+          );
+        } finally {
+          if (previousSecret === undefined)
+            delete process.env.PROXY_IDENTITY_SECRET;
+          else process.env.PROXY_IDENTITY_SECRET = previousSecret;
+          if (previousPeers === undefined)
+            delete process.env.TRUSTED_PROXY_PEERS;
+          else process.env.TRUSTED_PROXY_PEERS = previousPeers;
         }
       },
     );

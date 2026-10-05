@@ -5,6 +5,9 @@ import { ApiErrors } from './common/http';
 import { envSchema } from './config';
 const production = {
   NODE_ENV: 'production',
+  PROXY_IDENTITY_SECRET: 'synthetic-forwarding-key-'.repeat(2),
+  TRUSTED_PROXY_PEERS: '127.0.0.1',
+  TRUSTED_INGRESS_IP_HEADER: 'x-real-ip',
   WEB_ORIGIN: 'https://raui.ru',
   SITE_URL: 'https://raui.ru',
   DATABASE_URL: 'postgresql://service@db.internal/raui?sslmode=verify-full',
@@ -21,6 +24,10 @@ test('Production contracts require verified DB TLS, Redis TLS and matching clean
   assert.ok(envSchema.safeParse(production).success);
   for (const fields of [
     { WEB_ORIGIN: 'http://raui.ru' },
+    { PROXY_IDENTITY_SECRET: undefined },
+    { TRUSTED_PROXY_PEERS: '' },
+    { TRUSTED_PROXY_PEERS: 'any' },
+    { TRUSTED_INGRESS_IP_HEADER: undefined },
     { WEB_ORIGIN: 'https://user:secret@raui.ru' },
     { WEB_ORIGIN: 'https://raui.ru/path' },
     { WEB_ORIGIN: 'https://raui.ru?secret=value' },
