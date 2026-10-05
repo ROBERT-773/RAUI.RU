@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import {
+  ProfessionalImports,
+  ProfessionalImportsModule,
+} from './modules/professional/imports';
 import { AuditModule } from './modules/audit/audit';
 import { DatabaseModule } from './modules/database/database';
 import {
@@ -9,15 +13,24 @@ import {
 } from './modules/professional/notifications';
 
 @Module({
-  imports: [DatabaseModule, AuditModule, NotificationWorkerModule],
+  imports: [
+    DatabaseModule,
+    AuditModule,
+    NotificationWorkerModule,
+    ProfessionalImportsModule,
+  ],
 })
 class ProfessionalWorkerModule {}
 
 async function run() {
-  const app = await NestFactory.createApplicationContext(ProfessionalWorkerModule, {
-    logger: ['error'],
-  });
-  const worker = app.get(NotificationWorker);
+  const app = await NestFactory.createApplicationContext(
+    ProfessionalWorkerModule,
+    {
+      logger: ['error'],
+    },
+  );
+  const worker = app.get(NotificationWorker),
+    imports = app.get(ProfessionalImports);
   let stopping = false;
 
   process.on('SIGTERM', () => {
@@ -30,8 +43,10 @@ async function run() {
   try {
     do {
       const worked = await worker.once();
+      const imported = await imports.once();
       if (process.argv.includes('--once')) break;
-      if (!worked) await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (!worked && !imported)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
     } while (!stopping);
   } finally {
     await app.close();

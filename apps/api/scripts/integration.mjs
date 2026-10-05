@@ -16,6 +16,7 @@ for (const testFile of [
   'core.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',
+  'professional.integration.test.js',
 ]) {
   const name = `raui_test_${randomBytes(8).toString('hex')}`;
   const admin = new Pool({ connectionString: source.toString() });

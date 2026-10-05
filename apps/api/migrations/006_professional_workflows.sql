@@ -15,18 +15,14 @@ CREATE TABLE professional_portfolio_listings (
   PRIMARY KEY(portfolio_id,listing_id)
 );
 
-CREATE TABLE notification_preferences (
-  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  email boolean NOT NULL DEFAULT true,
-  push boolean NOT NULL DEFAULT true,
-  transactional boolean NOT NULL DEFAULT true,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
+-- Reuse preferences introduced by migration 002; preserve users' opt-in choices.
+ALTER TABLE notification_preferences ADD COLUMN transactional boolean NOT NULL DEFAULT true;
+ALTER TABLE notification_preferences ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
 
 CREATE TABLE notification_deliveries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id),
-  channel text NOT NULL CHECK(channel IN ('email','push')),
+  channel text NOT NULL CHECK(channel IN ('email','push','sms')),
   kind text NOT NULL,
   dedupe_key text NOT NULL,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,

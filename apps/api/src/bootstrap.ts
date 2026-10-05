@@ -36,6 +36,7 @@ export function configure(app: INestApplication) {
       'Authorization',
       'Idempotency-Key',
       'X-CSRF-Token',
+      'X-Partner-Token',
     ],
   });
   app.use(

@@ -1,3 +1,4 @@
+import { NotificationWorkerModule } from './modules/professional/notifications';
 import { SearchModule } from './modules/search/search';
 import { GeoLayersModule } from './modules/geo/layers';
 import { ProductModule } from './modules/product/product';
@@ -41,6 +42,7 @@ import { RateGuard, SessionGuard } from './common/security';
     ProfessionalFeedsModule,
     ProfessionalPlatformModule,
     ProfessionalImportsModule,
+    NotificationWorkerModule,
   ],
   controllers: [HealthController],
   providers: [

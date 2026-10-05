@@ -175,6 +175,10 @@ export class Structures {
   async hierarchy(actor: Actor, organizationId: string) {
     await this.developer(actor, organizationId);
     return {
+      units: await this.db.rows(
+        `SELECT p.id,p.building_id,p.floor_id,p.unit_number,p.attributes,COALESCE((SELECT jsonb_agg(jsonb_build_object('id',l.id,'price',l.price,'status',l.status,'dealType',l.deal_type) ORDER BY l.id) FROM listings l WHERE l.property_id=p.id AND l.organization_id=$1),'[]') AS offers FROM properties p WHERE p.organization_id=$1 ORDER BY p.id LIMIT 100`,
+        [organizationId],
+      ),
       complexes: await this.db.rows(
         'SELECT * FROM residential_complexes WHERE organization_id=$1 ORDER BY id LIMIT 100',
         [organizationId],
@@ -236,5 +240,6 @@ export class StructureController {
   imports: [OrganizationsModule, GeoModule],
   controllers: [StructureController],
   providers: [Structures, Idempotency],
+  exports: [Structures],
 })
 export class StructuresModule {}
