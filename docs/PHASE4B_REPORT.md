@@ -31,7 +31,7 @@ Existing `/v1/organizations/{organizationId}/feeds` and professional/partner rou
 - Physical identity is stable. Changed physical facts quarantine and require the existing versioned Property editing workflow; feeds cannot silently replace or overwrite shared physical objects.
 - Unchanged normalized rows do not increment offer/property versions or create extra addresses. Completed rows survive worker restart; retry skips them. Request-key payload mismatch returns 409.
 - JSON arrays, CSV headers and `<feed><item>...</item></feed>` XML are supported for scheduled retrieval. `mapping` maps output dotted fields to input dotted paths; numeric price/coordinates/area convert explicitly. Entity/DTD XML, unsafe prototype paths, invalid rows and oversized batches are rejected.
-- HTTPS feeds require an exact `FEED_ALLOWED_HOSTS` allowlist. Private/reserved/link-local addresses, IP-literal hosts, URL credentials, redirects and non-HTTPS endpoints are blocked. DNS results are validated and pinned for the request; TLS hostname validation stays enabled. Fetch has a 10-second/2-MB bound. IPv6 feed fetching is deliberately denied pending an equivalent address policy.
+- HTTPS feeds require an exact `FEED_ALLOWED_HOSTS` allowlist. Private/reserved/link-local addresses, IP-literal hosts, URL credentials, redirects and non-HTTPS endpoints are blocked. DNS results are validated and pinned for the request; TLS hostname validation stays enabled. DNS resolution has a 3-second deadline; retrieval has a 10-second/2-MB bound. IPv6 feed fetching is deliberately denied pending an equivalent address policy.
 - Supported UTC schedules: `*/N * * * *` for N = 5, 10, 15, 20, 30, 60; `0 * * * *`; `0 0 * * *`. Next due time aligns with the UTC boundary. Other expressions are rejected explicitly, including unsafe legacy schedules.
 - Partners send `X-Partner-Token`. Scopes are `listings:read`, `listings:write` (bulk pause), `feeds:write` (queued apply); every operation stays inside the key organization. Key expiry defaults to 90 days; configured expiry must be within one year. Creation replay returns metadata with `token:null`; plaintext is never stored in idempotency responses or audit.
 - Product notification outbox feeds the existing delivery table with a stable unique dedupe key. Successful/disabled deliveries update the original outbox too. Notification retries keep the same provider key. An unconfigured gateway defers without consuming retry attempts or pretending delivery succeeded.
@@ -51,7 +51,7 @@ Required gates are retained, including mandatory Prettier and the full existing 
 
 - `pnpm lint` — ESLint + Prettier.
 - `pnpm typecheck` — all strict TypeScript workspaces.
-- `pnpm test` — 29 API, 3 web, 1 UI, 1 Python tests.
+- `pnpm test` — 30 API, 3 web, 1 UI, 1 Python tests.
 - `pnpm test:integration` — 62 node-reported tests across core (15), search (11), commerce (15), professional (21), including parent tests. Each suite uses a fresh local database removed on completion.
 - `pnpm build` — API and optimized Next.js artifacts.
 - `pnpm db:migrate` — local database only.

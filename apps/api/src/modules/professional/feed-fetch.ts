@@ -41,6 +41,31 @@ export function validateFeedUrl(value: string, hosts: string[]) {
     throw new BadRequestException('Approved HTTPS feed host required');
   return url;
 }
+export async function resolveFeedHost(
+  hostname: string,
+  resolve: (host: string) => Promise<{ address: string; family: number }[]> = (
+    host,
+  ) => lookup(host, { all: true }),
+  timeoutMs = 3000,
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const addresses = await Promise.race([
+      resolve(hostname),
+      new Promise<never>((_done, reject) => {
+        timer = setTimeout(
+          () => reject(new ServiceUnavailableException('Feed DNS deadline')),
+          timeoutMs,
+        );
+      }),
+    ]);
+    if (!addresses.length || addresses.some((x) => !publicIPv4(x.address)))
+      throw new ServiceUnavailableException('Feed address rejected');
+    return addresses;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 @Injectable()
 export class HttpsFeedFetcher extends FeedFetcher {
   async fetch(value: string): Promise<string> {
@@ -49,9 +74,7 @@ export class HttpsFeedFetcher extends FeedFetcher {
       .map((x) => x.trim())
       .filter(Boolean);
     const url = validateFeedUrl(value, hosts);
-    const addresses = await lookup(url.hostname, { all: true });
-    if (!addresses.length || addresses.some((x) => !publicIPv4(x.address)))
-      throw new ServiceUnavailableException('Feed address rejected');
+    const addresses = await resolveFeedHost(url.hostname);
     const selected = addresses[0]!;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

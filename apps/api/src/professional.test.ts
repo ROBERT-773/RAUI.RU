@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BadRequestException } from '@nestjs/common';
 import { ProfessionalImports } from './modules/professional/imports';
-import { publicIPv4, validateFeedUrl } from './modules/professional/feed-fetch';
+import {
+  publicIPv4,
+  validateFeedUrl,
+  resolveFeedHost,
+} from './modules/professional/feed-fetch';
 import { parseFeed } from './modules/professional/feed-parser';
 import {
   importItem,
@@ -137,4 +141,22 @@ test('Import fingerprints ignore JSON key ordering but preserve changed values',
     normalizedFingerprint({ a: 1 }),
     normalizedFingerprint({ a: 2 }),
   );
+});
+
+test('Feed DNS deadline and mixed private/public DNS answers fail closed', async () => {
+  await assert.rejects(
+    resolveFeedHost('feeds.example', async () => new Promise(() => {}), 10),
+    /Feed DNS deadline/,
+  );
+  await assert.rejects(
+    resolveFeedHost('feeds.example', async () => [
+      { address: '8.8.8.8', family: 4 },
+      { address: '127.0.0.1', family: 4 },
+    ]),
+    /Feed address rejected/,
+  );
+  const addresses = await resolveFeedHost('feeds.example', async () => [
+    { address: '8.8.8.8', family: 4 },
+  ]);
+  assert.equal(addresses[0]!.address, '8.8.8.8');
 });
