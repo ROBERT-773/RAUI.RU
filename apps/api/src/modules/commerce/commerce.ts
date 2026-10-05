@@ -224,6 +224,29 @@ const orderInput = z
   })
   .strict();
 
+const placementInput = z
+  .object({
+    code: z.string().trim().regex(/^[a-z0-9_-]{2,64}$/),
+    description: z.string().trim().max(500).default(''),
+    enabled: z.boolean().default(false),
+  })
+  .strict();
+
+const campaignInput = z
+  .object({
+    placementCode: z.string().trim().regex(/^[a-z0-9_-]{2,64}$/),
+    organizationId: z.uuid().optional(),
+    name: z.string().trim().min(1).max(160),
+    startsAt: z.iso.datetime(),
+    endsAt: z.iso.datetime(),
+    budgetMinor: z.number().int().nonnegative().optional(),
+    geoTarget: z.record(z.string(), z.unknown()).default({}),
+    categoryTarget: z.record(z.string(), z.unknown()).default({}),
+    creativeMetadata: z.record(z.string(), z.unknown()).default({}),
+    status: z.enum(['draft', 'scheduled', 'active', 'paused', 'ended']),
+  })
+  .strict();
+
 const promotionInput = z
   .object({
     code: z.string(),
@@ -548,6 +571,68 @@ export class CommerceService {
     );
   }
 
+  async createPlacement(body: unknown) {
+    const input = parse(placementInput, body);
+    const [row] = await this.db.rows(
+      `INSERT INTO advertising_placements(code,description,enabled)
+       VALUES($1,$2,$3)
+       RETURNING id,code,description,enabled,created_at`,
+      [input.code, input.description, input.enabled],
+    );
+    return row;
+  }
+
+  async createCampaign(body: unknown) {
+    const input = parse(campaignInput, body);
+    if (new Date(input.endsAt) <= new Date(input.startsAt))
+      throw new BadRequestException('Campaign end must be after start');
+
+    const [placement] = await this.db.rows<{ id: string }>(
+      'SELECT id FROM advertising_placements WHERE code=$1',
+      [input.placementCode],
+    );
+    if (!placement) throw new BadRequestException('Unknown ad placement');
+
+    const [row] = await this.db.rows(
+      `INSERT INTO advertising_campaigns(
+        organization_id,placement_id,name,starts_at,ends_at,budget_minor,
+        geo_target,category_target,creative_metadata,status
+      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      RETURNING id,organization_id,placement_id,name,starts_at,ends_at,
+        budget_minor,spent_minor,geo_target,category_target,creative_metadata,status`,
+      [
+        input.organizationId ?? null,
+        placement.id,
+        input.name,
+        input.startsAt,
+        input.endsAt,
+        input.budgetMinor ?? null,
+        JSON.stringify(input.geoTarget),
+        JSON.stringify(input.categoryTarget),
+        JSON.stringify(input.creativeMetadata),
+        input.status,
+      ],
+    );
+    return row;
+  }
+
+  async activeCampaigns(placementCode: string) {
+    return this.db.rows(
+      `SELECT c.id,c.name,c.geo_target,c.category_target,c.creative_metadata,
+              c.starts_at,c.ends_at,c.budget_minor,c.spent_minor
+       FROM advertising_campaigns c
+       JOIN advertising_placements p ON p.id=c.placement_id
+       WHERE p.code=$1
+         AND p.enabled
+         AND c.status='active'
+         AND c.starts_at<=now()
+         AND c.ends_at>now()
+         AND (c.budget_minor IS NULL OR c.spent_minor<c.budget_minor)
+       ORDER BY c.starts_at,c.id`,
+      [placementCode],
+    );
+  }
+
   async createPromotion(body: unknown) {
     const product = this.policy.promotion(parse(promotionInput, body));
     const [row] = await this.db.rows(
@@ -618,6 +703,24 @@ export class CommerceController {
     @Param('id') id: string,
   ) {
     return this.commerce.transitionActivation(actor, id, 'cancelled');
+  }
+
+  @AdminOnly()
+  @Post('ads/placements')
+  createPlacement(@Body() body: unknown) {
+    return this.commerce.createPlacement(body);
+  }
+
+  @AdminOnly()
+  @Post('ads/campaigns')
+  createCampaign(@Body() body: unknown) {
+    return this.commerce.createCampaign(body);
+  }
+
+  @AdminOnly()
+  @Get('ads/campaigns/:placementCode/active')
+  activeCampaigns(@Param('placementCode') placementCode: string) {
+    return this.commerce.activeCampaigns(placementCode);
   }
 
   @AdminOnly()
