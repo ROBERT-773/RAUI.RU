@@ -118,6 +118,25 @@ export type PromotionKind =
   | 'super_vip'
   | 'top';
 
+export interface PaidPlacementSignal {
+  listingId: string;
+  code: string;
+  kind: PromotionKind;
+  priority: number;
+  endsAt: string;
+}
+
+export function attachPaidPlacementSignals<T extends { id: string }>(
+  organic: T[],
+  signals: PaidPlacementSignal[],
+) {
+  const byListing = new Map(signals.map((signal) => [signal.listingId, signal]));
+  return organic.map((item) => ({
+    ...item,
+    paidPlacement: byListing.get(item.id) ?? null,
+  }));
+}
+
 export interface PromotionProduct {
   code: string;
   kind: PromotionKind;
@@ -243,6 +262,39 @@ export class CommercePolicy {
 
   transition(from: PaymentState, to: PaymentState): void {
     assertPaymentTransition(from, to);
+  }
+}
+
+@Injectable()
+export class PaidPlacementService {
+  constructor(private readonly db: Database) {}
+
+  async signals(listingIds: string[]): Promise<PaidPlacementSignal[]> {
+    if (!listingIds.length) return [];
+    return this.db.rows<PaidPlacementSignal>(
+      `SELECT
+         a.listing_id AS "listingId",
+         p.code,
+         p.kind,
+         p.priority,
+         a.ends_at AS "endsAt"
+       FROM commerce_promotion_activations a
+       JOIN commerce_promotion_products p ON p.id=a.promotion_product_id
+       WHERE a.listing_id=ANY($1::uuid[])
+         AND a.status='active'
+         AND a.starts_at<=now()
+         AND a.ends_at>now()
+         AND p.enabled
+       ORDER BY a.listing_id,p.priority DESC,a.ends_at DESC`,
+      [listingIds],
+    );
+  }
+
+  attach<T extends { id: string }>(
+    organic: T[],
+    signals: PaidPlacementSignal[],
+  ) {
+    return attachPaidPlacementSignals(organic, signals);
   }
 }
 
@@ -580,11 +632,12 @@ export class CommerceController {
   providers: [
     CommercePolicy,
     CommerceService,
+    PaidPlacementService,
     {
       provide: PaymentProvider,
       useClass: UnconfiguredPaymentProvider,
     },
   ],
-  exports: [CommercePolicy, CommerceService],
+  exports: [CommercePolicy, CommerceService, PaidPlacementService],
 })
 export class CommerceModule {}
