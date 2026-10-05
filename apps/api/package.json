@@ -15,7 +15,8 @@
     "smoke:core": "node --env-file=../../.env scripts/core-smoke.mjs",
     "worker:search": "node --env-file=../../.env dist/search-worker.js",
     "test:e2e": "node --env-file=../../.env scripts/product-e2e.mjs",
-    "worker:commerce": "node --env-file=../../.env dist/commerce-worker.js"
+    "worker:commerce": "node --env-file=../../.env dist/commerce-worker.js",
+    "worker:professional": "node --env-file=../../.env dist/professional-worker.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
