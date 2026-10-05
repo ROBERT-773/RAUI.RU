@@ -7,6 +7,7 @@ Improve quality of the primary user experience after stabilization without chang
 ## Areas
 
 ### Search and discovery
+
 - result relevance review;
 - empty-state behavior;
 - filter consistency;
@@ -14,6 +15,7 @@ Improve quality of the primary user experience after stabilization without chang
 - URL state integrity.
 
 ### Listing quality
+
 - field validation;
 - media ordering and fallback behavior;
 - duplicate hints;
@@ -21,6 +23,7 @@ Improve quality of the primary user experience after stabilization without chang
 - structured data validation.
 
 ### Conversion flows
+
 - favorites;
 - saved searches;
 - contact/message flow;
@@ -28,6 +31,7 @@ Improve quality of the primary user experience after stabilization without chang
 - analytics event completeness.
 
 ### Accessibility
+
 - keyboard navigation;
 - focus order;
 - labels and form errors;
@@ -35,6 +39,7 @@ Improve quality of the primary user experience after stabilization without chang
 - automated accessibility checks where available.
 
 ### Performance
+
 - frontend bundle review;
 - image loading;
 - API hotspots;
