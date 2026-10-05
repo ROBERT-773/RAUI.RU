@@ -68,7 +68,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
   const good = {
     version: 1,
     sha: 'a'.repeat(40),
-    migrations: 11,
+    migrations: 12,
     riskyDefaults: 'off',
     gates: [
       'lint',
@@ -97,6 +97,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'apps/api/migrations/009_ai_trust_analytics.sql',
       'apps/api/migrations/010_analytics_identity_and_trust_geo.sql',
       'apps/api/migrations/011_ai_reported_cost.sql',
+      'apps/api/migrations/012_search_queue_observability.sql',
       'pnpm-lock.yaml',
       'package.json',
       'infra/observability/alerts.yml',
@@ -175,7 +176,7 @@ test('Release verification binds measured evidence and rejects tampering', async
         sourceUntouched: true,
         databaseRestore: 'verified',
         objectFixtureRestore: 'verified',
-        migrationsVerified: 11,
+        migrationsVerified: 12,
         tablesVerified: 61,
         cipher: 'AES-256-GCM',
       },

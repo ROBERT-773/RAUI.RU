@@ -13,6 +13,7 @@ if (
     'Integration requires an explicit local development DATABASE_URL',
   );
 for (const testFile of [
+  'migration.integration.test.js',
   'core.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',

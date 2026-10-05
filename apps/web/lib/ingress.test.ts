@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server';
 import { POST } from '../app/api/[...path]/route';
 import { verifyIdentity } from '@raui/config/ingress';
 import { detail } from './server';
-import sitemap from '../app/sitemap';
+import { GET as sitemap } from '../app/sitemap.xml/route';
+import { sitemapPage, sitemapIndex } from './sitemap';
 vi.mock('server-only', () => ({}));
 vi.mock('next/headers', () => ({
   headers: async () => new Headers({ 'x-real-ip': '8.8.8.8' }),
@@ -94,12 +95,38 @@ test('Production SSR detail and sitemap sign every internal API request', async 
       requests++;
       return new Response(
         JSON.stringify(
-          target.includes('/listings/') ? { id: 'a'.repeat(36) } : [],
+          target.includes('/listings/')
+            ? { id: 'a'.repeat(36) }
+            : { pageSize: 49999, cursors: [null] },
         ),
       );
     }),
   );
   expect(await detail('a'.repeat(36))).toEqual({ id: 'a'.repeat(36) });
-  expect(await sitemap()).toHaveLength(1);
+  const index = await sitemap(
+    new Request('https://raui.ru/sitemap.xml', {
+      headers: { 'x-real-ip': '8.8.8.8' },
+    }),
+  );
+  expect(index.status).toBe(200);
+  expect(await index.text()).toContain('/sitemaps/start.xml');
   expect(requests).toBe(2);
+});
+test('Sitemap never exceeds the fifty-thousand URL protocol limit', async () => {
+  const rows = Array.from({ length: 50000 }, (_, n) => ({
+    id: `${n.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`,
+    published_at: '2026-10-05T00:00:00.000Z',
+  }));
+  expect(() => sitemapPage(rows, true)).toThrow('Sitemap page invalid');
+  const first = sitemapPage(rows.slice(0, 49999), true);
+  expect(first.match(/<url>/g)).toHaveLength(50000);
+  expect(sitemapPage(rows.slice(0, 49999), false).match(/<url>/g)).toHaveLength(
+    49999,
+  );
+  expect(sitemapIndex([null, rows[49998]!.id])).toContain(
+    rows[49998]!.id + '.xml',
+  );
+  expect(sitemapPage([], true, 'https://example.test?a=1&b=2')).toContain(
+    '&amp;',
+  );
 });

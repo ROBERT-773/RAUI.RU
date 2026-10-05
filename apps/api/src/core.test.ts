@@ -85,6 +85,7 @@ test('OpenAPI enrichment preserves path metadata and query parameters on repeate
         },
       },
       '/v1/commerce/webhook': { post: { responses: {}, parameters: [query] } },
+      '/v1/search/sitemap': { get: { responses: {}, parameters: [query] } },
     },
   };
   enrichOpenApi(document);
@@ -100,6 +101,10 @@ test('OpenAPI enrichment preserves path metadata and query parameters on repeate
     assert.equal(parameters.length, 2);
     assert.deepEqual(parameters[0], query);
   }
+  assert.equal(
+    document.paths['/v1/search/sitemap']!.get!.parameters!.length,
+    2,
+  );
 });
 test('adaptive hashes use independent salts and reject incorrect passwords', async () => {
   const first = await passwordHash('a-strong-password'),

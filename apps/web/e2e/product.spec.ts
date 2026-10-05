@@ -307,6 +307,50 @@ test('listing SEO metadata and unavailable pages are safe', async ({
       '{}',
   );
   expect(structured['@type']).toBe('RealEstateListing');
+  const canonical = await page
+    .locator('link[rel="canonical"]')
+    .getAttribute('href');
+  const sitemap = await page.request.get('/sitemap.xml');
+  expect(sitemap.status()).toBe(200);
+  expect(sitemap.headers()['content-type']).toContain('application/xml');
+  const partitions = await page.evaluate(
+    (xml) => {
+      const document = new DOMParser().parseFromString(xml, 'application/xml');
+      if (document.querySelector('parsererror'))
+        throw new Error('Invalid sitemap XML');
+      return Array.from(
+        document.querySelectorAll('sitemap > loc'),
+        (loc) => loc.textContent!,
+      );
+    },
+    await sitemap.text(),
+  );
+  expect(partitions.length).toBeGreaterThan(0);
+  const listingUrls: string[] = [];
+  for (const partition of partitions) {
+    const shard = await page.request.get(partition);
+    expect(shard.status()).toBe(200);
+    expect(shard.headers()['content-type']).toContain('application/xml');
+    const urls = await page.evaluate(
+      (xml) => {
+        const document = new DOMParser().parseFromString(
+          xml,
+          'application/xml',
+        );
+        if (document.querySelector('parsererror'))
+          throw new Error('Invalid shard XML');
+        return Array.from(
+          document.querySelectorAll('url > loc'),
+          (loc) => loc.textContent!,
+        );
+      },
+      await shard.text(),
+    );
+    expect(urls.length).toBeLessThanOrEqual(50000);
+    listingUrls.push(...urls);
+  }
+  expect(listingUrls).toContain(canonical);
+  expect(new Set(listingUrls).size).toBe(listingUrls.length);
   const response = await page.goto(
     '/listings/00000000-0000-4000-8000-000000000000',
   );

@@ -67,7 +67,7 @@ export class Operations {
       UNION ALL SELECT 'professional',state,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE state IN ('pending','running')),0)::float FROM professional_import_jobs GROUP BY state
       UNION ALL SELECT 'notifications',status,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE status IN ('pending','running')),0)::float FROM notification_deliveries GROUP BY status
       UNION ALL SELECT 'trust',state,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE state IN ('pending','running')),0)::float FROM trust_jobs GROUP BY state
-      UNION ALL SELECT 'search','pending',count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-updated_at)),0)::float FROM search_jobs
+      UNION ALL SELECT 'search','pending',count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-enqueued_at)),0)::float FROM search_jobs
       UNION ALL SELECT 'commerce',CASE WHEN dead_at IS NULL THEN 'pending' ELSE 'dead' END,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE dead_at IS NULL),0)::float FROM commerce_reconciliation_jobs GROUP BY dead_at IS NULL
     `);
     const flags = await this.db.rows(

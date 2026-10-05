@@ -234,6 +234,7 @@ get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
 get /v1/media/{id}/{variant}
 get /v1/search/sitemap
+get /v1/search/sitemap/partitions
 post /v1/search
 post /v1/search/selection
 post /v1/search/map
@@ -381,6 +382,66 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/search/sitemap') {
+        operation.parameters = [
+          ...(operation.parameters ?? []).filter(
+            (parameter: ParameterObject | ReferenceObject) =>
+              !(
+                'in' in parameter &&
+                parameter.in === 'query' &&
+                parameter.name === 'after'
+              ),
+          ),
+          {
+            in: 'query',
+            name: 'after',
+            required: false,
+            description:
+              'Exclusive UUID cursor from sitemap partitions; at most 49,999 eligible listings per page.',
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ];
+        operation.responses['200'] = {
+          description: 'Live eligible listing sitemap page',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'array',
+                maxItems: 49999,
+                items: {
+                  type: 'object',
+                  required: ['id', 'published_at'],
+                  properties: {
+                    id: { type: 'string', format: 'uuid' },
+                    published_at: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/search/sitemap/partitions') {
+        operation.responses['200'] = {
+          description: 'Live keyset boundaries; not a cross-request snapshot',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['pageSize', 'cursors'],
+                properties: {
+                  pageSize: { type: 'integer', enum: [49999] },
+                  cursors: {
+                    type: 'array',
+                    minItems: 1,
+                    items: { type: 'string', format: 'uuid', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
     }
   return document;
 }

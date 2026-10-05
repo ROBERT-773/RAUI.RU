@@ -6,6 +6,7 @@ import {
   Body,
   Controller,
   Get,
+  Query,
   Injectable,
   Module,
   Post,
@@ -331,10 +332,22 @@ export class Search {
       facets: {},
     };
   }
-  async sitemap() {
+  async sitemap(query: unknown = {}) {
+    const input = parse(z.object({ after: uuid.optional() }).strict(), query);
     return this.db.rows(
-      'SELECT id,published_at FROM public_search_listings ORDER BY id LIMIT 50000',
+      'SELECT id,published_at FROM public_search_listings WHERE ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 49999',
+      [input.after ?? null],
     );
+  }
+  async sitemapPartitions() {
+    const boundaries = await this.db.rows<{ id: string }>(
+      `WITH numbered AS (SELECT id,row_number() OVER(ORDER BY id) AS rn,count(*) OVER() AS total FROM public_search_listings)
+       SELECT id FROM numbered WHERE rn % 49999=0 AND rn<total ORDER BY rn`,
+    );
+    return {
+      pageSize: 49999,
+      cursors: [null, ...boundaries.map((row) => row.id)],
+    };
   }
   async sync(limit = 100, target = this.index.alias) {
     const jobs = await this.db.rows<{ listing_id: string; revision: string }>(
@@ -437,8 +450,11 @@ export class Search {
 @Controller('v1/search')
 export class SearchController {
   constructor(readonly search: Search) {}
-  @Public() @Get('sitemap') sitemap() {
-    return this.search.sitemap();
+  @Public() @Get('sitemap/partitions') partitions() {
+    return this.search.sitemapPartitions();
+  }
+  @Public() @Get('sitemap') sitemap(@Query() query: unknown) {
+    return this.search.sitemap(query);
   }
   @Public() @Post() results(@Body() body: unknown) {
     return this.search.results(body);

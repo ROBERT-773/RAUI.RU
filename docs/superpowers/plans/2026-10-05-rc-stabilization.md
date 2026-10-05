@@ -8,20 +8,20 @@ not new product features. Apply TDD: observe meaningful red, minimal fix, suites
 
 ## File map and increments
 
-- [ ] Transport: professional/feed-fetch.ts and professional.test.ts; actual
+- [x] Transport: professional/feed-fetch.ts and professional.test.ts; actual
       Node24 HTTPS/DNS seam, IPv4 pinning, verified TLS, no redirects. Auth/delivery.ts
       plus gateway tests: reject token-bearing redirects and sanitize failures.
-- [ ] Account privacy: components/account.tsx plus browser/component regression;
+- [x] Account privacy: components/account.tsx plus browser/component regression;
       reset identity-owned state and fence asynchronous responses across logout/login.
-- [ ] Rate limits: common/security.ts, shared private ingress signature contract,
+- [x] Rate limits: common/security.ts, shared private ingress signature contract,
       web API proxy/config; trusted per-client identity, spoof/replay resistance,
       aggregate abuse limits preserved, explicit production ingress prerequisites.
-- [ ] API correctness: professional/platform.ts target-scoped idempotency and
+- [x] API correctness: professional/platform.ts target-scoped idempotency and
       target-based partner revocation; OpenAPI actual public/key requirements;
       real PostgreSQL/HTTP negative/replay/contract regressions.
-- [ ] SEO: search sitemap pagination and Next sitemap partitions; bounded outputs,
+- [x] SEO: search sitemap pagination and Next sitemap partitions; bounded outputs,
       every eligible listing represented, canonical/noindex tests.
-- [ ] DB: populated current-master migration repeat/upgrade, immutable checksums,
+- [x] DB: populated current-master migration repeat/upgrade, immutable checksums,
       domain/audit/PostGIS/sequence identity; bounded advisory-lock regression.
       Existing migration SQL is immutable; scratch databases only.
 - [ ] Operations: payment-failure and stalled-index alert evidence; staging forward

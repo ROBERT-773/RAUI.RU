@@ -40,7 +40,7 @@ export function validateRelease(manifest, expectedSha) {
     manifest.version !== 1 ||
     !/^[a-f0-9]{40}$/.test(expectedSha) ||
     manifest.sha !== expectedSha ||
-    manifest.migrations !== 11 ||
+    manifest.migrations !== 12 ||
     manifest.riskyDefaults !== 'off' ||
     !Array.isArray(manifest.gates) ||
     gates.some((gate) => !manifest.gates.includes(gate)) ||
@@ -75,6 +75,7 @@ export function validateRelease(manifest, expectedSha) {
     'apps/api/migrations/009_ai_trust_analytics.sql',
     'apps/api/migrations/010_analytics_identity_and_trust_geo.sql',
     'apps/api/migrations/011_ai_reported_cost.sql',
+    'apps/api/migrations/012_search_queue_observability.sql',
     'pnpm-lock.yaml',
     'package.json',
     'infra/observability/alerts.yml',
@@ -148,7 +149,7 @@ export async function verifyFiles(manifest, root) {
     recovery.sourceUntouched !== true ||
     recovery.databaseRestore !== 'verified' ||
     recovery.objectFixtureRestore !== 'verified' ||
-    recovery.migrationsVerified !== 11 ||
+    recovery.migrationsVerified !== 12 ||
     !Number.isInteger(recovery.tablesVerified) ||
     recovery.tablesVerified < 1 ||
     recovery.cipher !== 'AES-256-GCM'
@@ -189,7 +190,7 @@ async function main() {
     const manifest = {
       version: 1,
       sha: expectedSha,
-      migrations: 11,
+      migrations: 12,
       riskyDefaults: 'off',
       gates,
       runId: process.env.GITHUB_RUN_ID,
