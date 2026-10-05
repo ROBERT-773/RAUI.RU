@@ -65,6 +65,8 @@ export async function runAi(options: Options) {
     cap = options.maxCostMicros ?? 100000;
   let attempts = 0,
     costMicros = 0,
+    uncertainMicros = 0,
+    unknownCostAttempts = 0,
     inputTokens = 0,
     outputTokens = 0,
     modelVersion = 'none';
@@ -93,6 +95,8 @@ export async function runAi(options: Options) {
     inputTokens,
     outputTokens,
     costMicros,
+    uncertainMicros,
+    unknownCostAttempts,
   });
   if (!(await options.enabled())) return answer('disabled');
   for (let i = 0; i < 2; i++) {
@@ -135,8 +139,13 @@ export async function runAi(options: Options) {
       if (!(await options.enabled())) return answer('disabled');
       return answer('generated', reply);
     } catch {
-      // Ambiguous/invalid provider responses are charged at the reserved upper bound.
-      if (!accounted) costMicros += cap;
+      // A valid idempotent generation must not be requested/accounted again when the flag store fails.
+      if (accounted) return answer('flag_unavailable');
+      // Unknown usage protects the budget but is never reported as provider spend.
+      if (!accounted) {
+        uncertainMicros += cap;
+        unknownCostAttempts++;
+      }
     } finally {
       clearTimeout(timer);
       controller.abort();

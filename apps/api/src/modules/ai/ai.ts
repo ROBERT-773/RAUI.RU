@@ -180,7 +180,7 @@ export class AiService {
     let day: string | undefined;
     if (active && !circuitOpen && amount <= cfg.AI_DAILY_BUDGET_MICROS) {
       const [reservation] = await this.db.rows<{ day: string }>(
-        `INSERT INTO ai_budget_days(day,reserved_micros) VALUES(CURRENT_DATE,$1) ON CONFLICT(day) DO UPDATE SET reserved_micros=ai_budget_days.reserved_micros+$1 WHERE ai_budget_days.spent_micros+ai_budget_days.reserved_micros+$1<=$2 RETURNING day::text`,
+        `INSERT INTO ai_budget_days(day,reserved_micros) VALUES(CURRENT_DATE,$1) ON CONFLICT(day) DO UPDATE SET reserved_micros=ai_budget_days.reserved_micros+$1 WHERE ai_budget_days.spent_micros+ai_budget_days.reserved_micros+ai_budget_days.uncertain_micros+$1<=$2 RETURNING day::text`,
         [amount, cfg.AI_DAILY_BUDGET_MICROS],
       );
       day = reservation?.day;
@@ -208,11 +208,11 @@ export class AiService {
     await this.db.transaction(async (sql) => {
       if (day)
         await sql.query(
-          'UPDATE ai_budget_days SET reserved_micros=reserved_micros-$2,spent_micros=spent_micros+$3 WHERE day=$1',
-          [day, amount, answer.costMicros],
+          'UPDATE ai_budget_days SET reserved_micros=reserved_micros-$2,spent_micros=spent_micros+$3,uncertain_micros=uncertain_micros+$4 WHERE day=$1',
+          [day, amount, answer.costMicros, answer.uncertainMicros],
         );
       await sql.query(
-        'INSERT INTO ai_usage(capability,mode,reason,attempts,latency_ms,cost_micros,input_tokens,output_tokens,prompt_version,model_version,rule_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        "INSERT INTO ai_usage(capability,mode,reason,attempts,latency_ms,cost_micros,input_tokens,output_tokens,prompt_version,model_version,rule_version,cost_basis,unknown_cost_attempts,uncertain_micros) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'reported_only',$12,$13)",
         [
           input.capability,
           answer.mode,
@@ -225,6 +225,8 @@ export class AiService {
           PROMPT_VERSION,
           answer.modelVersion,
           answer.ruleVersion,
+          answer.unknownCostAttempts,
+          answer.uncertainMicros,
         ],
       );
     });
@@ -278,7 +280,7 @@ export class AiService {
     if (actor.role !== 'admin') throw new ForbiddenException();
     verified(actor);
     return this.db.rows(
-      `SELECT capability,mode,reason,model_version,prompt_version,rule_version,count(*)::int AS calls,sum(attempts)::int AS attempts,sum(cost_micros)::text AS cost_micros,sum(input_tokens)::int AS input_tokens,sum(output_tokens)::int AS output_tokens,percentile_cont(.95) WITHIN GROUP(ORDER BY latency_ms) AS latency_p95_ms FROM ai_usage WHERE created_at>now()-interval '30 days' GROUP BY capability,mode,reason,model_version,prompt_version,rule_version ORDER BY capability,mode,reason LIMIT 100`,
+      `SELECT capability,mode,reason,model_version,prompt_version,rule_version,count(*)::int AS calls,sum(attempts)::int AS attempts,COALESCE(sum(cost_micros) FILTER(WHERE cost_basis='reported_only'),0)::text AS cost_micros,COALESCE(sum(cost_micros) FILTER(WHERE cost_basis='legacy_unverified'),0)::text AS legacy_unverified_micros,sum(uncertain_micros)::text AS uncertain_micros,sum(unknown_cost_attempts)::int AS unknown_cost_attempts,sum(input_tokens)::int AS input_tokens,sum(output_tokens)::int AS output_tokens,percentile_cont(.95) WITHIN GROUP(ORDER BY latency_ms) AS latency_p95_ms FROM ai_usage WHERE created_at>now()-interval '30 days' GROUP BY capability,mode,reason,model_version,prompt_version,rule_version ORDER BY capability,mode,reason LIMIT 100`,
     );
   }
 }

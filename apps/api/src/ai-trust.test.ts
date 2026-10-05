@@ -162,8 +162,9 @@ test('Search fallback removes understood instructions from keyword query and nev
   assert.equal(foreign.price, undefined);
 });
 
-test('Flag-store errors after a valid provider reply cannot double-charge an attempt beyond reserved cost', async () => {
-  let checks = 0;
+test('Flag-store errors after a valid provider reply fail closed without repeating or double-counting idempotent generation', async () => {
+  let checks = 0,
+    calls = 0;
   const answer = await runAi({
     capability: 'search',
     context: {},
@@ -176,6 +177,7 @@ test('Flag-store errors after a valid provider reply cannot double-charge an att
     },
     provider: {
       async generate() {
+        calls++;
         return {
           suggestion: 'Advice',
           confidence: 0.5,
@@ -186,6 +188,80 @@ test('Flag-store errors after a valid provider reply cannot double-charge an att
     },
   });
   assert.equal(answer.mode, 'fallback');
-  assert.ok(answer.costMicros <= 200000);
+  assert.equal(calls, 1);
+  assert.equal(answer.attempts, 1);
+  assert.equal(answer.costMicros, 100000);
+  assert.equal(answer.inputTokens, 1);
+  assert.equal(answer.outputTokens, 1);
+  assert.equal(answer.uncertainMicros, 0);
+  assert.equal(answer.unknownCostAttempts, 0);
+  assert.equal(answer.reason, 'flag_unavailable');
+  assert.ok(!('advice' in answer));
   assert.ok(!JSON.stringify(answer).includes('flag-store-secret'));
+});
+
+test('Unknown provider failures do not fabricate actual spend while retaining a separate bounded exposure', async () => {
+  for (const kind of ['transport', 'invalid', 'timeout']) {
+    const result = await runAi({
+      capability: 'search',
+      context: {},
+      fallback: {},
+      enabled: async () => true,
+      maxCostMicros: 100,
+      timeoutMs: 5,
+      provider: {
+        generate: async () => {
+          if (kind === 'transport') throw new Error('unavailable');
+          if (kind === 'timeout') return new Promise(() => {});
+          return { suggestion: 'invalid' };
+        },
+      },
+    });
+    assert.equal(result.attempts, 2);
+    assert.equal(result.costMicros, 0);
+    assert.equal(result.inputTokens, 0);
+    assert.equal(result.outputTokens, 0);
+    assert.equal(
+      (result as unknown as { unknownCostAttempts: number })
+        .unknownCostAttempts,
+      2,
+    );
+    assert.equal(
+      (result as unknown as { uncertainMicros: number }).uncertainMicros,
+      200,
+    );
+  }
+});
+
+test('Mixed unknown and reported attempts preserve exact reported usage separately from uncertain exposure', async () => {
+  let calls = 0;
+  const result = await runAi({
+    capability: 'search',
+    context: {},
+    fallback: {},
+    enabled: async () => true,
+    maxCostMicros: 100,
+    provider: {
+      generate: async () => {
+        if (++calls === 1) throw new Error('transport');
+        return {
+          suggestion: 'Review',
+          confidence: 0.5,
+          modelVersion: 'test-v1',
+          usage: { inputTokens: 4, outputTokens: 5, costMicros: 7 },
+        };
+      },
+    },
+  });
+  assert.equal(result.costMicros, 7);
+  assert.equal(result.inputTokens, 4);
+  assert.equal(result.outputTokens, 5);
+  assert.equal(
+    (result as unknown as { uncertainMicros: number }).uncertainMicros,
+    100,
+  );
+  assert.equal(
+    (result as unknown as { unknownCostAttempts: number }).unknownCostAttempts,
+    1,
+  );
 });

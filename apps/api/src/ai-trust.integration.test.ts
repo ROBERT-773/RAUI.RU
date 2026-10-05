@@ -2,6 +2,9 @@ import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { cp, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { Pool } from 'pg';
 import { Test } from '@nestjs/testing';
 import { AppModule } from './app.module';
@@ -9,6 +12,7 @@ import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
 import { Database } from './modules/database/database';
 import { hash, token, Actor } from './common/security';
+import { AiService } from './modules/ai/ai';
 import { AiProvider } from './modules/ai/provider';
 import { Trust } from './modules/trust/trust';
 import { Analytics } from './modules/analytics/analytics';
@@ -31,8 +35,24 @@ class TestProvider extends AiProvider {
 test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
   assert.ok(process.env.TEST_DATABASE_URL?.includes('/raui_test_'));
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  await migrate(pool);
-  await migrate(pool);
+  const legacyDirectory = await mkdtemp(
+    join(tmpdir(), 'raui-legacy-migrations-'),
+  );
+  try {
+    for (const name of await readdir('migrations')) {
+      if (/^\d+_.+\.sql$/.test(name) && !name.startsWith('011_'))
+        await cp(join('migrations', name), join(legacyDirectory, name));
+    }
+    await migrate(pool, legacyDirectory);
+    await pool.query('INSERT INTO ai_budget_days(spent_micros) VALUES(200000)');
+    await pool.query(
+      "INSERT INTO ai_usage(capability,mode,reason,attempts,latency_ms,cost_micros,input_tokens,output_tokens,prompt_version,model_version,rule_version) VALUES('search','fallback','provider_unavailable',2,1,200000,0,0,'phase4c-v1','none','trust-v1')",
+    );
+    await migrate(pool);
+    await migrate(pool);
+  } finally {
+    await rm(legacyDirectory, { recursive: true, force: true });
+  }
   const provider = new TestProvider();
   const module = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(AiProvider)
@@ -121,6 +141,27 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
       else second = listing;
     }
     await t.test(
+      'Forward cost migration preserves legacy values as unverified exposure and excludes them from reported-spend metrics',
+      async () => {
+        const legacy = (
+          await pool.query('SELECT * FROM ai_usage ORDER BY id LIMIT 1')
+        ).rows[0];
+        assert.equal(legacy.cost_micros, '200000');
+        assert.equal(legacy.cost_basis, 'legacy_unverified');
+        const budget = (
+          await pool.query(
+            'SELECT * FROM ai_budget_days WHERE day=CURRENT_DATE',
+          )
+        ).rows[0];
+        assert.equal(budget.spent_micros, '0');
+        assert.equal(budget.uncertain_micros, '200000');
+        assert.equal(budget.reserved_micros, '0');
+        const metrics = await app.get(AiService).metrics(actors[2]!);
+        assert.equal(metrics[0]!.cost_micros, '0');
+        assert.equal(metrics[0]!.legacy_unverified_micros, '200000');
+      },
+    );
+    await t.test(
       'Migration defaults keep every AI feature off and retain schema checksums',
       async () => {
         const flags = (await pool.query('SELECT * FROM ai_feature_flags')).rows;
@@ -129,7 +170,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '10',
+          '11',
         );
       },
     );
@@ -257,6 +298,60 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         ).json()) as { reason: string };
         assert.equal(fallback.reason, 'budget_exhausted');
         process.env.AI_ENABLED = 'false';
+      },
+    );
+    await t.test(
+      'Post-reply flag-store failure settles one reported generation and returns no model advice',
+      async (t2) => {
+        await pool.query(
+          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0,uncertain_micros=0 WHERE day=CURRENT_DATE',
+        );
+        process.env.AI_ENABLED = 'true';
+        const service = app.get(AiService),
+          enabled = service.enabled.bind(service);
+        let checks = 0;
+        t2.mock.method(
+          service,
+          'enabled',
+          async (code: Parameters<typeof enabled>[0]) => {
+            if (++checks === 4) throw new Error('flag-store-secret');
+            return enabled(code);
+          },
+        );
+        const before = provider.calls;
+        try {
+          const response = await call('/v1/ai/assist', 'POST', {
+            capability: 'search',
+            query: 'Квартира',
+          });
+          assert.equal(response.status, 201);
+          const answer = (await response.json()) as {
+            mode: string;
+            reason: string;
+            costMicros: number;
+          };
+          assert.equal(answer.mode, 'fallback');
+          assert.equal(answer.reason, 'flag_unavailable');
+          assert.equal(answer.costMicros, 7);
+          assert.ok(!('advice' in answer));
+          assert.equal(provider.calls - before, 1);
+          const budget = (
+            await pool.query(
+              'SELECT * FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(budget.spent_micros, '7');
+          assert.equal(budget.reserved_micros, '0');
+          assert.equal(budget.uncertain_micros, '0');
+          const row = (
+            await pool.query('SELECT * FROM ai_usage ORDER BY id DESC LIMIT 1')
+          ).rows[0];
+          assert.equal(row.cost_micros, '7');
+          assert.equal(row.unknown_cost_attempts, 0);
+          assert.equal(row.attempts, 1);
+        } finally {
+          process.env.AI_ENABLED = 'false';
+        }
       },
     );
     await t.test(
@@ -811,7 +906,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
           [[first, second]],
         );
         await pool.query(
-          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0 WHERE day=CURRENT_DATE',
+          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0,uncertain_micros=0 WHERE day=CURRENT_DATE',
         );
         const enabled = await call(
           '/v1/admin/ai/features/recommendations',
@@ -992,7 +1087,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
       'Repeated provider failures open a cooldown circuit with no new attempts or cost',
       async () => {
         await pool.query(
-          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0 WHERE day=CURRENT_DATE',
+          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0,uncertain_micros=0 WHERE day=CURRENT_DATE',
         );
         process.env.AI_ENABLED = 'true';
         provider.fail = true;
@@ -1014,10 +1109,94 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
               query: 'Квартира',
             })
           ).json()) as { reason: string; attempts: number; costMicros: number };
+          const failedBudget = (
+            await pool.query(
+              'SELECT * FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(failedBudget.spent_micros, '0');
+          assert.equal(failedBudget.reserved_micros, '0');
+          assert.equal(failedBudget.uncertain_micros, '600000');
+          const usage = (
+            await pool.query(
+              "SELECT * FROM ai_usage WHERE reason='provider_unavailable' ORDER BY id DESC LIMIT 3",
+            )
+          ).rows;
+          assert.equal(usage.length, 3);
+          assert.ok(
+            usage.every(
+              (row) =>
+                row.cost_micros === '0' &&
+                row.unknown_cost_attempts === 2 &&
+                row.uncertain_micros === '200000',
+            ),
+          );
           assert.equal(reply.reason, 'circuit_open');
           assert.equal(reply.attempts, 0);
           assert.equal(reply.costMicros, 0);
           assert.equal(provider.calls - before, 6);
+          const main = app.get(AiService);
+          const instance = () =>
+            new AiService(
+              main.db,
+              main.audit,
+              main.access,
+              main.trust,
+              main.analytics,
+              main.provider,
+            );
+          const other = instance();
+          for (let i = 0; i < 2; i++) {
+            const attempt = await other.assist(actors[0]!, {
+              capability: 'search',
+              query: 'Квартира',
+            });
+            assert.equal(attempt.reason, 'provider_unavailable');
+            assert.equal(attempt.costMicros, 0);
+          }
+          const blocked = await instance().assist(actors[0]!, {
+            capability: 'search',
+            query: 'Квартира',
+          });
+          assert.equal(blocked.reason, 'budget_exhausted');
+          assert.equal(blocked.attempts, 0);
+          const globalBudget = (
+            await pool.query(
+              'SELECT * FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(globalBudget.spent_micros, '0');
+          assert.equal(globalBudget.reserved_micros, '0');
+          assert.equal(globalBudget.uncertain_micros, '1000000');
+          assert.equal(
+            (
+              await call(
+                '/v1/admin/ai/features/search',
+                'PATCH',
+                { version: 2, enabled: false },
+                2,
+              )
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await other.assist(actors[0]!, {
+                capability: 'search',
+                query: 'Квартира',
+              })
+            ).reason,
+            'disabled',
+          );
+          assert.equal(
+            (
+              await main.assist(actors[0]!, {
+                capability: 'search',
+                query: 'Квартира',
+              })
+            ).reason,
+            'disabled',
+          );
         } finally {
           provider.fail = false;
           process.env.AI_ENABLED = 'false';
