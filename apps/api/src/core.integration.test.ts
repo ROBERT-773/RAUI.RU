@@ -208,6 +208,65 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'Migration lock acquisition is bounded and preserves pooled connection settings',
+      async () => {
+        const runner = new Pool({
+          connectionString: process.env.TEST_DATABASE_URL,
+          max: 1,
+        });
+        const blocker = await pool.connect();
+        let unlocking: Promise<unknown> | undefined;
+        const unlock = () =>
+          (unlocking ??= blocker.query(
+            "SELECT pg_advisory_unlock(hashtextextended('raui:migrations',0))",
+          ));
+        await runner.query(
+          "SET lock_timeout='1700ms'; SET statement_timeout='23s'",
+        );
+        await blocker.query(
+          "SELECT pg_advisory_lock(hashtextextended('raui:migrations',0))",
+        );
+        const watchdog = setTimeout(() => {
+          void unlock().catch(() => {});
+        }, 8000);
+        const started = Date.now();
+        try {
+          await assert.rejects(
+            migrate(runner),
+            (error: unknown) => (error as { code?: string }).code === '55P03',
+          );
+          assert.ok(
+            Date.now() - started >= 4500 && Date.now() - started < 7000,
+            'Must reject before watchdog releases lock',
+          );
+          const settings = async () =>
+            (
+              await runner.query(
+                "SELECT current_setting('lock_timeout') AS lock, current_setting('statement_timeout') AS statement",
+              )
+            ).rows[0];
+          assert.deepEqual(await settings(), {
+            lock: '1700ms',
+            statement: '23s',
+          });
+          await unlock();
+          await migrate(runner);
+          assert.deepEqual(await settings(), {
+            lock: '1700ms',
+            statement: '23s',
+          });
+        } finally {
+          clearTimeout(watchdog);
+          try {
+            await unlock();
+          } finally {
+            blocker.release();
+            await runner.end();
+          }
+        }
+      },
+    );
+    await t.test(
       'auth denies escalation, unverified publishing and unauthorized admin',
       async () => {
         assert.equal(
@@ -1241,6 +1300,124 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         ].schema.required.includes('address'),
       );
       assert.ok(schema.paths['/v1/admin/moderation/{id}/decision']);
+      const anonymous = new Set(
+        `get /health
+get /health/ready
+get /v1/categories
+get /v1/categories/{code}/attributes
+get /v1/listings/{id}/public
+get /v1/media/{id}/{variant}
+get /v1/search/sitemap
+post /v1/search
+post /v1/search/selection
+post /v1/search/map
+post /v1/geo/layers
+post /v1/commerce/webhook
+post /v1/auth/register
+post /v1/auth/login
+post /v1/auth/verification/email/confirm
+post /v1/auth/password-reset
+post /v1/auth/password-reset/confirm`.split('\n'),
+      );
+      const partner = new Set(
+        `get /v1/partner/listings
+post /v1/partner/feeds/{id}/apply
+post /v1/partner/listings/bulk-pause`.split('\n'),
+      );
+      const keys = new Set(
+        `post /v1/organizations
+post /v1/properties
+post /v1/listings
+post /v1/listings/{id}/transitions
+post /v1/media
+post /v1/structures/complexes
+post /v1/structures/buildings
+post /v1/structures/sections
+post /v1/structures/floors
+post /v1/admin/media-jobs/{id}/retry
+post /v1/admin/moderation/{id}/decision
+post /v1/trust/listings/{id}/scan
+post /v1/admin/trust/listings/{id}/decision
+post /v1/admin/trust/candidates/{id}/decision
+post /v1/organizations/{organizationId}/feeds
+post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run
+post /v1/organizations/{organizationId}/feeds/{feedId}/apply
+post /v1/organizations/{organizationId}/professional/portfolios
+post /v1/organizations/{organizationId}/professional/portfolios/{portfolioId}/listings
+post /v1/organizations/{organizationId}/professional/listings/bulk-pause
+post /v1/organizations/{organizationId}/professional/partner-clients
+post /v1/partner/feeds/{id}/apply
+post /v1/partner/listings/bulk-pause
+post /v1/commerce/orders
+post /v1/commerce/ads/campaigns/{id}/events
+post /v1/commerce/reconciliation/{id}/retry
+post /v1/commerce/promotions/activate
+post /v1/commerce/ads/placements
+post /v1/commerce/ads/campaigns
+post /v1/commerce/promotions
+patch /v1/commerce/promotions/{code}/{version}`.split('\n'),
+      );
+      const seen = new Set<string>();
+      for (const [path, methods] of Object.entries(schema.paths)) {
+        for (const [method, raw] of Object.entries(
+          methods as Record<string, unknown>,
+        )) {
+          if (!['get', 'post', 'patch', 'delete', 'put'].includes(method))
+            continue;
+          const id = `${method} ${path}`;
+          seen.add(id);
+          const operation = raw as {
+            security: unknown;
+            parameters?: {
+              in?: string;
+              name?: string;
+              required?: boolean;
+              schema?: {
+                minLength?: number;
+                maxLength?: number;
+                pattern?: string;
+              };
+            }[];
+          };
+          assert.deepEqual(
+            operation.security,
+            anonymous.has(id)
+              ? []
+              : partner.has(id)
+                ? [{ partner: [] }]
+                : [{ bearer: [] }, { cookie: [] }],
+            id,
+          );
+          const headers = (operation.parameters ?? []).filter(
+            (p) =>
+              p.in === 'header' && p.name?.toLowerCase() === 'idempotency-key',
+          );
+          assert.equal(headers.length, keys.has(id) ? 1 : 0, id);
+          if (keys.has(id)) {
+            assert.equal(headers[0]!.required, true, id);
+            assert.equal(headers[0]!.schema?.minLength, 8, id);
+            const commerce = path.startsWith('/v1/commerce/');
+            assert.equal(
+              headers[0]!.schema?.maxLength,
+              commerce ? 128 : 100,
+              id,
+            );
+            assert.equal(
+              headers[0]!.schema?.pattern,
+              commerce ? '^[A-Za-z0-9._:-]{8,128}$' : '^[A-Za-z0-9_-]{8,100}$',
+              id,
+            );
+          }
+        }
+      }
+      for (const id of new Set([...anonymous, ...partner, ...keys]))
+        assert.ok(seen.has(id), `Missing operation ${id}`);
+      const geo = await fetch(`${base}/v1/geo/layers`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bounds: [37.5, 55.6, 37.7, 55.8] }),
+      });
+      assert.equal(geo.status, 201);
     });
   } finally {
     await app.close();

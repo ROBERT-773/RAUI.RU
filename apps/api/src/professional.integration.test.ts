@@ -427,6 +427,53 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           (await platform.portfolioListings(actors[0]!, org, p.id)).length,
           1,
         );
+        const second = await platform.createPortfolio(
+          actors[0]!,
+          org,
+          { name: 'Second sales' },
+          token(),
+        );
+        const sharedKey = token();
+        const sharedBody = { listingIds: [listingId] };
+        await platform.addPortfolioListings(
+          actors[0]!,
+          org,
+          p.id,
+          sharedBody,
+          sharedKey,
+        );
+        const added = await platform.addPortfolioListings(
+          actors[0]!,
+          org,
+          second.id,
+          sharedBody,
+          sharedKey,
+        );
+        assert.equal(added.portfolioId, second.id);
+        assert.equal(
+          (await platform.portfolioListings(actors[0]!, org, second.id)).length,
+          1,
+        );
+        assert.deepEqual(
+          await platform.addPortfolioListings(
+            actors[0]!,
+            org,
+            second.id,
+            sharedBody,
+            sharedKey,
+          ),
+          added,
+        );
+        await assert.rejects(
+          platform.addPortfolioListings(
+            actors[0]!,
+            org,
+            randomUUID(),
+            sharedBody,
+            sharedKey,
+          ),
+          /Portfolio not found/,
+        );
         await assert.rejects(
           platform.addPortfolioListings(
             actors[1]!,
@@ -555,7 +602,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           "INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'member')",
           [org, actors[1]!.id],
         );
-        assert.equal((await platform.portfolios(actors[1]!, org)).length, 1);
+        assert.equal((await platform.portfolios(actors[1]!, org)).length, 2);
         await assert.rejects(
           platform.bulkPause(
             actors[1]!,
@@ -566,6 +613,63 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         );
         await assert.rejects(
           imports.apply(actors[1]!, org, feedId, { items: [row] }, token()),
+        );
+      },
+    );
+    await t.test(
+      'Partner revocation targets clients beyond the first page and rejects cross-organization paths',
+      async () => {
+        const ids: string[] = [];
+        for (let n = 0; n < 101; n++) {
+          const id = randomUUID();
+          ids.push(id);
+          await pool.query(
+            "INSERT INTO partner_clients(id,organization_id,name,token_digest,scopes,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '1 day')",
+            [
+              id,
+              org,
+              'Revocation pagination fixture',
+              hash(token()),
+              ['listings:read'],
+              actors[0]!.id,
+            ],
+          );
+        }
+        const visible = new Set(
+          (await platform.clients(actors[0]!, org)).map((c) => c.id),
+        );
+        const excluded = ids.find((id) => !visible.has(id));
+        assert.ok(excluded);
+        const endpoint = `/v1/organizations/${org}/professional/partner-clients/${excluded}/revoke`;
+        assert.equal((await call(endpoint, 'POST', undefined, 1)).status, 403);
+        assert.equal(
+          (
+            await call(
+              `/v1/organizations/${otherOrg}/professional/partner-clients/${excluded}/revoke`,
+              'POST',
+              undefined,
+              0,
+            )
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await db.rows('SELECT active FROM partner_clients WHERE id=$1', [
+              excluded,
+            ])
+          )[0]!.active,
+          true,
+        );
+        assert.equal((await call(endpoint, 'POST')).status, 201);
+        assert.equal((await call(endpoint, 'POST')).status, 201);
+        assert.equal(
+          (
+            await db.rows('SELECT active FROM partner_clients WHERE id=$1', [
+              excluded,
+            ])
+          )[0]!.active,
+          false,
         );
       },
     );

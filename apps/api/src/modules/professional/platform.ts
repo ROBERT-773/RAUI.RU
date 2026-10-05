@@ -103,7 +103,7 @@ export class ProfessionalPlatform {
     );
     return this.idem.run(
       actor,
-      `professional.portfolio.add:${organization}`,
+      `professional.portfolio.add:${organization}:${portfolio}`,
       key,
       input,
       async (sql) => {
@@ -355,7 +355,12 @@ export class ProfessionalPlatform {
       [org],
     );
   }
-  async revoke(actor: Actor, id: string, admin = false) {
+  async revoke(
+    actor: Actor,
+    id: string,
+    admin = false,
+    organizationId?: string,
+  ) {
     seller(actor);
     return this.db.transaction(async (sql) => {
       const [row] = await this.db.rows<{
@@ -367,6 +372,11 @@ export class ProfessionalPlatform {
         sql,
       );
       if (!row) throw new BadRequestException('Partner client not found');
+      if (
+        organizationId !== undefined &&
+        row.organization_id !== parse(uuid, organizationId)
+      )
+        throw new ForbiddenException();
       if (admin) {
         verified(actor);
         if (actor.role !== 'admin') throw new ForbiddenException();
@@ -479,9 +489,7 @@ export class ProfessionalController {
     @Param('organizationId') o: string,
     @Param('id') id: string,
   ) {
-    const clients = await this.platform.clients(a, o);
-    if (!clients.some((c) => c.id === id)) throw new ForbiddenException();
-    return this.platform.revoke(a, id);
+    return this.platform.revoke(a, id, false, o);
   }
   @Post('portfolios')
   portfolio(

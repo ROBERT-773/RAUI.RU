@@ -16,7 +16,12 @@ import {
 import { featureInput } from '../modules/commerce/features';
 import { searchSchema } from '../modules/search/contracts';
 import { z } from 'zod';
-import type { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
+import type {
+  OpenAPIObject,
+  SchemaObject,
+  ParameterObject,
+  ReferenceObject,
+} from '@nestjs/swagger';
 import {
   registerSchema,
   loginSchema,
@@ -221,6 +226,73 @@ const bodyContracts: Record<string, z.ZodType> = {
     options: z.array(z.string().max(100)).max(100).default([]),
   }),
 };
+const anonymousOperations = new Set(
+  `get /health
+get /health/ready
+get /v1/categories
+get /v1/categories/{code}/attributes
+get /v1/listings/{id}/public
+get /v1/media/{id}/{variant}
+get /v1/search/sitemap
+post /v1/search
+post /v1/search/selection
+post /v1/search/map
+post /v1/geo/layers
+post /v1/commerce/webhook
+post /v1/auth/register
+post /v1/auth/login
+post /v1/auth/verification/email/confirm
+post /v1/auth/password-reset
+post /v1/auth/password-reset/confirm`.split('\n'),
+);
+const partnerOperations = new Set(
+  `get /v1/partner/listings
+post /v1/partner/feeds/{id}/apply
+post /v1/partner/listings/bulk-pause`.split('\n'),
+);
+const idempotentOperations = new Set(
+  `post /v1/organizations
+post /v1/properties
+post /v1/listings
+post /v1/listings/{id}/transitions
+post /v1/media
+post /v1/structures/complexes
+post /v1/structures/buildings
+post /v1/structures/sections
+post /v1/structures/floors
+post /v1/admin/media-jobs/{id}/retry
+post /v1/admin/moderation/{id}/decision
+post /v1/trust/listings/{id}/scan
+post /v1/admin/trust/listings/{id}/decision
+post /v1/admin/trust/candidates/{id}/decision
+post /v1/organizations/{organizationId}/feeds
+post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run
+post /v1/organizations/{organizationId}/feeds/{feedId}/apply
+post /v1/organizations/{organizationId}/professional/portfolios
+post /v1/organizations/{organizationId}/professional/portfolios/{portfolioId}/listings
+post /v1/organizations/{organizationId}/professional/listings/bulk-pause
+post /v1/organizations/{organizationId}/professional/partner-clients
+post /v1/partner/feeds/{id}/apply
+post /v1/partner/listings/bulk-pause
+post /v1/commerce/orders
+post /v1/commerce/ads/campaigns/{id}/events
+post /v1/commerce/reconciliation/{id}/retry
+post /v1/commerce/promotions/activate
+post /v1/commerce/ads/placements
+post /v1/commerce/ads/campaigns
+post /v1/commerce/promotions
+patch /v1/commerce/promotions/{code}/{version}`.split('\n'),
+);
+const httpMethods = new Set([
+  'get',
+  'put',
+  'post',
+  'delete',
+  'options',
+  'head',
+  'patch',
+  'trace',
+]);
 export function enrichOpenApi(document: OpenAPIObject) {
   document.components ??= {};
   document.components.securitySchemes ??= {};
@@ -232,27 +304,18 @@ export function enrichOpenApi(document: OpenAPIObject) {
   };
   for (const [path, methods] of Object.entries(document.paths))
     for (const [method, operation] of Object.entries(methods)) {
-      if (!operation || typeof operation !== 'object') continue;
-      const publicEndpoint =
-        path === '/v1/commerce/webhook' ||
-        path === '/health' ||
-        path === '/health/ready' ||
-        (method === 'get' &&
-          (path.startsWith('/v1/categories') ||
-            path.endsWith('/public') ||
-            path === '/v1/media/{id}/{variant}')) ||
-        [
-          '/v1/auth/register',
-          '/v1/auth/login',
-          '/v1/auth/password-reset',
-          '/v1/auth/password-reset/confirm',
-          '/v1/auth/verification/email/confirm',
-        ].includes(path);
-      operation.security = publicEndpoint
+      if (
+        !httpMethods.has(method) ||
+        !operation ||
+        typeof operation !== 'object'
+      )
+        continue;
+      const operationId = `${method} ${path}`;
+      operation.security = anonymousOperations.has(operationId)
         ? []
-        : [{ bearer: [] }, { cookie: [] }];
-      if (path.startsWith('/v1/partner/'))
-        operation.security = [{ partner: [] }];
+        : partnerOperations.has(operationId)
+          ? [{ partner: [] }]
+          : [{ bearer: [] }, { cookie: [] }];
       const schema = bodyContracts[`${method} ${path}`];
       if (schema)
         operation.requestBody = {
@@ -266,21 +329,16 @@ export function enrichOpenApi(document: OpenAPIObject) {
             },
           },
         };
-      if (
-        (method === 'post' ||
-          (method === 'patch' &&
-            path === '/v1/commerce/promotions/{code}/{version}')) &&
-        !path.startsWith('/v1/auth/') &&
-        path !== '/v1/commerce/webhook' &&
-        path !== '/v1/ai/assist' &&
-        path !== '/v1/analytics/events' &&
-        !path.endsWith('/start') &&
-        !path.endsWith('/cancel') &&
-        !path.endsWith('/revoke') &&
-        !path.endsWith('/retry')
-      )
+      if (idempotentOperations.has(operationId))
         operation.parameters = [
-          ...(operation.parameters ?? []),
+          ...(operation.parameters ?? []).filter(
+            (parameter: ParameterObject | ReferenceObject) =>
+              !(
+                'in' in parameter &&
+                parameter.in === 'header' &&
+                parameter.name.toLowerCase() === 'idempotency-key'
+              ),
+          ),
           {
             in: 'header',
             name: 'Idempotency-Key',
@@ -289,11 +347,22 @@ export function enrichOpenApi(document: OpenAPIObject) {
               type: 'string',
               minLength: 8,
               maxLength: path.startsWith('/v1/commerce/') ? 128 : 100,
+              pattern: path.startsWith('/v1/commerce/')
+                ? '^[A-Za-z0-9._:-]{8,128}$'
+                : '^[A-Za-z0-9_-]{8,100}$',
             },
           },
         ];
-      if (path === '/v1/commerce/webhook')
+      if (operationId === 'post /v1/commerce/webhook')
         operation.parameters = [
+          ...(operation.parameters ?? []).filter(
+            (parameter: ParameterObject | ReferenceObject) =>
+              !(
+                'in' in parameter &&
+                parameter.in === 'header' &&
+                parameter.name.toLowerCase() === 'x-payment-signature'
+              ),
+          ),
           {
             in: 'header',
             name: 'X-Payment-Signature',

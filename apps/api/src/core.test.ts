@@ -7,6 +7,100 @@ import { validateAttributes } from './modules/catalog/catalog';
 import { validateImage } from './modules/media/media';
 import { envSchema } from './config';
 import sharp from 'sharp';
+import { enrichOpenApi } from './common/openapi';
+import type { OpenAPIObject } from '@nestjs/swagger';
+import { migrate } from './modules/database/migrate';
+import type { Pool } from 'pg';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+test('Migration cleanup preserves primary failures and discards unsafe pooled connections', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'raui-migrate-unit-'));
+  try {
+    for (const mode of [
+      'rollback',
+      'unlock-after-error',
+      'unlock-after-success',
+    ]) {
+      const primary = new Error('primary fixture failure');
+      const cleanup = new Error('cleanup fixture failure');
+      let discarded: boolean | undefined;
+      const client = {
+        query: async (statement: string) => {
+          if (
+            statement.startsWith('CREATE TABLE') &&
+            mode !== 'unlock-after-success'
+          )
+            throw primary;
+          if (statement === 'ROLLBACK' && mode === 'rollback') throw cleanup;
+          if (statement.includes('pg_advisory_unlock') && mode !== 'rollback')
+            throw cleanup;
+          return { rows: [] };
+        },
+        release: (destroy: boolean) => {
+          discarded = destroy;
+        },
+      };
+      const pool = { connect: async () => client } as unknown as Pool;
+      await assert.rejects(
+        migrate(pool, directory),
+        (error) =>
+          error === (mode === 'unlock-after-success' ? cleanup : primary),
+      );
+      assert.equal(discarded, true, mode);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test('OpenAPI enrichment preserves path metadata and query parameters on repeated calls', () => {
+  const query = {
+    in: 'query' as const,
+    name: 'fixture',
+    schema: { type: 'string' as const },
+  };
+  const pathParameter = {
+    in: 'path' as const,
+    name: 'id',
+    required: true,
+    schema: { type: 'string' as const },
+  };
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: {
+      '/v1/organizations': {
+        parameters: [pathParameter],
+        servers: [{ url: 'https://example.test' }],
+        post: {
+          responses: {},
+          parameters: [
+            query,
+            {
+              in: 'header',
+              name: 'Idempotency-Key',
+              schema: { type: 'string' },
+            },
+          ],
+        },
+      },
+      '/v1/commerce/webhook': { post: { responses: {}, parameters: [query] } },
+    },
+  };
+  enrichOpenApi(document);
+  enrichOpenApi(document);
+  assert.deepEqual(document.paths['/v1/organizations']!.parameters, [
+    pathParameter,
+  ]);
+  assert.deepEqual(document.paths['/v1/organizations']!.servers, [
+    { url: 'https://example.test' },
+  ]);
+  for (const path of ['/v1/organizations', '/v1/commerce/webhook']) {
+    const parameters = document.paths[path]!.post!.parameters!;
+    assert.equal(parameters.length, 2);
+    assert.deepEqual(parameters[0], query);
+  }
+});
 test('adaptive hashes use independent salts and reject incorrect passwords', async () => {
   const first = await passwordHash('a-strong-password'),
     second = await passwordHash('a-strong-password');

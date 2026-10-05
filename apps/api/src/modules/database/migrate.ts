@@ -7,13 +7,37 @@ export async function migrate(
   directory = resolve(process.cwd(), 'migrations'),
 ) {
   const sql = await pool.connect();
+  let locked = false;
+  let discard = false;
+  let failed = false;
+  let failure: unknown;
+  const rollback = async () => {
+    try {
+      await sql.query('ROLLBACK');
+    } catch {
+      discard = true;
+    }
+  };
   try {
-    await sql.query(
-      "SELECT pg_advisory_lock(hashtextextended('raui:migrations',0))",
-    );
-    await sql.query(
-      'CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())',
-    );
+    // SET LOCAL bounds acquisition without changing pooled session defaults.
+    // The session advisory lock survives COMMIT and protects the whole run.
+    try {
+      await sql.query('BEGIN');
+      await sql.query(
+        "SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s'",
+      );
+      await sql.query(
+        "SELECT pg_advisory_lock(hashtextextended('raui:migrations',0))",
+      );
+      locked = true;
+      await sql.query(
+        'CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())',
+      );
+      await sql.query('COMMIT');
+    } catch (error) {
+      await rollback();
+      throw error;
+    }
     for (const name of (await readdir(directory))
       .filter((n) => /^\d+_.+\.sql$/.test(n))
       .sort()) {
@@ -30,8 +54,8 @@ export async function migrate(
           throw new Error(`Migration checksum changed: ${name}`);
         continue;
       }
-      await sql.query('BEGIN');
       try {
+        await sql.query('BEGIN');
         await sql.query(
           "SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s'",
         );
@@ -46,16 +70,31 @@ export async function migrate(
         );
         await sql.query('COMMIT');
       } catch (error) {
-        await sql.query('ROLLBACK');
+        await rollback();
         throw error;
       }
     }
+  } catch (error) {
+    failed = true;
+    failure = error;
   } finally {
-    await sql.query(
-      "SELECT pg_advisory_unlock(hashtextextended('raui:migrations',0))",
-    );
-    sql.release();
+    try {
+      if (locked && !discard)
+        await sql.query(
+          "SELECT pg_advisory_unlock(hashtextextended('raui:migrations',0))",
+        );
+    } catch (error) {
+      discard = true;
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    } finally {
+      // A failed cleanup must not return a transaction/lock-bearing connection.
+      sql.release(discard);
+    }
   }
+  if (failed) throw failure;
 }
 if (require.main === module) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
