@@ -10,6 +10,10 @@ import {
 import { z } from 'zod';
 import { Public, parse, hash, uuid } from '../../common/security';
 import { Database } from '../database/database';
+import {
+  CommerceModule,
+  PaidPlacementService,
+} from '../commerce/commerce';
 import { SearchIndex, listingMapping } from './index';
 import {
   searchSchema,
@@ -71,6 +75,7 @@ export class Search {
   constructor(
     readonly db: Database,
     readonly index: SearchIndex,
+    readonly paidPlacements: PaidPlacementService,
   ) {}
   async publicRows(ids?: string[]) {
     return this.db.rows<PublicRow>(
@@ -144,7 +149,7 @@ export class Search {
     );
   }
   async cards(rows: PublicRow[]) {
-    // One media query for the whole page, rather than one request per card.
+    // Organic ordering is resolved before paid placement metadata is attached.
     const assets = rows.length
       ? await this.db.rows<{
           listing_id: string;
@@ -155,7 +160,7 @@ export class Search {
           [rows.map((r) => r.id)],
         )
       : [];
-    return rows.map((source) => {
+    const organic = rows.map((source) => {
       const row = { ...source };
       delete row.point;
       return {
@@ -166,6 +171,10 @@ export class Search {
           .map((a) => ({ id: a.id, url: '/v1/media/' + a.id + '/small' })),
       };
     });
+    return this.paidPlacements.attach(
+      organic,
+      await this.paidPlacements.signals(organic.map((row) => row.id)),
+    );
   }
   async validatePolygon(input: SearchInput) {
     if (input.polygon) {
@@ -435,6 +444,7 @@ export class SearchController {
   }
 }
 @Module({
+  imports: [CommerceModule],
   controllers: [SearchController],
   providers: [Search, SearchIndex],
   exports: [Search, SearchIndex],
