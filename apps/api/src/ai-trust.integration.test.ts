@@ -518,6 +518,33 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         assert.equal(stats.schemaVersion, 1);
         assert.ok(!JSON.stringify(stats).includes(stored.actor_hash));
         assert.ok(!JSON.stringify(stats).includes(actors[3]!.id));
+        await pool.query(
+          "INSERT INTO analytics_daily_keys(day) VALUES(CURRENT_DATE-91) ON CONFLICT DO NOTHING",
+        );
+        await pool.query(
+          "INSERT INTO analytics_events(schema_version,event_key,listing_id,actor_hash,kind,day) SELECT 1,$1,$2,encode(hmac($3,secret,'sha256'),'hex'),'view',day FROM analytics_daily_keys WHERE day=CURRENT_DATE-91",
+          [randomUUID(), first, actors[3]!.id],
+        );
+        const analytics = app.get(
+          (await import('./modules/analytics/analytics')).Analytics,
+        );
+        await analytics.prune();
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_events WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_daily_keys WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
         await pool.query("UPDATE listings SET status='paused' WHERE id=$1", [
           first,
         ]);
