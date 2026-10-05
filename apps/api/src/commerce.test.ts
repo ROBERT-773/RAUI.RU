@@ -14,8 +14,14 @@ test('payment state machine allows forward settlement and blocks invalid termina
   assertPaymentTransition('pending', 'authorized');
   assertPaymentTransition('authorized', 'captured');
   assertPaymentTransition('captured', 'refunded');
-  assert.throws(() => assertPaymentTransition('captured', 'pending'), ConflictException);
-  assert.throws(() => assertPaymentTransition('refunded', 'captured'), ConflictException);
+  assert.throws(
+    () => assertPaymentTransition('captured', 'pending'),
+    ConflictException,
+  );
+  assert.throws(
+    () => assertPaymentTransition('refunded', 'captured'),
+    ConflictException,
+  );
 });
 
 test('idempotency keys are bounded and restricted to transport-safe characters', () => {
@@ -25,7 +31,10 @@ test('idempotency keys are bounded and restricted to transport-safe characters',
 });
 
 test('payment event keys reject malformed replay identifiers', () => {
-  assert.equal(normalizePaymentEventKey('provider:event-123'), 'provider:event-123');
+  assert.equal(
+    normalizePaymentEventKey('provider:event-123'),
+    'provider:event-123',
+  );
   for (const value of ['', 'short', 'contains spaces', undefined])
     assert.throws(() => normalizePaymentEventKey(value), BadRequestException);
 });
@@ -34,8 +43,14 @@ test('promotion windows are deterministic from an explicit start time', () => {
   const window = promotionWindow('2026-10-05T10:00:00.000Z', 24);
   assert.equal(window.startsAt, '2026-10-05T10:00:00.000Z');
   assert.equal(window.endsAt, '2026-10-06T10:00:00.000Z');
-  assert.throws(() => promotionWindow('not-a-date', 24), BadRequestException);
-  assert.throws(() => promotionWindow('2026-10-05T10:00:00.000Z', 0), BadRequestException);
+  assert.throws(
+    () => promotionWindow('not-a-date', 24),
+    BadRequestException,
+  );
+  assert.throws(
+    () => promotionWindow('2026-10-05T10:00:00.000Z', 0),
+    BadRequestException,
+  );
 });
 
 test('promotion products require versioned, bounded commercial configuration', () => {
@@ -51,6 +66,12 @@ test('promotion products require versioned, bounded commercial configuration', (
   });
   assert.equal(product.kind, 'vip');
   assert.equal(product.priceMinor, 9900);
-  assert.throws(() => validatePromotionProduct({ ...product, priceMinor: -1 }), BadRequestException);
-  assert.throws(() => validatePromotionProduct({ ...product, version: 0 }), BadRequestException);
+  assert.throws(
+    () => validatePromotionProduct({ ...product, priceMinor: -1 }),
+    BadRequestException,
+  );
+  assert.throws(
+    () => validatePromotionProduct({ ...product, version: 0 }),
+    BadRequestException,
+  );
 });
