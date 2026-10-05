@@ -1,3 +1,11 @@
+import {
+  orderInput,
+  placementInput,
+  campaignInput,
+  promotionInput,
+  advertisingEventInput,
+} from '../modules/commerce/commerce';
+import { featureInput } from '../modules/commerce/features';
 import { searchSchema } from '../modules/search/contracts';
 import { z } from 'zod';
 import type { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
@@ -15,6 +23,23 @@ const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/commerce/orders': orderInput,
+  'post /v1/commerce/ads/placements': placementInput,
+  'post /v1/commerce/ads/campaigns': campaignInput,
+  'post /v1/commerce/ads/campaigns/{id}/events': advertisingEventInput,
+  'post /v1/commerce/promotions': promotionInput,
+  'patch /v1/commerce/features/{code}': featureInput,
+  'patch /v1/commerce/promotions/{code}/{version}': object({
+    enabled: z.boolean(),
+  }),
+  'post /v1/commerce/promotions/activate': object({
+    listingId: uuid,
+    code: z.string().min(2).max(64),
+    version: z.number().int().positive(),
+    paymentOrderId: uuid.optional(),
+    startsAt: z.iso.datetime().optional(),
+  }),
+
   'post /v1/geo/layers': object({
     bounds: searchSchema.shape.bounds.unwrap(),
     locality: z.string().max(150).optional(),
@@ -156,6 +181,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
     for (const [method, operation] of Object.entries(methods)) {
       if (!operation || typeof operation !== 'object') continue;
       const publicEndpoint =
+        path === '/v1/commerce/webhook' ||
         path === '/health' ||
         path === '/health/ready' ||
         (method === 'get' &&
@@ -185,14 +211,36 @@ export function enrichOpenApi(document: OpenAPIObject) {
             },
           },
         };
-      if (method === 'post' && !path.startsWith('/v1/auth/'))
+      if (
+        (method === 'post' ||
+          (method === 'patch' &&
+            path === '/v1/commerce/promotions/{code}/{version}')) &&
+        !path.startsWith('/v1/auth/') &&
+        path !== '/v1/commerce/webhook' &&
+        !path.endsWith('/start') &&
+        !path.endsWith('/cancel') &&
+        !path.endsWith('/revoke')
+      )
         operation.parameters = [
           ...(operation.parameters ?? []),
           {
             in: 'header',
             name: 'Idempotency-Key',
             required: true,
-            schema: { type: 'string', minLength: 8, maxLength: 100 },
+            schema: {
+              type: 'string',
+              minLength: 8,
+              maxLength: path.startsWith('/v1/commerce/') ? 128 : 100,
+            },
+          },
+        ];
+      if (path === '/v1/commerce/webhook')
+        operation.parameters = [
+          {
+            in: 'header',
+            name: 'X-Payment-Signature',
+            required: true,
+            schema: { type: 'string' },
           },
         ];
       operation.responses = {
@@ -202,6 +250,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
         '403': { description: 'Authorization/CSRF failure' },
         '409': { description: 'Conflict/stale version' },
         '429': { description: 'Rate limit' },
+        '503': {
+          description: 'Dependency unavailable or commercial feature disabled',
+        },
       };
     }
   return document;

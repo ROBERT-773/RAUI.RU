@@ -7,14 +7,15 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js",
     "test:integration": "tsc -p tsconfig.test.json && node --env-file=../../.env scripts/integration.mjs",
     "db:migrate": "node --env-file=../../.env dist/modules/database/migrate.js",
     "worker": "node --env-file=../../.env dist/worker.js",
     "admin:bootstrap": "node --env-file=../../.env dist/modules/auth/bootstrap-admin.js",
     "smoke:core": "node --env-file=../../.env scripts/core-smoke.mjs",
     "worker:search": "node --env-file=../../.env dist/search-worker.js",
-    "test:e2e": "node --env-file=../../.env scripts/product-e2e.mjs"
+    "test:e2e": "node --env-file=../../.env scripts/product-e2e.mjs",
+    "worker:commerce": "node --env-file=../../.env dist/commerce-worker.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

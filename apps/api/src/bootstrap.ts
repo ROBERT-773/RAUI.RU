@@ -17,6 +17,15 @@ export function configure(app: INestApplication) {
       next();
     },
   );
+  app.use(
+    '/v1/commerce/webhook',
+    json({
+      limit: '256kb',
+      verify: (req, _res, bytes) => {
+        (req as typeof req & { rawBody: Buffer }).rawBody = Buffer.from(bytes);
+      },
+    }),
+  );
   app.use(json({ limit: '15mb' }));
   app.useGlobalFilters(new ApiErrors());
   app.enableCors({

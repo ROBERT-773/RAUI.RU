@@ -92,7 +92,12 @@ export class SessionGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    if (isPublic && req.url.startsWith('/v1/auth/')) return true;
+    if (
+      isPublic &&
+      (req.url.startsWith('/v1/auth/') ||
+        req.url.split('?')[0] === '/v1/commerce/webhook')
+    )
+      return true;
 
     const bearer = req.headers.authorization?.match(
       /^Bearer ([A-Za-z0-9_-]{43})$/,
