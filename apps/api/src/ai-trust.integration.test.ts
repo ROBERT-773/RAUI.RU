@@ -289,6 +289,13 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
           assert.equal(reply.costMicros, 0);
           assert.equal(provider.calls - before, 6);
         } finally {
+          const budget = (
+            await pool.query(
+              'SELECT spent_micros,reserved_micros FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(Number(budget.spent_micros), 0);
+          assert.equal(Number(budget.reserved_micros), 0);
           provider.fail = false;
           process.env.AI_ENABLED = 'false';
         }
