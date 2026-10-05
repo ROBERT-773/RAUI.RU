@@ -227,6 +227,58 @@ export class CommerceService {
     });
   }
 
+  async applyPaymentEvent(
+    orderId: string,
+    eventKey: string,
+    toState: PaymentState,
+    source: string,
+    payload: unknown,
+  ) {
+    if (!/^[A-Za-z0-9._:-]{8,160}$/.test(eventKey))
+      throw new BadRequestException('Invalid payment event key');
+    if (!/^[a-z0-9_-]{2,40}$/.test(source))
+      throw new BadRequestException('Invalid payment event source');
+
+    return this.db.transaction(async (sql) => {
+      await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `commerce-payment:${orderId}`,
+      ]);
+      const [replayed] = await this.db.rows(
+        'SELECT id FROM commerce_payment_events WHERE payment_order_id=$1 AND event_key=$2',
+        [orderId, eventKey],
+        sql,
+      );
+      if (replayed) return { replayed: true };
+
+      const [order] = await this.db.rows<{ state: PaymentState }>(
+        'SELECT state FROM commerce_payment_orders WHERE id=$1 FOR UPDATE',
+        [orderId],
+        sql,
+      );
+      if (!order) throw new BadRequestException('Unknown payment order');
+
+      this.policy.transition(order.state, toState);
+      await sql.query(
+        'UPDATE commerce_payment_orders SET state=$2,updated_at=now() WHERE id=$1',
+        [orderId, toState],
+      );
+      await sql.query(
+        `INSERT INTO commerce_payment_events(
+          payment_order_id,from_state,to_state,source,event_key,payload
+        ) VALUES($1,$2,$3,$4,$5,$6)`,
+        [
+          orderId,
+          order.state,
+          toState,
+          source,
+          eventKey,
+          JSON.stringify(payload ?? {}),
+        ],
+      );
+      return { replayed: false, state: toState };
+    });
+  }
+
   async orders(actor: Actor) {
     return this.db.rows(
       `SELECT id,provider,reference,amount_minor,currency,state,created_at,updated_at
