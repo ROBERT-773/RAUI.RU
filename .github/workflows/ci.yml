@@ -1,17 +1,22 @@
 name: RAUI CI
+
 on:
   pull_request:
   push:
     branches: [master]
+
 permissions:
   contents: read
+
 concurrency:
   group: raui-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
-  checks:
+  fast-checks:
+    name: Fast checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -26,11 +31,36 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  integration:
+    name: Integration, migrations and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm test:integration
-      - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
-      - run: pnpm test:e2e
       - run: pnpm db:migrate
       - name: Production smoke
         run: |
@@ -54,6 +84,26 @@ jobs:
       - name: Diagnostics
         if: failure()
         run: cat /tmp/api.log /tmp/web.log /tmp/media-worker.log 2>/dev/null || true
+      - name: Stop local services
+        if: always()
+        run: docker compose --env-file .env -f infra/compose.yaml down || true
+
+  e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: cp .env.example .env && pnpm infra:up
+      - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm test:e2e
       - name: Stop local services
         if: always()
         run: docker compose --env-file .env -f infra/compose.yaml down || true
