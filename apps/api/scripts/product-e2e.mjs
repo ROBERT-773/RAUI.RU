@@ -9,12 +9,9 @@ import {
   waitService,
   terminate,
   boundedOperation,
+  watchPoolErrors,
 } from './e2e-runtime.mjs';
 import { resolve } from 'node:path';
-import { migrate } from '../dist/modules/database/migrate.js';
-import { passwordHash } from '../dist/common/security.js';
-import { SearchIndex } from '../dist/modules/search/index.js';
-import { documentOf } from '../dist/modules/search/search.js';
 let stage = 'initialization';
 async function run() {
   const source = new URL(process.env.DATABASE_URL ?? '');
@@ -23,6 +20,15 @@ async function run() {
     process.env.NODE_ENV === 'production'
   )
     throw new Error('E2E requires local DB');
+  const [{ migrate }, { passwordHash }, { SearchIndex }, { documentOf }] =
+    await Promise.all([
+      import('../dist/modules/database/migrate.js'),
+      import('../dist/common/security.js'),
+      import('../dist/modules/search/index.js'),
+      import('../dist/modules/search/search.js'),
+    ]);
+  let failed = false;
+  let cleanupFailed = false;
   const name = 'raui_test_' + randomBytes(8).toString('hex'),
     admin = new Pool({
       connectionString: source.toString(),
@@ -36,6 +42,9 @@ async function run() {
     connectionTimeoutMillis: 3000,
     statement_timeout: 30000,
     query_timeout: 35000,
+  });
+  const monitor = watchPoolErrors([admin, pool], () => {
+    failed = true;
   });
   const env = {
     ...process.env,
@@ -54,8 +63,6 @@ async function run() {
   const directory = resolve('../../.cache');
   stage = 'fixtures';
   let databaseCreated = false;
-  let failed = false;
-  let cleanupFailed = false;
   const started = Date.now();
   function start(args, cwd, label) {
     const child = spawn(process.execPath, args, {
@@ -80,9 +87,11 @@ async function run() {
   }
   try {
     await mkdir(directory, { recursive: true });
+    // Resource allocation must settle before cleanup can decide ownership.
+    // An idle error is sticky but cannot race successful CREATE registration.
     await admin.query(`CREATE DATABASE "${name}"`);
     databaseCreated = true;
-    await migrate(pool);
+    await monitor.run(() => migrate(pool));
     const seller = randomUUID(),
       buyer = randomUUID();
     for (const [id, email, role] of [
@@ -90,15 +99,17 @@ async function run() {
       [buyer, 'buyer@e2e.test', 'buyer'],
       [randomUUID(), 'outsider@e2e.test', 'buyer'],
     ])
-      await pool.query(
-        'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,now(),now())',
-        [
-          id,
-          email,
-          await passwordHash('E2E-only-password-42!'),
-          'Тестовый пользователь',
-          role,
-        ],
+      await monitor.run(async () =>
+        pool.query(
+          'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,now(),now())',
+          [
+            id,
+            email,
+            await passwordHash('E2E-only-password-42!'),
+            'Тестовый пользователь',
+            role,
+          ],
+        ),
       );
     for (const [price, lon, lat, rooms] of [
       [10000000, 37.61, 55.75, 2],
@@ -108,35 +119,48 @@ async function run() {
         address = randomUUID(),
         property = randomUUID(),
         listingSource = randomUUID();
-      await pool.query(
-        "INSERT INTO addresses(id,formatted,locality,district,point) VALUES($1,'Москва, Тверская','Москва','Центр',ST_SetSRID(ST_MakePoint($2,$3),4326))",
-        [address, lon, lat],
+      await monitor.run(async () =>
+        pool.query(
+          "INSERT INTO addresses(id,formatted,locality,district,point) VALUES($1,'Москва, Тверская','Москва','Центр',ST_SetSRID(ST_MakePoint($2,$3),4326))",
+          [address, lon, lat],
+        ),
       );
-      await pool.query(
-        "INSERT INTO properties(id,created_by,category_code,address_id,attributes) VALUES($1,$2,'apartment',$3,$4)",
-        [property, seller, address, { area: 50, rooms, elevator: true }],
+      await monitor.run(async () =>
+        pool.query(
+          "INSERT INTO properties(id,created_by,category_code,address_id,attributes) VALUES($1,$2,'apartment',$3,$4)",
+          [property, seller, address, { area: 50, rooms, elevator: true }],
+        ),
       );
-      await pool.query(
-        "INSERT INTO listing_sources(id,kind) VALUES($1,'direct')",
-        [listingSource],
-      );
-      await pool.query(
-        "INSERT INTO listings(id,property_id,source_id,seller_id,deal_type,price,title,status,published_at) VALUES($1,$2,$3,$4,'sale',$5,$6,'published',now())",
-        [
-          id,
-          property,
+      await monitor.run(async () =>
+        pool.query("INSERT INTO listing_sources(id,kind) VALUES($1,'direct')", [
           listingSource,
-          seller,
-          price,
-          'Квартира ' + rooms + ' комнаты',
-        ],
+        ]),
+      );
+      await monitor.run(async () =>
+        pool.query(
+          "INSERT INTO listings(id,property_id,source_id,seller_id,deal_type,price,title,status,published_at) VALUES($1,$2,$3,$4,'sale',$5,$6,'published',now())",
+          [
+            id,
+            property,
+            listingSource,
+            seller,
+            price,
+            'Квартира ' + rooms + ' комнаты',
+          ],
+        ),
       );
     }
-    await index.initialize();
-    const rows = (await pool.query('SELECT * FROM public_search_listings'))
-      .rows;
-    for (const row of rows) await index.write(row.id, '1', documentOf(row));
-    await index.request('/' + index.alias + '/_refresh', 'POST');
+    await monitor.run(() => index.initialize());
+    const rows = (
+      await monitor.run(async () =>
+        pool.query('SELECT * FROM public_search_listings'),
+      )
+    ).rows;
+    for (const row of rows)
+      await monitor.run(() => index.write(row.id, '1', documentOf(row)));
+    await monitor.run(() =>
+      index.request('/' + index.alias + '/_refresh', 'POST'),
+    );
     start(['dist/main.js'], process.cwd(), 'e2e-api');
     start(
       [
@@ -155,13 +179,15 @@ async function run() {
       'http://127.0.0.1:3101/health',
       'http://127.0.0.1:3100/health',
     ]) {
-      await waitService(url, children);
+      await monitor.run(() => waitService(url, children));
     }
     stage = 'load';
-    await measureLoad(
-      'http://127.0.0.1:3101',
-      rows[0].id,
-      resolve(directory, 'phase4d-load.json'),
+    await monitor.run(() =>
+      measureLoad(
+        'http://127.0.0.1:3101',
+        rows[0].id,
+        resolve(directory, 'phase4d-load.json'),
+      ),
     );
     stage = 'browser-regression';
     const child = spawn(
@@ -171,9 +197,9 @@ async function run() {
     );
     const browser = trackProcess(child, 'browser');
     children.push(browser);
-    const result = await browser.completion;
+    const result = await monitor.run(() => browser.completion);
     process.exitCode = result.code ?? 1;
-    failed = process.exitCode !== 0;
+    failed = failed || process.exitCode !== 0;
     if (
       children.slice(0, -1).some((record) => record.outcome || record.logFailed)
     )

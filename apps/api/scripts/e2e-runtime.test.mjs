@@ -8,6 +8,7 @@ import {
   waitService,
   terminate,
   boundedOperation,
+  watchPoolErrors,
 } from './e2e-runtime.mjs';
 const timeout = (milliseconds) =>
   new Promise((resolve) =>
@@ -159,4 +160,44 @@ test('Late log errors and permanently stuck cleanup operations cannot pass', asy
     await boundedOperation(() => Promise.resolve('complete'), 10),
     'complete',
   );
+});
+
+test('Idle database errors are sanitized, abort pending work and retain cleanup access', async () => {
+  const pool = new EventEmitter();
+  const marker = 'PRIVATE_DATABASE_IDLE_ERROR';
+  let failures = 0;
+  const monitor = watchPoolErrors([pool], () => failures++);
+  const waiting = monitor.run(() => new Promise(() => {}));
+  assert.doesNotThrow(() => pool.emit('error', new Error(marker)));
+  await assert.rejects(waiting, (error) => {
+    assert.equal(error.message, 'E2E database connection failed');
+    assert.ok(!error.stack.includes(marker));
+    return true;
+  });
+  let invoked = false;
+  await assert.rejects(
+    monitor.run(() => {
+      invoked = true;
+    }),
+    /database connection failed/,
+  );
+  assert.equal(invoked, false);
+  assert.equal(failures, 1);
+  let cleaned = false;
+  await boundedOperation(async () => {
+    cleaned = true;
+  }, 50);
+  assert.equal(cleaned, true);
+});
+
+test('Idle error fences an operation queued for the next microtask', async () => {
+  const pool = new EventEmitter();
+  const monitor = watchPoolErrors([pool], () => {});
+  let invoked = false;
+  const pending = monitor.run(() => {
+    invoked = true;
+  });
+  pool.emit('error', new Error('private fixture'));
+  await assert.rejects(pending, /database connection failed/);
+  assert.equal(invoked, false);
 });

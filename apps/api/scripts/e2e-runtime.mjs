@@ -100,3 +100,33 @@ export async function boundedOperation(action, milliseconds) {
     throw new Error('Operation cleanup deadline exceeded');
   return result;
 }
+
+export function watchPoolErrors(pools, onFailure) {
+  let failed = false;
+  let signal;
+  const failure = new Promise((resolve) => {
+    signal = resolve;
+  });
+  for (const pool of pools)
+    pool.on('error', () => {
+      if (!failed) {
+        failed = true;
+        onFailure();
+        signal();
+      }
+    });
+  return {
+    async run(action) {
+      if (failed) throw new Error('E2E database connection failed');
+      return Promise.race([
+        Promise.resolve().then(() => {
+          if (failed) throw new Error('E2E database connection failed');
+          return action();
+        }),
+        failure.then(() => {
+          throw new Error('E2E database connection failed');
+        }),
+      ]);
+    },
+  };
+}
