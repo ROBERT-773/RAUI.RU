@@ -37,6 +37,25 @@ CREATE TABLE IF NOT EXISTS commerce_promotion_products (
   UNIQUE (code, version)
 );
 
+CREATE TABLE IF NOT EXISTS commerce_promotion_activations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid NOT NULL,
+  listing_id uuid NOT NULL,
+  promotion_product_id uuid NOT NULL REFERENCES commerce_promotion_products(id),
+  payment_order_id uuid REFERENCES commerce_payment_orders(id),
+  starts_at timestamptz NOT NULL DEFAULT now(),
+  ends_at timestamptz NOT NULL,
+  status text NOT NULL CHECK (status IN ('scheduled','active','expired','cancelled')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at > starts_at)
+);
+
+CREATE INDEX IF NOT EXISTS commerce_promotion_activations_listing_idx
+  ON commerce_promotion_activations(listing_id, status, ends_at);
+
+CREATE INDEX IF NOT EXISTS commerce_promotion_activations_account_idx
+  ON commerce_promotion_activations(account_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS commerce_payment_events (
   id bigserial PRIMARY KEY,
   payment_order_id uuid NOT NULL REFERENCES commerce_payment_orders(id) ON DELETE CASCADE,
