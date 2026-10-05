@@ -70,6 +70,16 @@ OpenSearch as the source of truth.
 
 ## Acceptance status
 
+Parallel operations review subsequently proved that the manifest validator
+accepted omission of intermediate migrations and runtime/observability contracts.
+The regression failed on removing migration 002 before the fix. Validation now
+requires every immutable migration 001–011, `package.json` and all three
+observability files, alongside the existing entrypoints, lockfile and evidence.
+The test removes each required file independently and requires rejection.
+Read-only review approved this bounded fix; existing hash verification remains
+mandatory. This strengthens required-file completeness, not full directory
+closure or independent provenance. The updated PR head requires full CI.
+
 Implementation head `561d53d6999b7e006cbfcd10be28213cd02d51f3` passed
 [RAUI CI run 37343613059](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37343613059):
 frozen install, lint/types/unit/security/build, 84 integration tests, all five browser
