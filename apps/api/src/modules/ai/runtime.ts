@@ -133,8 +133,8 @@ export async function runAi(options: Options) {
       if (!(await options.enabled())) return answer('disabled');
       return answer('generated', reply);
     } catch {
-      // Ambiguous/invalid provider responses are charged at the reserved upper bound.
-      costMicros += cap;
+      // Unknown provider usage is not reported as actual spend. The caller keeps
+      // the per-attempt reservation separate until this invocation settles.
     } finally {
       clearTimeout(timer);
       controller.abort();
