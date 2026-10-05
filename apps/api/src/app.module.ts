@@ -4,6 +4,7 @@ import { ProductModule } from './modules/product/product';
 import { CommerceModule } from './modules/commerce/commerce';
 import { ProfessionalFeedsModule } from './modules/professional/feeds';
 import { ProfessionalPlatformModule } from './modules/professional/platform';
+import { ProfessionalImportsModule } from './modules/professional/imports';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { HealthController } from './health.controller';
@@ -39,6 +40,7 @@ import { RateGuard, SessionGuard } from './common/security';
     CommerceModule,
     ProfessionalFeedsModule,
     ProfessionalPlatformModule,
+    ProfessionalImportsModule,
   ],
   controllers: [HealthController],
   providers: [
