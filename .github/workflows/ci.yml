@@ -100,7 +100,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @raui/api build
+      - run: pnpm build
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
