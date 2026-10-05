@@ -43,9 +43,9 @@
 **Files:** API config/HTTP tests, web security/metadata helper/proxy/layout tests, env contracts/README.
 **Interfaces:** Consumes existing config and public detail APIs; produces validated production env and safe HTML/JSON-LD/security policy helpers.
 
-- [ ] Write failing tests for insecure production origins/storage/DB transport, unsafe search/CDN configuration, controlled error classes, hostile JSON-LD and nonce/script policy.
-- [ ] Observe targeted failures, implement minimal validation/guardrails, preserve local `.env` and current security assertions.
-- [ ] Run unit, strict types, root lint/build and representative E2E before committing/pushing a completed increment.
+- [x] Write failing tests for insecure production origins/storage/DB transport, unsafe search/CDN configuration, controlled error classes, hostile JSON-LD and nonce/script policy.
+- [x] Observe targeted failures, implement minimal validation/guardrails, preserve local `.env` and current security assertions.
+- [x] Run unit, strict types, root lint/build and representative E2E before committing/pushing a completed increment.
 
 ### Task 2: Observability and protected operations health
 
@@ -94,3 +94,10 @@
 - Existing approved TZ/spec/Issue #26 and the user's autonomous-work instruction determine the brief and native execution method. Do not add routine design/plan approval stops; escalate only genuine owner blockers in AGENTS.
 - Phase 4C merge was separately authorized by the user's response to the explicit merge/Phase 4D question and completed as `ec5b26e`. Phase 4D itself does not authorize its own merge or production deployment.
 - Before implementation, self-review plan/spec coverage and interfaces; record completed increments and exact tests here and in the phase report.
+
+### Task 1 evidence
+
+- Observed red tests for plaintext/mismatched production origins, malformed credential-bearing URL errors, missing web security helper and null/unknown-code HTTP errors before fixes.
+- API and web unit suites, root lint/typecheck/build passed. All 83 PostgreSQL/PostGIS integration tests passed; migrations 001–011 reapplied without changes.
+- Built API/web/core/search smoke, commerce/professional workers and 14 desktop/Android Chromium E2E checks passed, including fresh per-response CSP nonce and working browser hydration. Full remote browser matrix remains a CI gate.
+- No migration or deployment. Request-scoped CSP makes HTML dynamically rendered; inline styles remain allowed for React/Leaflet, while production scripts reject unsafe-inline/unsafe-eval.

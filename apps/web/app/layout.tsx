@@ -1,3 +1,4 @@
+import { headers } from 'next/headers';
 import 'leaflet/dist/leaflet.css';
 import './globals.css';
 import Link from 'next/link';
@@ -7,7 +8,8 @@ export const metadata: Metadata = {
   title: 'RAUI.RU',
   description: 'Портал недвижимости',
 };
-export default function Layout({ children }: { children: ReactNode }) {
+export default async function Layout({ children }: { children: ReactNode }) {
+  await headers(); // Request-scoped rendering lets Next apply the CSP nonce to hydration scripts.
   return (
     <html lang="ru">
       <body>
