@@ -18,6 +18,7 @@ Do not modify `master` directly. This is the final planned implementation phase 
 - `AGENTS.md`
 
 Before implementation:
+
 1. summarize architecture and sequencing;
 2. list affected modules/files;
 3. identify schema/migration changes;
@@ -28,6 +29,7 @@ Before implementation:
 ## 4.1 Billing and payments
 
 Implement a provider-agnostic billing domain:
+
 - accounts/balances or invoice model as appropriate;
 - payment intents/orders;
 - payment state machine;
@@ -49,6 +51,7 @@ Never store full payment card data.
 ## 4.2 Promotion products
 
 Implement configurable promotion products rather than hard-coded logic:
+
 - Standard;
 - Highlighted;
 - Premium;
@@ -58,6 +61,7 @@ Implement configurable promotion products rather than hard-coded logic:
 - future custom placement types.
 
 Required:
+
 - product catalog;
 - pricing/versioning;
 - eligibility rules;
@@ -74,6 +78,7 @@ Search/ranking integration must be explicit and testable. Paid promotion must no
 ## 4.3 Advertising
 
 Implement advertising foundation:
+
 - placements;
 - campaigns;
 - creatives metadata;
@@ -90,6 +95,7 @@ Keep ad-serving logic isolated from core listing search logic.
 ## 4.4 Agencies and developers
 
 Expand professional tooling:
+
 - organization profile;
 - team roles/permissions;
 - portfolio management;
@@ -102,6 +108,7 @@ Expand professional tooling:
 - billing/promotions integration.
 
 Developer hierarchy support:
+
 - residential complex;
 - building;
 - section;
@@ -119,6 +126,7 @@ Do not duplicate Property/Listing/ListingSource. Professional imports must map i
 ## 4.5 Feeds and partner API
 
 Implement:
+
 - feed definitions;
 - scheduled imports;
 - validation;
@@ -141,6 +149,7 @@ Imported data must remain traceable to ListingSource.
 Implement AI modules behind provider-agnostic interfaces and feature flags.
 
 Required modules:
+
 - AI Search / natural-language search interpretation;
 - AI Realtor assistant foundation;
 - AI Description generation;
@@ -152,6 +161,7 @@ Required modules:
 - AI Analytics/support interfaces.
 
 Rules:
+
 - AI must never be authoritative for critical property facts;
 - model/provider/prompt/rule version must be logged where relevant;
 - uncertainty/confidence must be represented;
@@ -163,6 +173,7 @@ Rules:
 ## 4.7 Duplicate detection
 
 Implement multi-signal duplicate candidate generation:
+
 - normalized address/property identity;
 - source/external IDs;
 - seller/organization relationships;
@@ -174,6 +185,7 @@ Implement multi-signal duplicate candidate generation:
 Do not automatically merge uncertain duplicates.
 
 Provide:
+
 - confidence score;
 - reasons/signals;
 - review workflow;
@@ -182,6 +194,7 @@ Provide:
 ## 4.8 Moderation and anti-fraud expansion
 
 Expand Phase 2 moderation:
+
 - rule engine;
 - suspicious price checks;
 - duplicate checks;
@@ -198,6 +211,7 @@ AI may assist but must not be the only enforcement layer for high-impact decisio
 ## 4.9 SEO and content
 
 Complete SEO foundation:
+
 - scalable sitemap partitioning;
 - canonical rules;
 - structured data validation;
@@ -214,6 +228,7 @@ Avoid automatically generating thin/duplicate landing pages.
 ## 4.10 Analytics and market intelligence
 
 Implement product/business analytics foundation:
+
 - listing views;
 - unique views;
 - favorites;
@@ -234,6 +249,7 @@ Do not expose private user-level analytics to unauthorized parties.
 ## 4.11 Observability
 
 Production observability baseline:
+
 - structured logs;
 - correlation/request IDs;
 - metrics;
@@ -255,6 +271,7 @@ Define initial SLOs and alert thresholds.
 ## 4.12 Performance and load testing
 
 Add reproducible performance tests for:
+
 - public search;
 - map search;
 - listing detail;
@@ -263,6 +280,7 @@ Add reproducible performance tests for:
 - feeds/import where practical.
 
 Validate:
+
 - horizontal/stateless app behavior;
 - database pool limits;
 - Redis behavior;
@@ -278,6 +296,7 @@ Target ordinary backend API p95 around <=300 ms under normal expected conditions
 ## 4.13 Security hardening
 
 Complete production security baseline:
+
 - dependency scanning;
 - secret scanning;
 - security headers/CSP review;
@@ -298,6 +317,7 @@ No secrets in repository or logs.
 ## 4.14 Feature flags and safe rollout
 
 Implement/configure:
+
 - feature flag abstraction;
 - per-feature gradual rollout readiness;
 - safe default-off for risky integrations;
@@ -308,6 +328,7 @@ Implement/configure:
 ## 4.15 Backup and disaster recovery
 
 Production readiness requirements:
+
 - automated PostgreSQL backup plan/scripts/configuration;
 - restore procedure;
 - restore verification test/runbook;
@@ -322,6 +343,7 @@ Do not claim DR is complete without a tested restore procedure.
 ## 4.16 Production configuration and release pipeline
 
 Implement:
+
 - environment separation documentation/config contracts for dev/test/staging/prod;
 - immutable build artifact strategy;
 - staging gate;
@@ -338,6 +360,7 @@ No direct production testing.
 ## 4.17 Admin expansion
 
 Expand admin for:
+
 - billing/payment status;
 - tariffs/promotion products;
 - campaigns/ads;
@@ -356,6 +379,7 @@ Critical actions must remain auditable.
 ## 4.18 Notifications and delivery
 
 Expand notification infrastructure:
+
 - in-app;
 - email adapter;
 - SMS adapter;
@@ -363,6 +387,7 @@ Expand notification infrastructure:
 - mobile push adapter foundation.
 
 Required:
+
 - retry/backoff;
 - dead-letter handling;
 - delivery status;
@@ -375,6 +400,7 @@ External providers remain configurable adapters.
 ## 4.19 Testing requirements
 
 At minimum add/extend tests for:
+
 - billing state machine;
 - payment idempotency/webhook replay;
 - promotion activation/expiration;
@@ -393,6 +419,7 @@ At minimum add/extend tests for:
 - admin authorization/audit.
 
 Run and pass:
+
 - `pnpm lint`
 - `pnpm typecheck`
 - `pnpm test`
@@ -408,6 +435,7 @@ Run and pass:
 ## 4.20 Non-goals
 
 Do not:
+
 - replace the current architecture with microservices without measured need;
 - introduce Kafka unless justified by actual throughput/operational need;
 - rebuild Phase 1–3 functionality unnecessarily;
@@ -438,6 +466,7 @@ Phase 4 is complete only when:
 ## Final Phase 4 report
 
 The report must include:
+
 - implementation summary;
 - migrations/schema changes;
 - provider adapters/configuration required;
