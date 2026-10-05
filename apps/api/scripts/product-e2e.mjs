@@ -1,3 +1,4 @@
+import { measureLoad } from './load.mjs';
 import { Pool } from 'pg';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -133,6 +134,11 @@ try {
     }
     if (!ready) throw new Error('E2E service readiness failed');
   }
+  await measureLoad(
+    'http://127.0.0.1:3101',
+    rows[0].id,
+    resolve(directory, 'phase4d-load.json'),
+  );
   const child = spawn(
     process.execPath,
     ['node_modules/@playwright/test/cli.js', 'test'],

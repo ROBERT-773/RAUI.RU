@@ -60,8 +60,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
       csv-parse:
-        specifier: 6.1.0
-        version: 6.1.0
+        specifier: 7.0.2
+        version: 7.0.2
       express:
         specifier: ^5
         version: 5.2.1
@@ -1420,8 +1420,8 @@ packages:
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
-  csv-parse@6.1.0:
-    resolution: {integrity: sha512-CEE+jwpgLn+MmtCpVcPtiCZpVtB6Z2OKPTr34pycYYoL7sxdOkXDdQ4lRiw6ioC0q6BLqhc6cKweCVvral8yhw==}
+  csv-parse@7.0.2:
+    resolution: {integrity: sha512-uKZghv9UmPkMVLYy//KZ9HFAIJsl7wkhoEdIL0+rhuSY9pZQlhaeGEDPIe+/w7eh81MOql8Q/9+inAGWG6ZHYA==}
 
   data-urls@8.0.0:
     resolution: {integrity: sha512-JQUCCK+/CAGbGGx618PlFZMXH81Jtj7t73CHv9dd/zVWvxgGT2zLFRjnKb+Ng46GIwcy+f7f88qd4duqllK+WQ==}
@@ -3626,7 +3626,7 @@ snapshots:
 
   csstype@3.2.3: {}
 
-  csv-parse@6.1.0: {}
+  csv-parse@7.0.2: {}
 
   data-urls@8.0.0:
     dependencies:

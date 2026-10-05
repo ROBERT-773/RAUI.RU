@@ -274,6 +274,59 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         );
       },
     );
+    await t.test(
+      'Operations and metrics require admin authorization and expose aggregates without payloads',
+      async () => {
+        assert.equal((await call('/admin/operations')).status, 401);
+        assert.equal(
+          (await call('/admin/operations/metrics', 'GET', undefined, owner))
+            .status,
+          403,
+        );
+        await pool.query(
+          "INSERT INTO ai_usage(capability,mode,reason,attempts,latency_ms,cost_micros,input_tokens,output_tokens,prompt_version,model_version,rule_version) SELECT 'search','fallback','disabled',0,0,0,0,0,'fixture','fixture','fixture' FROM generate_series(1,6)",
+        );
+        const response = await call(
+          '/admin/operations',
+          'GET',
+          undefined,
+          admin,
+        );
+        assert.equal(response.status, 200);
+        const snapshot = response.data as {
+          queues: unknown[];
+          flags: unknown[];
+          dependencies: string;
+        };
+        assert.ok(
+          Array.isArray(snapshot.queues) && Array.isArray(snapshot.flags),
+        );
+        assert.equal(snapshot.dependencies, 'ok');
+        assert.ok(!JSON.stringify(snapshot).includes('example.test'));
+        const metrics = await call(
+          '/admin/operations/metrics',
+          'GET',
+          undefined,
+          admin,
+        );
+        assert.equal(metrics.status, 200);
+        const text = String(metrics.data);
+        assert.ok(text.includes('raui_http_duration_seconds_bucket'));
+        assert.ok(text.includes('raui_queue_jobs'));
+        assert.ok(text.includes('raui_ai_fallbacks_hour 6'));
+        assert.ok(
+          text.includes('raui_provider_failures_hour{provider="ai"} 0'),
+        );
+
+        assert.ok(
+          !text.includes('sessionToken') && !text.includes('example.test'),
+        );
+        assert.match(
+          response.headers.get('traceparent') ?? '',
+          /^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/,
+        );
+      },
+    );
     await t.test('buyer role and global rate limits are enforced', async () => {
       buyer = await account('buyer', 'buyer');
       assert.equal(

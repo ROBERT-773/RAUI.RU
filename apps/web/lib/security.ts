@@ -4,7 +4,12 @@ export function publicOrigin(
 ): string {
   if (!value && production) throw new Error('Public site origin required');
   const raw = value ?? 'http://localhost:3000';
-  const url = new URL(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('Invalid public site origin');
+  }
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (
     url.username ||

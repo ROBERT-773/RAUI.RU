@@ -52,31 +52,31 @@
 **Files:** operations module/tests/integration, bootstrap/health/OpenAPI, observability contracts and dashboards/alerts.
 **Interfaces:** Consumes existing Database/Dependencies, admin authorization and job tables; produces bounded metrics/traces and aggregate admin health/queue/security/flag status.
 
-- [ ] Fail tests for unknown path cardinality, malicious correlation/trace headers, secret/error sanitization, unauthorized operational endpoints and DB/dependency timeouts.
-- [ ] Implement bounded HTTP timing/status histograms, W3C-compatible trace correlation, safe spans/error counters and admin snapshots. Reuse existing modules; do not expose job payloads/contact data.
-- [ ] Add portable dashboard/alert contracts for API p95/error budget, DB/Redis/OpenSearch health, queue age/dead jobs and commerce/AI failures. Verify metric names/selectors against implementation.
-- [ ] Run real PostgreSQL/HTTP acceptance and required gates; commit/push with evidence.
+- [x] Fail tests for unknown path cardinality, malicious correlation/trace headers, secret/error sanitization, unauthorized operational endpoints and DB/dependency timeouts.
+- [x] Implement bounded HTTP timing/status histograms, W3C-compatible trace correlation, safe spans/error counters and admin snapshots. Reuse existing modules; do not expose job payloads/contact data.
+- [x] Add portable dashboard/alert contracts for API p95/error budget, DB/Redis/OpenSearch health, queue age/dead jobs and commerce/AI failures. Verify metric names/selectors against implementation.
+- [x] Run real PostgreSQL/HTTP acceptance and required gates; commit/push with evidence.
 
 ### Task 3: Measured performance and security checks
 
 **Files:** local load harness, security/architecture checks, CI artifact evidence, report.
 **Interfaces:** Consumes built API/public search/detail and operational metrics; produces versioned latency/throughput/error evidence without request bodies or secrets.
 
-- [ ] Fail host/target/schema checks for nonlocal or destructive load targets and malformed benchmark inputs.
-- [ ] Run bounded concurrent scenarios against a fresh scratch PostgreSQL/PostGIS fixture and built app; measure p50/p95/p99, throughput, errors and workload. Assert the TZ ordinary-operation target for the explicit tested workload.
-- [ ] Run dependency/secret/security checks without suppressing findings; fix actual defects and retain architecture/contract/privacy boundaries.
-- [ ] Commit/push tested harness, exact results and resource/coverage limits.
+- [x] Fail host/target/schema checks for nonlocal or destructive load targets and malformed benchmark inputs.
+- [x] Run bounded concurrent scenarios against a fresh scratch PostgreSQL/PostGIS fixture and built app; measure p50/p95/p99, throughput, errors and workload. Assert the TZ ordinary-operation target for the explicit tested workload.
+- [x] Run dependency/secret/security checks without suppressing findings; fix actual defects and retain architecture/contract/privacy boundaries.
+- [x] Commit/push tested harness, exact results and resource/coverage limits.
 
 ### Task 4: Backup, restore and DR drill
 
 **Files:** backup/restore helpers/tests, local drill script, backup/DR runbooks and production storage contracts.
 **Interfaces:** Consumes explicit local DB, consistent exported snapshot and private backup path; produces encrypted checksummed backup, restored scratch DB and identity/count/digest verification.
 
-- [ ] Fail tests for original/remote DB targets, corrupt artifacts, wrong keys and unsafe object paths.
-- [ ] Implement streaming authenticated encryption and private artifacts; use pg_dump/pg_restore on a fresh generated scratch target only. Preserve original data and verify schema checksums, PostGIS and domain/audit identities against the same source snapshot.
-- [ ] Verify object-storage backup behavior on local fixture objects; document versioning/replication requirements for real S3 without fabricating credentials or remote certification.
-- [ ] Measure backup/restore time, define provisional cadence/RPO/RTO and failover/fencing runbook. Distinguish measured drill evidence from owner-approved production guarantees.
-- [ ] Run full drill and checks, then commit/push.
+- [x] Fail tests for original/remote DB targets, corrupt artifacts, wrong keys and unsafe object paths.
+- [x] Implement streaming authenticated encryption and private artifacts; use pg_dump/pg_restore on a fresh generated scratch target only. Preserve original data and verify schema checksums, PostGIS and domain/audit identities against the same source snapshot.
+- [x] Verify object-storage backup behavior on local fixture objects; document versioning/replication requirements for real S3 without fabricating credentials or remote certification.
+- [x] Measure backup/restore time, define provisional cadence/RPO/RTO and failover/fencing runbook. Distinguish measured drill evidence from owner-approved production guarantees.
+- [x] Run full drill and checks, then commit/push.
 
 ### Task 5: Release/rollback controls, final evidence and PR
 
@@ -101,3 +101,11 @@
 - API and web unit suites, root lint/typecheck/build passed. All 83 PostgreSQL/PostGIS integration tests passed; migrations 001–011 reapplied without changes.
 - Built API/web/core/search smoke, commerce/professional workers and 14 desktop/Android Chromium E2E checks passed, including fresh per-response CSP nonce and working browser hydration. Full remote browser matrix remains a CI gate.
 - No migration or deployment. Request-scoped CSP makes HTML dynamically rendered; inline styles remain allowed for React/Leaflet, while production scripts reject unsafe-inline/unsafe-eval.
+
+### Tasks 2–4 evidence
+
+- Bounded route/method/status labels, strict traceparent, admin authorization and aggregate PostgreSQL queries tested. Read-only security review found wrong AI column, red-cluster false health, planned-fallback false alarms and parser-order coverage; all corrected with regression coverage.
+- 84 integrations passed. Local 120-request catalog/search/public-detail load passed p95 <=300 ms with zero errors; fresh evidence is produced by every E2E run.
+- Consistent AES-GCM restore verified 61 public tables, 11 migrations, 9 sequences and PostGIS, plus private object fixture. Wrong key/corrupt data/unsafe target/path and failed DROP cleanup covered.
+- Dependency audit found GHSA-8cw4-87c7-c6xx in csv-parse6.1.0; upgrade7.0.2 and frozen lockfile pass audit and existing feeds/integration suites.
+- Readiness release manifest binds mandatory load/restore evidence hashes and validates schemas; CI artifact dry-run and final review remain Task5 acceptance checks.

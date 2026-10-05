@@ -15,6 +15,11 @@ describe('Phase 4D web security and SEO guardrails', () => {
     ])
       expect(() => publicOrigin(input, true)).toThrow();
   });
+  it('malformed site origins do not expose raw config values', () => {
+    expect(() => publicOrigin('https://private-secret@[', true)).toThrow(
+      'Invalid public site origin',
+    );
+  });
   it('serializes hostile listing text without closing a JSON-LD script and preserves its actual data', () => {
     const value = {
       name: '</script><script>alert("secret")</script>',

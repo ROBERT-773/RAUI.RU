@@ -1,0 +1,48 @@
+groups:
+  - name: raui-readiness
+    rules:
+      - alert: RauiApiErrorBudgetBurn
+        expr: sum(rate(raui_http_duration_seconds_count{status="5xx"}[5m])) / clamp_min(sum(rate(raui_http_duration_seconds_count[5m])), 0.001) > 0.0144
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: API burns more than 14.4 times the proposed 99.9% availability error budget
+      - alert: RauiApiLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(raui_http_duration_seconds_bucket{route!~"/v1/ai/.*|/v1/admin/operations.*|/v1/organizations/.*/feeds/.*"}[5m]))) > 0.3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Ordinary API p95 exceeds 300 ms; inspect route breakdown and dependency saturation
+      - alert: RauiDependencyUnavailable
+        expr: raui_dependency_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          { summary: PostgreSQL/Redis or OpenSearch probe unavailable }
+      - alert: RauiQueueStale
+        expr: raui_queue_oldest_seconds{state=~"pending|running"} > 300
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          {
+            summary: Queue age exceeds five minutes; check worker leases and retries,
+          }
+      - alert: RauiDeadJobs
+        expr: raui_queue_jobs{state="dead"} > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: Dead jobs require audited inspection and retry }
+      - alert: RauiProviderFailures
+        expr: raui_provider_failures_hour > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          {
+            summary: Provider failures or uncertain AI attempts require investigation,
+          }
+      - alert: RauiScrapeUnavailable
+        expr: up{job="raui-api"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          { summary: Metrics scraper authentication or service unavailable }

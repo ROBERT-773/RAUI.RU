@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "measuredAt": "2026-10-05T16:40:44.362Z",
+  "runtime": "v24.19.0",
+  "availableCpuCount": 5,
+  "availableMemoryBytes": 35743784960,
+  "fixture": "two published listings; isolated scratch PostgreSQL/PostGIS and OpenSearch index; warm local workload",
+  "results": [
+    {
+      "scenario": "catalog",
+      "requests": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "errors": 0,
+      "p50Ms": 5.35956699999997,
+      "p95Ms": 19.72173500000008,
+      "p99Ms": 22.25191700000005,
+      "requestsPerSecond": 562.6197940614649,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "search",
+      "requests": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "errors": 0,
+      "p50Ms": 18.135968000000048,
+      "p95Ms": 38.16836400000011,
+      "p99Ms": 44.188052999999854,
+      "requestsPerSecond": 195.8837642001588,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "public-detail",
+      "requests": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "errors": 0,
+      "p50Ms": 5.738131000000067,
+      "p95Ms": 7.653393999999935,
+      "p99Ms": 9.065264000000298,
+      "requestsPerSecond": 652.485875760589,
+      "targetP95Ms": 300
+    }
+  ]
+}

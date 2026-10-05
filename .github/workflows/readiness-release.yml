@@ -1,0 +1,51 @@
+name: RAUI staging and rollback dry-run
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful RAUI CI run with retained readiness artifact
+        required: true
+        type: string
+      sha:
+        description: Full immutable source commit SHA
+        required: true
+        type: string
+      mode:
+        description: Review operation; never performs deployment
+        type: choice
+        options: [staging-dry-run, rollback-dry-run]
+        default: staging-dry-run
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Verify successful CI provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          SOURCE_SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ && "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > /tmp/raui-run.json
+          jq -e --arg sha "$SOURCE_SHA" '.head_sha == $sha and .conclusion == "success" and .name == "RAUI CI"' /tmp/raui-run.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: raui-readiness-${{ inputs.sha }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: verified-artifact
+      - name: Verify staging or rollback contract
+        env:
+          SOURCE_SHA: ${{ inputs.sha }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/release-contract.mjs" verify .cache/phase4d-release.json "$SOURCE_SHA"
+        working-directory: verified-artifact

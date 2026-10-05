@@ -104,3 +104,14 @@ Run `pnpm worker:trust` (or `--once`) alongside existing workers. It schedules p
 `POST /v1/analytics/events` accepts schema version 1, a UUID `eventId`, a visible listing and `view`/`contact_reveal`. Identity replay is global within retained history, while visitor pseudonyms rotate daily using database-generated HMAC keys. Seller statistics are contextual aggregates; market cohorts require at least five live-public offers from three sellers and never expose individual visitors. Client-reported view/contact events are observational signals, not billing evidence. OpenAPI documents all routes.
 
 AI `costMicros` and admin cost metrics sum valid provider-reported usage only; they are not reconciled invoices. `unknownCostAttempts` and `uncertainMicros` expose unknown usage separately. The shared daily budget protects reported + uncertain + currently reserved amounts. Timeout/transport/invalid-output failures settle zero known spend and bounded uncertain exposure; reservations are released atomically. Migration 011 preserves pre-fix usage values as `legacy_unverified`, excluded from reported-cost totals. Cooldown is process-local; PostgreSQL budget and feature flags are authoritative across instances. Keep `AI_ENABLED=false` before downgrading to code without uncertain-exposure enforcement.
+
+## Phase 4D readiness
+
+Use `pnpm security:check` for credential/TLS/client-boundary and production
+dependency checks, and `pnpm recovery:drill` after local infrastructure/build/
+migrations for an encrypted scratch restore. `pnpm test:e2e` also measures bounded
+local catalog/search/public-detail load. Operations/metrics require verified admin
+authorization; they are not public endpoints. See [Phase 4D report](docs/PHASE4D_REPORT.md),
+[observability](docs/OBSERVABILITY.md), [backup/DR](docs/BACKUP_DR.md) and
+[release/rollback](docs/RELEASE_ROLLBACK.md). Production activation requires its
+separate approval; this repository workflow performs dry-runs only.

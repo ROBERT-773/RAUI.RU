@@ -1,0 +1,157 @@
+{
+  "title": "RAUI operations",
+  "uid": "raui-operations-v1",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "API p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(raui_http_duration_seconds_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route, status) (rate(raui_http_duration_seconds_count[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Dependency health",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "raui_dependency_up"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Queue age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "raui_queue_oldest_seconds"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Queue state",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "raui_queue_jobs"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Provider failures / hour",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "raui_provider_failures_hour"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Security denials",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(raui_http_duration_seconds_count{status=\"4xx\",route=~\"/v1/auth/.*|/v1/admin/.*\"}[5m]))"
+        }
+      ]
+    }
+  ]
+}
