@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { Agent } from 'node:https';
+import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { Audit, AuditModule } from '../audit/audit';
 import { Database } from '../database/database';
@@ -52,7 +52,8 @@ export function validateNotificationGatewayUrl(value: string) {
     url.password ||
     url.hash ||
     (url.port && url.port !== '443') ||
-    isIP(url.hostname)
+    isIP(url.hostname) ||
+    url.hostname.startsWith('[')
   )
     throw new Error('notification_gateway_rejected');
   return url;
@@ -80,25 +81,35 @@ export class GatewayNotificationAdapter extends NotificationAdapter {
     if (!cfg.NOTIFICATION_GATEWAY_URL) throw new Error('unconfigured');
     const url = validateNotificationGatewayUrl(cfg.NOTIFICATION_GATEWAY_URL);
     const selected = await resolveNotificationGatewayHost(url.hostname);
-    const agent = new Agent({
-      lookup: (_host, _options, done) => done(null, selected.address, 4),
+    // Use the validated address for the socket while retaining the original TLS identity.
+    // A node:https Agent is not an Undici dispatcher and cannot pin native fetch DNS.
+    await new Promise<void>((resolve, reject) => {
+      const req = request(
+        url,
+        {
+          method: 'POST',
+          agent: false,
+          family: 4,
+          servername: url.hostname,
+          rejectUnauthorized: true,
+          lookup: (_host, _options, done) => done(null, selected.address, 4),
+          signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cfg.NOTIFICATION_GATEWAY_TOKEN!}`,
+            'Idempotency-Key': input.idempotencyKey,
+          },
+        },
+        (response) => {
+          // No redirects or response body are consumed; only explicit acknowledgements count.
+          response.destroy();
+          if ([200, 201, 204].includes(response.statusCode ?? 0)) resolve();
+          else reject(new Error('delivery_failed'));
+        },
+      );
+      req.on('error', () => reject(new Error('delivery_failed')));
+      req.end(JSON.stringify(input));
     });
-    const response = await fetch(url, {
-      method: 'POST',
-      redirect: 'error',
-      signal,
-      dispatcher: agent as never,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.NOTIFICATION_GATEWAY_TOKEN!}`,
-        'Idempotency-Key': input.idempotencyKey,
-      },
-      body: JSON.stringify(input),
-    });
-    await response.body?.cancel();
-    agent.destroy();
-    if (![200, 201, 204].includes(response.status))
-      throw new Error('delivery_failed');
   }
 }
 interface Job {

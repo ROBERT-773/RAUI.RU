@@ -51,7 +51,7 @@ Required gates are retained, including mandatory Prettier and the full existing 
 
 - `pnpm lint` — ESLint + Prettier.
 - `pnpm typecheck` — all strict TypeScript workspaces.
-- `pnpm test` — 30 API, 3 web, 1 UI, 1 Python tests.
+- `pnpm test` — 32 API, 3 web, 1 UI, 1 Python tests.
 - `pnpm test:integration` — 62 node-reported tests across core (15), search (11), commerce (15), professional (21), including parent tests. Each suite uses a fresh local database removed on completion.
 - `pnpm build` — API and optimized Next.js artifacts.
 - `pnpm db:migrate` — local database only.
@@ -66,3 +66,13 @@ Professional acceptance specifically covers duplicate/invalid dry-run, category/
 Pause feeds with their versioned active control; revoke partner clients; stop the professional worker or unset the notification gateway. Keep additive schema and trace/audit data. Use a forward migration for later schema fixes; never edit applied SQL or delete durable logs to roll back code.
 
 Merge readiness requires green GitHub Actions on the pushed head and resolution of review findings. Production rollout/credentials are not part of this task. After confirmed PR #28 merge, fetch fresh master and continue `docs/PHASE4C_AI_TRUST_SPEC.md` as instructed; do not begin Phase 4C on an unmerged Phase 4B base.
+
+## Notification gateway regression follow-up (PR #28)
+
+The existing unsafe-destination regression was reproduced on `f0c79d2` without changing its assertions. WHATWG `URL.hostname` retains brackets around IPv6 literals, so `isIP('[::1]')` returns zero and the URL validator incorrectly accepted loopback IPv6. Production validation now rejects bracketed IPv6 hosts as well as IPv4 literals; the regression retains every original unsafe URL and DNS-answer case and adds diagnostic exception matching.
+
+A transport regression also reproduced `agent.dispatch is not a function`: Node's native `fetch` expects an Undici dispatcher, not `node:https.Agent`. The gateway now uses `node:https.request` with a validated, pinned IPv4 lookup, explicit `family: 4`, the original TLS server name, certificate verification, no pooled connection reuse, and the worker's abort signal. Explicit IPv4 avoids Node 24 requesting an incompatible all-address lookup result. Redirects and every response other than 200/201/204 fail; response bodies are discarded and transport errors remain generic. Stable provider idempotency keys and worker retry/preferences/fencing behavior are unchanged.
+
+The new transport test verifies the pinned socket address, TLS identity/verification, IPv4 family, abort signal, request payload and idempotency header. It proves that a subsequent DNS answer rebinding to loopback is rejected before another request is opened, and that redirects fail. Network/DNS boundaries are mocked so the unit test never contacts a provider or uses real credentials. Existing PostgreSQL/HTTP notification acceptance tests remain enabled.
+
+No migrations, dependencies, production configuration or deployment are part of this correction. Rollback by reverting the code commit would restore the diagnosed security/transport defects; prefer a forward fix. CodeGuard review is a separate outstanding gate: no CodeGuard tool/skill/CLI is exposed in this environment, and the GitHub reviews API returns `Forbidden`. Local checks or an inline inspection must not be presented as a completed CodeGuard review. No merge is authorized for this follow-up.

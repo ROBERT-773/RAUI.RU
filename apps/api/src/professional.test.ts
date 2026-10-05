@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import https from 'node:https';
+import dns from 'node:dns/promises';
+import { EventEmitter } from 'node:events';
+import * as config from './config';
 import { BadRequestException } from '@nestjs/common';
 import { ProfessionalImports } from './modules/professional/imports';
 import {
@@ -9,6 +13,7 @@ import {
 } from './modules/professional/feed-fetch';
 import { parseFeed } from './modules/professional/feed-parser';
 import {
+  GatewayNotificationAdapter,
   validateNotificationGatewayUrl,
   resolveNotificationGatewayHost,
 } from './modules/professional/notifications';
@@ -177,7 +182,11 @@ test('Notification gateway rejects unsafe destinations and DNS rebinding answers
     'https://127.0.0.1/v1/send',
     'https://[::1]/v1/send',
   ])
-    assert.throws(() => validateNotificationGatewayUrl(url));
+    assert.throws(
+      () => validateNotificationGatewayUrl(url),
+      /notification_gateway_rejected/,
+      url,
+    );
 
   for (const address of [
     '127.0.0.1',
@@ -206,4 +215,78 @@ test('Notification gateway rejects unsafe destinations and DNS rebinding answers
     async () => [{ address: '8.8.8.8', family: 4 }],
   );
   assert.equal(selected.address, '8.8.8.8');
+});
+
+test('Notification transport pins validated DNS, preserves TLS hostname and rejects redirects', async (t) => {
+  t.mock.method(config, 'loadConfig', () =>
+    config.envSchema.parse({
+      WEB_ORIGIN: 'http://localhost:3000',
+      DATABASE_URL: 'postgresql://localhost/test',
+      REDIS_URL: 'redis://localhost',
+      NOTIFICATION_GATEWAY_URL: 'https://notify.example/v1/send',
+      NOTIFICATION_GATEWAY_TOKEN: 'test-only-gateway-token',
+    }),
+  );
+  let resolutions = 0;
+  t.mock.method(dns, 'lookup', async () => {
+    resolutions++;
+    return [
+      { address: resolutions === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 },
+    ];
+  });
+  let statusCode = 204;
+  let requests = 0;
+  t.mock.method(https, 'request', ((
+    url: URL,
+    options: https.RequestOptions,
+    callback: (response: { statusCode: number; destroy(): void }) => void,
+  ) => {
+    requests++;
+    assert.equal(url.hostname, 'notify.example');
+    assert.equal(options.servername, 'notify.example');
+    assert.equal(options.rejectUnauthorized, true);
+    assert.equal(options.agent, false);
+    assert.equal(options.family, 4);
+    assert.equal(options.signal, signal);
+    assert.equal(
+      (options.headers as Record<string, string>)['Idempotency-Key'],
+      input.idempotencyKey,
+    );
+    assert.equal(typeof options.lookup, 'function');
+    // A second DNS query would rebind to loopback; the transport must use the validated snapshot.
+    options.lookup!('notify.example', {}, (_error, address, family) => {
+      assert.equal(address, '8.8.8.8');
+      assert.equal(family, 4);
+    });
+    const request = new EventEmitter();
+    return Object.assign(request, {
+      end: (body: string) => {
+        assert.deepEqual(JSON.parse(body), input);
+        callback({ statusCode, destroy() {} });
+      },
+    });
+  }) as never);
+  const signal = new AbortController().signal;
+  const input = {
+    channel: 'email' as const,
+    userId: 'test-user',
+    kind: 'message',
+    payload: {},
+    idempotencyKey: 'notification:test',
+    destination: 'test@example.com',
+  };
+  const adapter = new GatewayNotificationAdapter();
+  await adapter.send(input, signal);
+  assert.equal(resolutions, 1);
+  assert.equal(requests, 1);
+  // A new delivery must revalidate DNS and reject the changed answer before opening a socket.
+  await assert.rejects(
+    adapter.send(input, signal),
+    /notification_gateway_address_rejected/,
+  );
+  assert.equal(requests, 1);
+  resolutions = 0;
+  statusCode = 302;
+  await assert.rejects(adapter.send(input, signal), /delivery_failed/);
+  assert.equal(requests, 2);
 });
