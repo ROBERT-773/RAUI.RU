@@ -10,16 +10,14 @@ Do not let multiple agents independently push fixes to the same branch or edit t
 
 ## Current Phase 4B allocation
 
-| Role | Current responsibility | Write scope |
-| --- | --- | --- |
-| A0 — Router / Coordinator | Track stage, dependencies, PR/CI state, handoffs, and owner blockers | Coordination docs only, on a dedicated admin/docs branch |
-| A1 — Phase 4B Owner | Own PR #28 through CI/review readiness | Sole implementation writer to `feat/phase-4b-professional-integrations` |
-| A2 — CI / QA | Inspect Actions, tests, regressions, acceptance evidence | Read-only; findings to A1 |
-| A3 — Phase 4C Scout | Read Phase 4C spec and prepare dependency/file map | Read-only until Phase 4B is accepted and merged |
-| A4 — Docs / Contract Review | Check OpenAPI, reports, runbooks, and behavior alignment | Read-only against active implementation; independent docs PR if needed |
-| A5 — Security / Trust Review | Review partner tokens, SSRF controls, tenant isolation, secrets, notification gateway | Read-only; findings to A1 |
-| A6 — DB / Migration Review | Review migrations, replay/idempotency, forward-only compatibility, rollback notes | Read-only; findings to A1 |
-| A7 — Release / Ops | Prepare RC/operations checklist and rollback/observability requirements | Read-only; no production actions |
+- **A0 — Router / Coordinator:** track stage, dependencies, PR/CI state, handoffs, and owner blockers. Write only coordination docs on a dedicated admin/docs branch.
+- **A1 — Phase 4B Owner:** own PR #28 through CI/review readiness. This is the sole implementation writer to `feat/phase-4b-professional-integrations`.
+- **A2 — CI / QA:** inspect Actions, tests, regressions, and acceptance evidence. Stay read-only and send findings to A1.
+- **A3 — Phase 4C Scout:** read the Phase 4C spec and prepare a dependency/file map. Stay read-only until Phase 4B is accepted and merged.
+- **A4 — Docs / Contract Review:** check OpenAPI, reports, runbooks, and behavior alignment. Stay read-only against active implementation; use an independent docs PR if needed.
+- **A5 — Security / Trust Review:** review partner tokens, SSRF controls, tenant isolation, secrets, and the notification gateway. Stay read-only and send findings to A1.
+- **A6 — DB / Migration Review:** review migrations, replay/idempotency, forward-only compatibility, and rollback notes. Stay read-only and send findings to A1.
+- **A7 — Release / Ops:** prepare the RC/operations checklist and rollback/observability requirements. Stay read-only and perform no production actions.
 
 ## Handoff protocol
 
