@@ -4,6 +4,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   assertPaymentTransition,
   assertPromotionActivationTransition,
+  attachPaidPlacementSignals,
   normalizeIdempotencyKey,
   normalizePaymentEventKey,
   promotionWindow,
@@ -89,4 +90,23 @@ test('promotion activation lifecycle blocks invalid terminal transitions', () =>
     () => assertPromotionActivationTransition('cancelled', 'active'),
     ConflictException,
   );
+});
+
+test('paid placement metadata never reorders organic search results', () => {
+  const organic = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const result = attachPaidPlacementSignals(organic, [
+    {
+      listingId: 'c',
+      code: 'vip_24h',
+      kind: 'vip',
+      priority: 999,
+      endsAt: '2026-10-06T10:00:00.000Z',
+    },
+  ]);
+  assert.deepEqual(
+    result.map((item) => item.id),
+    ['a', 'b', 'c'],
+  );
+  assert.equal(result[2]!.paidPlacement?.priority, 999);
+  assert.equal(result[0]!.paidPlacement, null);
 });
