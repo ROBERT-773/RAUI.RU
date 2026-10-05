@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { searchSchema } from '../search/contracts';
 import { providerReply, PROMPT_VERSION, RULE_VERSION } from './contracts';
 export function redactQuery(value: string) {
@@ -11,9 +12,21 @@ export function interpretSearch(value: string) {
   const safe = redactQuery(value),
     lower = safe.toLocaleLowerCase('ru');
   const rooms = lower.match(/(?:^|\s)([1-9])\s*(?:комнат|к[ -]|к$)/u)?.[1];
-  const max = lower.match(/до\s*(\d+(?:[.,]\d+)?)\s*(млн|миллион|тыс|тысяч)/u);
+  const foreignCurrency = /(?:€|\$|\busd\b|\beur\b|доллар|евро)/iu.test(lower);
+  const max = foreignCurrency
+    ? null
+    : lower.match(/до\s*(\d+(?:[.,]\d+)?)\s*(млн|миллион|тыс|тысяч)/u);
   return searchSchema.parse({
-    q: safe.slice(0, 200),
+    q: safe
+      .replace(
+        /(?:купить|покупка|снять|аренда|квартир[а-я]*|москв[а-я]*|(?:^|\s)[1-9]\s*комнат[а-я]*|до\s*\d+(?:[.,]\d+)?\s*(?:млн|миллион[а-я]*|тыс\.?|тысяч[а-я]*)|\[(?:email|phone|link)\])/giu,
+        ' ',
+      )
+      .replace(/(?:^|\s)в(?=\s|$)/giu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200),
+    ...(lower.includes('квартир') ? { category: 'apartment' } : {}),
     ...(lower.includes('куп')
       ? { dealType: 'sale' }
       : lower.includes('снят') || lower.includes('аренд')
@@ -47,6 +60,7 @@ interface Options {
   provider: ProviderPort;
 }
 export async function runAi(options: Options) {
+  const requestId = randomUUID();
   const started = Date.now(),
     cap = options.maxCostMicros ?? 100000;
   let attempts = 0,
@@ -91,6 +105,8 @@ export async function runAi(options: Options) {
         options.provider.generate(
           {
             capability: options.capability,
+            requestId,
+            limits: { maxCostMicros: cap, maxOutputTokens: 1000 },
             promptVersion: PROMPT_VERSION,
             context: options.context,
           },
@@ -106,6 +122,7 @@ export async function runAi(options: Options) {
       const reply = providerReply.parse(raw);
       if (
         reply.usage.costMicros > cap ||
+        reply.usage.outputTokens > 1000 ||
         (reply.filters && options.capability !== 'search')
       )
         throw new Error('invalid_output');

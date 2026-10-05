@@ -23,7 +23,7 @@ import {
   verified,
 } from '../../common/security';
 import { loadConfig } from '../../config';
-import { publicIPv4 } from './feed-fetch';
+import { publicIPv4 } from '../../common/outbound-policy';
 export interface DeliveryEnvelope {
   channel: 'email' | 'push' | 'sms';
   userId: string;

@@ -21,6 +21,30 @@ export const envSchema = z
       .default('raui-listings'),
     OPENSEARCH_TOKEN: z.string().optional(),
     FEED_ALLOWED_HOSTS: z.string().default(''),
+    AI_ENABLED: z.enum(['true', 'false']).default('false'),
+    AI_GATEWAY_URL: z
+      .url()
+      .refine(
+        (v) =>
+          new URL(v).protocol === 'https:' &&
+          !new URL(v).username &&
+          !new URL(v).password,
+      )
+      .optional(),
+    AI_GATEWAY_TOKEN: z.string().min(16).optional(),
+    AI_ALLOWED_HOSTS: z.string().default(''),
+    AI_CALL_CAP_MICROS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1000000)
+      .default(100000),
+    AI_DAILY_BUDGET_MICROS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1000000000)
+      .default(1000000),
     NOTIFICATION_GATEWAY_URL: z
       .url()
       .refine(
@@ -74,6 +98,12 @@ export const envSchema = z
         code: 'custom',
         path: ['S3_BUCKET'],
         message: 'S3 bucket required',
+      });
+    if (value.AI_GATEWAY_URL && !value.AI_GATEWAY_TOKEN)
+      context.addIssue({
+        code: 'custom',
+        path: ['AI_GATEWAY_TOKEN'],
+        message: 'AI gateway token required',
       });
     if (value.NOTIFICATION_GATEWAY_URL && !value.NOTIFICATION_GATEWAY_TOKEN)
       context.addIssue({

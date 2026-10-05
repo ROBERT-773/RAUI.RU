@@ -1,3 +1,4 @@
+import { hash } from './common/security';
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -173,7 +174,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '8',
+          '10',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -474,6 +475,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           await pool.query('SELECT * FROM media WHERE id=$1', [mediaId])
         ).rows[0];
         assert.equal(row.state, 'ready');
+        assert.equal(row.content_sha256, hash(image));
         assert.deepEqual(Object.keys(row.variants).sort(), [
           'avif',
           'large',

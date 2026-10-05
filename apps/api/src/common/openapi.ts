@@ -1,3 +1,6 @@
+import { aiRequest, flagRequest } from '../modules/ai/contracts';
+import { trustDecision, duplicateDecision } from '../modules/trust/trust';
+import { analyticsEvent } from '../modules/analytics/analytics';
 import {
   feedInput,
   feedConfig,
@@ -28,6 +31,12 @@ const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/ai/assist': aiRequest,
+  'patch /v1/admin/ai/features/{code}': flagRequest,
+  'post /v1/trust/listings/{id}/scan': object({}),
+  'post /v1/admin/trust/listings/{id}/decision': trustDecision,
+  'post /v1/admin/trust/candidates/{id}/decision': duplicateDecision,
+  'post /v1/analytics/events': analyticsEvent,
   'post /v1/organizations/{organizationId}/feeds': feedInput,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run': importInput,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/apply': importInput,
@@ -263,6 +272,8 @@ export function enrichOpenApi(document: OpenAPIObject) {
             path === '/v1/commerce/promotions/{code}/{version}')) &&
         !path.startsWith('/v1/auth/') &&
         path !== '/v1/commerce/webhook' &&
+        path !== '/v1/ai/assist' &&
+        path !== '/v1/analytics/events' &&
         !path.endsWith('/start') &&
         !path.endsWith('/cancel') &&
         !path.endsWith('/revoke') &&

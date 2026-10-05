@@ -1,3 +1,4 @@
+import { hash } from '../../common/security';
 import { Injectable, Module } from '@nestjs/common';
 import sharp from 'sharp';
 import { Database } from '../database/database';
@@ -87,8 +88,8 @@ export class MediaWorker {
         );
         if (!result.rowCount) return;
         await sql.query(
-          "UPDATE media SET state='ready',variants=$2 WHERE id=$1",
-          [job.media_id, JSON.stringify(variants)],
+          "UPDATE media SET state='ready',variants=$2,content_sha256=$3 WHERE id=$1",
+          [job.media_id, JSON.stringify(variants), hash(bytes)],
         );
         await this.audit.record(
           sql,

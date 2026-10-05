@@ -125,3 +125,39 @@ test('Deterministic fraud rules require human review without any AI dependency',
     [],
   );
 });
+
+test('AI retry attempts use one stable provider idempotency identity and explicit generation limits', async () => {
+  const inputs: unknown[] = [];
+  await runAi({
+    capability: 'description',
+    context: { area: 50 },
+    fallback: { area: 50 },
+    enabled: async () => true,
+    provider: {
+      async generate(input) {
+        inputs.push(input);
+        throw new Error('private provider error');
+      },
+    },
+  });
+  const first = inputs[0] as {
+    requestId: string;
+    limits: { maxCostMicros: number; maxOutputTokens: number };
+  };
+  const second = inputs[1] as { requestId: string };
+  assert.match(first.requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(first.requestId, second.requestId);
+  assert.equal(first.limits.maxCostMicros, 100000);
+  assert.equal(first.limits.maxOutputTokens, 1000);
+});
+
+test('Search fallback removes understood instructions from keyword query and never guesses foreign currency conversion', () => {
+  const understood = interpretSearch(
+    'Купить 2 комнатную квартиру в Москве до 15 млн',
+  );
+  assert.equal(understood.q, '');
+  assert.equal(understood.category, 'apartment');
+  assert.equal(understood.price?.max, 15000000);
+  const foreign = interpretSearch('Купить квартиру до 15 млн евро');
+  assert.equal(foreign.price, undefined);
+});

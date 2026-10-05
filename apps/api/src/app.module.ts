@@ -1,3 +1,6 @@
+import { AiModule } from './modules/ai/ai';
+import { TrustWorkerModule } from './modules/trust/worker';
+import { AnalyticsModule } from './modules/analytics/analytics';
 import { NotificationWorkerModule } from './modules/professional/notifications';
 import { SearchModule } from './modules/search/search';
 import { GeoLayersModule } from './modules/geo/layers';
@@ -43,6 +46,9 @@ import { RateGuard, SessionGuard } from './common/security';
     ProfessionalPlatformModule,
     ProfessionalImportsModule,
     NotificationWorkerModule,
+    AiModule,
+    TrustWorkerModule,
+    AnalyticsModule,
   ],
   controllers: [HealthController],
   providers: [
