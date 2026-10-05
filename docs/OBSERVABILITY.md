@@ -29,7 +29,9 @@ per hour for five minutes. Tune from measured staging traffic, retain alert hist
 Portable `infra/observability` contracts include Prometheus rules, scrape config
 and Grafana dashboard. The `.invalid` target deliberately prevents accidental
 activation. Bind private HTTPS ingress and securely rotate the observer session
-before deployment; tokens expire according to existing SESSION_DAYS and require
+before deployment. The existing observer session has admin privileges, not a
+dedicated read-only scope: protect the collector and restrict its API egress to
+the metrics GET route; do not treat this token as low-privilege. Tokens expire according to existing SESSION_DAYS and require
 operator renewal. Do not grant a public metrics bypass. Scrape once per 30s per
 instance; existing rate limits remain active. Counters reset on process restart;
 Prometheus rates handle resets. Queue/provider snapshots are global aggregates,

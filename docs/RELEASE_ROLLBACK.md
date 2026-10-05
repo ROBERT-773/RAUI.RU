@@ -71,3 +71,8 @@ old/new readers must overlap. If data or protocol compatibility prevents an
 application rollback, deploy an explicitly reviewed forward-fix. Restore data
 only under a separately approved recovery incident using BACKUP_DR.md. No merge,
 production deployment, rollback or next phase is automatic.
+
+A Phase 4C schema-compatible rollback does not certify the older dependency
+security baseline. Retain csv-parse >=7.0.2 and all necessary security fixes in a
+new verified artifact, or choose a forward-fix; never promote a known-vulnerable
+image merely because its DB reader is compatible.

@@ -43,7 +43,8 @@ No new migration. Immutable 001–011 checksums remain unchanged; rollback to th
 accepted Phase 4C application preserves schema/data. API/web/origin/CSP config
 must roll back as a unit. Do not run down migrations or erase billing/audit data.
 Use a separately reviewed additive forward-fix for incompatible data/protocol
-changes. Regenerate search indexes from PostgreSQL after DR instead of treating
+changes. Retain the csv-parse7.0.2 security baseline in any rebuilt rollback
+artifact; schema-compatible older code does not certify safe dependencies. Regenerate search indexes from PostgreSQL after DR instead of treating
 OpenSearch as the source of truth.
 
 ## Risks and launch gates
@@ -54,7 +55,9 @@ OpenSearch as the source of truth.
   cross-region recovery or a production standby. Proposed RPO <=15 min/RTO <=60 min
   need monitored WAL/object replication, protected key custody and owner acceptance.
 - Portable dashboards/alerts/trace ingestion require private staging endpoints,
-  collector setup and observer-session rotation. OpenSearch yellow is usable but
+  collector setup and observer-session rotation. The current scrape session uses
+  existing admin privileges; restrict collector egress to metrics GET and protect
+  its credential as a privileged secret. OpenSearch yellow is usable but
   degraded replica redundancy; red/malformed/oversized health responses fail.
 - Nonce CSP requires dynamic HTML and coordinated upstream caching; React/Leaflet
   inline styles remain allowed. Production scripts remain nonce-only/strict-dynamic.

@@ -1,4 +1,4 @@
-# Reference contract; bind an actual private HTTPS target and read-only operator
+# Reference contract; bind an actual private HTTPS target and verified admin
 # session token file using the approved secret mechanism before staging activation.
 global:
   scrape_interval: 30s
