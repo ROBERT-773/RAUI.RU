@@ -141,6 +141,31 @@ export abstract class PaymentProvider {
     signature: string,
     payload: Buffer,
   ): Promise<boolean>;
+  abstract parseWebhook(payload: Buffer): Promise<{
+    orderId: string;
+    eventKey: string;
+    state: PaymentState;
+  }>;
+}
+
+@Injectable()
+export class UnconfiguredPaymentProvider extends PaymentProvider {
+  async createPayment(): Promise<ProviderPayment> {
+    throw new BadRequestException('Payment provider is not configured');
+  }
+  async refundPayment(): Promise<ProviderPayment> {
+    throw new BadRequestException('Payment provider is not configured');
+  }
+  async verifyWebhook(): Promise<boolean> {
+    return false;
+  }
+  async parseWebhook(): Promise<{
+    orderId: string;
+    eventKey: string;
+    state: PaymentState;
+  }> {
+    throw new BadRequestException('Payment provider is not configured');
+  }
 }
 
 const orderInput = z
@@ -198,6 +223,7 @@ export class CommerceService {
   constructor(
     private readonly db: Database,
     private readonly policy: CommercePolicy,
+    private readonly paymentProvider: PaymentProvider,
   ) {}
 
   async createOrder(actor: Actor, key: unknown, body: unknown) {
@@ -387,6 +413,21 @@ export class CommerceService {
     });
   }
 
+  async webhook(signature: unknown, payload: Buffer) {
+    if (typeof signature !== 'string' || !signature.trim())
+      throw new BadRequestException('Webhook signature is required');
+    if (!(await this.paymentProvider.verifyWebhook(signature, payload)))
+      throw new BadRequestException('Invalid webhook signature');
+    const event = await this.paymentProvider.parseWebhook(payload);
+    return this.applyPaymentEvent(
+      event.orderId,
+      event.eventKey,
+      event.state,
+      'webhook',
+      { providerEvent: event.eventKey },
+    );
+  }
+
   async createPromotion(body: unknown) {
     const product = this.policy.promotion(parse(promotionInput, body));
     const [row] = await this.db.rows(
@@ -412,6 +453,17 @@ export class CommerceService {
 @Controller('v1/commerce')
 export class CommerceController {
   constructor(private readonly commerce: CommerceService) {}
+
+  @Post('webhook')
+  webhook(
+    @Headers('x-payment-signature') signature: string | undefined,
+    @Body() body: unknown,
+  ) {
+    return this.commerce.webhook(
+      signature,
+      Buffer.from(JSON.stringify(body ?? {})),
+    );
+  }
 
   @Post('orders')
   createOrder(
@@ -449,7 +501,14 @@ export class CommerceController {
 
 @Module({
   controllers: [CommerceController],
-  providers: [CommercePolicy, CommerceService],
+  providers: [
+    CommercePolicy,
+    CommerceService,
+    {
+      provide: PaymentProvider,
+      useClass: UnconfiguredPaymentProvider,
+    },
+  ],
   exports: [CommercePolicy, CommerceService],
 })
 export class CommerceModule {}
