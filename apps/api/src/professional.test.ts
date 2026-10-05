@@ -9,6 +9,10 @@ import {
 } from './modules/professional/feed-fetch';
 import { parseFeed } from './modules/professional/feed-parser';
 import {
+  validateNotificationGatewayUrl,
+  resolveNotificationGatewayHost,
+} from './modules/professional/notifications';
+import {
   importItem,
   cadence,
   nextDue,
@@ -159,4 +163,47 @@ test('Feed DNS deadline and mixed private/public DNS answers fail closed', async
     { address: '8.8.8.8', family: 4 },
   ]);
   assert.equal(addresses[0]!.address, '8.8.8.8');
+});
+
+test('Notification gateway rejects unsafe destinations and DNS rebinding answers', async () => {
+  assert.equal(
+    validateNotificationGatewayUrl('https://notify.example/v1/send').hostname,
+    'notify.example',
+  );
+  for (const url of [
+    'http://notify.example/v1/send',
+    'https://user:secret@notify.example/v1/send',
+    'https://notify.example:8443/v1/send',
+    'https://127.0.0.1/v1/send',
+    'https://[::1]/v1/send',
+  ])
+    assert.throws(() => validateNotificationGatewayUrl(url));
+
+  for (const address of [
+    '127.0.0.1',
+    '10.0.0.1',
+    '169.254.169.254',
+    '192.168.1.1',
+    '203.0.113.1',
+    '::1',
+  ])
+    await assert.rejects(
+      resolveNotificationGatewayHost('notify.example', async () => [
+        { address, family: address.includes(':') ? 6 : 4 },
+      ]),
+      /notification_gateway_address_rejected/,
+    );
+
+  await assert.rejects(
+    resolveNotificationGatewayHost('notify.example', async () => [
+      { address: '8.8.8.8', family: 4 },
+      { address: '127.0.0.1', family: 4 },
+    ]),
+    /notification_gateway_address_rejected/,
+  );
+  const selected = await resolveNotificationGatewayHost(
+    'notify.example',
+    async () => [{ address: '8.8.8.8', family: 4 }],
+  );
+  assert.equal(selected.address, '8.8.8.8');
 });
