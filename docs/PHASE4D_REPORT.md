@@ -29,7 +29,7 @@ merge, production deployment or Issue #13/RC execution.
 - Built API/web, core and real search/PostGIS/SSR smoke passed; media worker used by smoke, commerce/professional/trust workers ran. No production service contacted.
 - 14 desktop/Android Chromium E2E passed, including nonce freshness, safe script policy and working hydration/accessibility/map/account flows.
 - Dependency audit reports no known production vulnerabilities at the tested snapshot; static secret/TLS/client-boundary scan and diff integrity passed.
-- Local full-browser download remains blocked by cloud network download policy; GitHub CI runs the unchanged Chromium/Firefox/WebKit/iOS/Android matrix. First guardrail increment `e05fa14` already passed that matrix; final exact-head CI remains the acceptance gate until recorded below.
+- Local full-browser download remains blocked by cloud network download policy; GitHub CI runs the unchanged Chromium/Firefox/WebKit/iOS/Android matrix. The implementation head `561d53d` passed that complete matrix and the new readiness gates in CI; see acceptance evidence below.
 - Release tests reject mutable SHA, wrong identity, unsafe/missing artifact paths, missing gates/evidence and tampered report hashes. CI creates/verifies actual retained artifacts only after all preceding gates succeed.
 
 Measured artifacts are versioned under `docs/evidence/phase4d/`. The final CI run
@@ -67,6 +67,18 @@ OpenSearch as the source of truth.
 
 ## Acceptance status
 
-Local mandatory gates pass. Final exact-head CI and review follow-up are pending
-at this documentation increment; keep PR #35 draft until those checks complete.
-No merge, deploy or next gated phase is automatic.
+Implementation head `561d53d6999b7e006cbfcd10be28213cd02d51f3` passed
+[RAUI CI run 37343613059](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37343613059):
+frozen install, lint/types/unit/security/build, 84 integration tests, all five browser
+projects (35 E2E), load, repeated migrations, authenticated restore, built smoke/
+workers, release/rollback manifest verification and retained readiness artifact.
+
+Three read-only review rounds completed; all reported concrete findings were
+fixed and the final review found no remaining blocker in the reviewed surface.
+Local Compose services were stopped without removing persistent volumes. The
+cloud setup install/start instructions were updated as a saved configuration
+draft; publication is a separate environment action, not performed here.
+
+The final documentation head remains subject to the same mandatory PR CI. Mark
+PR #35 ready only after its exact-head checks are green. Owner acceptance is still
+separate; no merge, deploy or next gated phase is automatic.

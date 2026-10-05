@@ -83,11 +83,11 @@
 **Files:** CI/manual release contracts/scripts, configuration manifests, README/runbooks, Phase 4D and final Phase 4 reports.
 **Interfaces:** Consumes tested build/contract/load/backup evidence and existing audited flags; produces reproducible release manifest, staging/rollback dry-run and owner approval gates.
 
-- [ ] Fail checks for unknown artifacts, mutable release identity, incompatible migration expectations or enabled risky defaults.
-- [ ] Implement artifact/hash/version checks and dry-run release/rollback flow; production path requires explicit environment approval and credentials and is never run by this task.
-- [ ] Recheck every Phase 4D requirement, forward migration compatibility, security review findings and operating runbooks. No automatic PR merge or Issue #13 execution.
-- [ ] Run frozen install, lint/typecheck/unit/integration/build, migration repeats, built API/web/core/search smoke, every worker once, full E2E, load/security/restore/release checks. Preserve exact outcome artifacts.
-- [ ] Fetch remote, push same branch, prepare PR, follow exact-head CI and fix ordinary failures/review findings. Stop at acceptance gate with complete report.
+- [x] Fail checks for unknown artifacts, mutable release identity, incompatible migration expectations or enabled risky defaults.
+- [x] Implement artifact/hash/version checks and dry-run release/rollback flow; production path requires explicit environment approval and credentials and is never run by this task.
+- [x] Recheck every Phase 4D requirement, forward migration compatibility, security review findings and operating runbooks. No automatic PR merge or Issue #13 execution.
+- [x] Run frozen install, lint/typecheck/unit/integration/build, migration repeats, built API/web/core/search smoke, every worker once, full E2E, load/security/restore/release checks. Preserve exact outcome artifacts.
+- [x] Fetch remote, push same branch, prepare PR, follow exact-head CI and fix ordinary failures/review findings. Stop at acceptance gate with complete report.
 
 ## Execution rulings and ledger
 
@@ -109,3 +109,10 @@
 - Consistent AES-GCM restore verified 61 public tables, 11 migrations, 9 sequences and PostGIS, plus private object fixture. Wrong key/corrupt data/unsafe target/path and failed DROP cleanup covered.
 - Dependency audit found GHSA-8cw4-87c7-c6xx in csv-parse6.1.0; upgrade7.0.2 and frozen lockfile pass audit and existing feeds/integration suites.
 - Readiness release manifest binds mandatory load/restore evidence hashes and validates schemas; CI artifact dry-run and final review remain Task5 acceptance checks.
+
+### Task 5 evidence
+
+- Exact implementation head561d53d passed CI run37343613059: full five-browser matrix, all mandatory existing gates plus security/load/restore and real release/rollback manifest create+verify+artifact preservation.
+- Release evidence hashes/schema checks and cleanup failure regressions passed; final read-only follow-up found no remaining concrete blocker. Final documentation head must pass the same CI before PR ready.
+- Phase4D and final Phase4 reports, operating contracts and rollback/forward-fix notes completed. No migration, merge, production deployment or next gated phase. Local services stopped with volumes retained.
+- Saved cloud install/start configuration updated from obsolete placeholder scaffold to verified pnpm10/Node24 monorepo commands; draft persisted, not newly published.
