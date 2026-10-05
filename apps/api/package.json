@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js .cache/test/professional.test.js",
     "test:integration": "tsc -p tsconfig.test.json && node --env-file=../../.env scripts/integration.mjs",
     "db:migrate": "node --env-file=../../.env dist/modules/database/migrate.js",
     "worker": "node --env-file=../../.env dist/worker.js",
