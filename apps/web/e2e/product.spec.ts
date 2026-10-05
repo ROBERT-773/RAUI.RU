@@ -187,3 +187,33 @@ test('listing SEO metadata and unavailable pages are safe', async ({
     /noindex/,
   );
 });
+
+test('HTML uses fresh CSP nonces and protected browser headers', async ({
+  page,
+}) => {
+  const first = await page.goto('/');
+  const headers = first?.headers() ?? {};
+  const policy = headers['content-security-policy'] ?? '';
+  const nonce = policy.match(/'nonce-([^']+)'/)?.[1];
+  expect(nonce).toBeTruthy();
+  expect(policy).toContain("'strict-dynamic'");
+  expect(
+    policy.split(';').find((value) => value.trim().startsWith('script-src')),
+  ).not.toMatch(/unsafe-inline|unsafe-eval/);
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['x-frame-options']).toBe('DENY');
+  const inlineNonces = await page
+    .locator('script:not([src])')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLScriptElement).nonce),
+    );
+  expect(inlineNonces.length).toBeGreaterThan(0);
+  expect(inlineNonces.every((value) => value === nonce)).toBe(true);
+  const second = await page.reload();
+  expect(second?.headers()['content-security-policy']).not.toContain(
+    "'nonce-" + nonce + "'",
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
+  ).toBeVisible();
+});

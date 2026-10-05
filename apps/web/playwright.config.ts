@@ -5,7 +5,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 30000,
-  reporter: 'list',
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   outputDir: '../../.cache/playwright-results',
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3100',

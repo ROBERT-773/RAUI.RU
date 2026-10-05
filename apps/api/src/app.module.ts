@@ -1,3 +1,4 @@
+import { OperationsModule } from './modules/operations/operations';
 import { AiModule } from './modules/ai/ai';
 import { TrustWorkerModule } from './modules/trust/worker';
 import { AnalyticsModule } from './modules/analytics/analytics';
@@ -28,6 +29,7 @@ import { RateGuard, SessionGuard } from './common/security';
 @Module({
   imports: [
     DatabaseModule,
+    OperationsModule,
     AuditModule,
     AuthModule,
     OrganizationsModule,

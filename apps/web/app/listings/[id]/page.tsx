@@ -1,3 +1,5 @@
+import { headers } from 'next/headers';
+import { jsonLd } from '../../../lib/security';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
@@ -94,8 +96,9 @@ export default async function Page({
       <DetailActions id={id} />
       <script
         type="application/ld+json"
+        nonce={(await headers()).get('x-nonce') ?? undefined}
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify(structured).replace(/</g, '\u003c'),
+          __html: jsonLd(structured),
         }}
       />
     </main>

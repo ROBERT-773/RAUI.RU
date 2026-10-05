@@ -28,7 +28,10 @@
     "smoke:search": "node scripts/search-smoke.mjs",
     "worker:commerce": "pnpm --filter @raui/api worker:commerce",
     "worker:professional": "pnpm --filter @raui/api worker:professional",
-    "worker:trust": "pnpm --filter @raui/api worker:trust"
+    "worker:trust": "pnpm --filter @raui/api worker:trust",
+    "security:check": "node scripts/security-check.mjs && pnpm audit --prod --audit-level moderate",
+    "recovery:drill": "pnpm --filter @raui/api recovery:drill",
+    "release:verify": "node scripts/release-contract.mjs verify"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

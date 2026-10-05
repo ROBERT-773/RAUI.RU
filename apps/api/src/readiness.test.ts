@@ -1,0 +1,125 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { ArgumentsHost } from '@nestjs/common';
+import { ApiErrors } from './common/http';
+import { envSchema } from './config';
+const production = {
+  NODE_ENV: 'production',
+  WEB_ORIGIN: 'https://raui.ru',
+  SITE_URL: 'https://raui.ru',
+  DATABASE_URL: 'postgresql://service@db.internal/raui?sslmode=verify-full',
+  REDIS_URL: 'rediss://redis.internal:6380',
+  OPENSEARCH_URL: 'https://search.internal:9200',
+  OPENSEARCH_TOKEN: 'test-only-search-token',
+  STORAGE_DRIVER: 's3',
+  S3_BUCKET: 'raui-private',
+  S3_ENDPOINT: 'https://storage.internal',
+  VERIFICATION_GATEWAY_URL: 'https://verification.example/generate',
+  VERIFICATION_GATEWAY_TOKEN: 'test-only-verification-token',
+};
+test('Production contracts require verified DB TLS, Redis TLS and matching clean public HTTPS origins', () => {
+  assert.ok(envSchema.safeParse(production).success);
+  for (const fields of [
+    { WEB_ORIGIN: 'http://raui.ru' },
+    { WEB_ORIGIN: 'https://user:secret@raui.ru' },
+    { WEB_ORIGIN: 'https://raui.ru/path' },
+    { WEB_ORIGIN: 'https://raui.ru?secret=value' },
+    { SITE_URL: 'http://raui.ru' },
+    { SITE_URL: 'https://other.example' },
+    { SITE_URL: undefined },
+    { DATABASE_URL: 'postgresql://service@db.internal/raui' },
+    { DATABASE_URL: 'postgresql://service@db.internal/raui?sslmode=require' },
+    {
+      DATABASE_URL:
+        'postgresql://service@db.internal/raui?sslmode=verify-full&sslmode=disable',
+    },
+    {
+      DATABASE_URL:
+        'postgresql://service@db.internal/raui?sslmode=verify-full&ssl=false',
+    },
+    { REDIS_URL: 'redis://redis.internal:6379' },
+    { OPENSEARCH_TOKEN: undefined },
+    { CDN_BASE_URL: 'http://cdn.raui.ru' },
+  ])
+    assert.equal(
+      envSchema.safeParse({ ...production, ...fields }).success,
+      false,
+      JSON.stringify(Object.keys(fields)),
+    );
+});
+test('Local development retains explicit loopback adapters without enabling production defaults', () => {
+  const config = envSchema.parse({
+    WEB_ORIGIN: 'http://localhost:3000',
+    DATABASE_URL: 'postgresql://localhost/raui',
+    REDIS_URL: 'redis://localhost:6379',
+  });
+  assert.equal(config.NODE_ENV, 'development');
+  assert.equal(config.AI_ENABLED, 'false');
+  assert.equal(config.STORAGE_DRIVER, 'local');
+});
+
+test('Malformed configuration URLs fail validation without throwing raw credential-bearing URL errors', () => {
+  for (const field of [
+    'WEB_ORIGIN',
+    'SITE_URL',
+    'DATABASE_URL',
+    'REDIS_URL',
+    'OPENSEARCH_URL',
+    'S3_ENDPOINT',
+    'CDN_BASE_URL',
+    'AI_GATEWAY_URL',
+    'NOTIFICATION_GATEWAY_URL',
+    'VERIFICATION_GATEWAY_URL',
+    'GEOCODER_URL',
+  ]) {
+    assert.doesNotThrow(() => {
+      assert.equal(
+        envSchema.safeParse({ ...production, [field]: 'https://test-secret@[' })
+          .success,
+        false,
+      );
+    }, field);
+  }
+});
+
+test('HTTP failures tolerate null errors and never log unknown private error codes or payloads', (t) => {
+  const logs: string[] = [];
+  t.mock.method(console, 'error', (...values: unknown[]) =>
+    logs.push(values.map(String).join(' ')),
+  );
+  for (const error of [
+    null,
+    undefined,
+    { code: 'PRIVATE_TOKEN_VALUE', message: 'private-contact@example.test' },
+    new Error('provider-secret'),
+  ]) {
+    let status = 0,
+      body: unknown;
+    const response = {
+      status(value: number) {
+        status = value;
+        return this;
+      },
+      json(value: unknown) {
+        body = value;
+        return this;
+      },
+    };
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => response,
+        getRequest: () => ({}),
+      }),
+    } as unknown as ArgumentsHost;
+    assert.doesNotThrow(() => new ApiErrors().catch(error, host));
+    assert.equal(status, 500);
+    assert.deepEqual(body, { message: 'Internal server error' });
+  }
+  assert.equal(logs.length, 4);
+  assert.ok(
+    logs.every(
+      (value) =>
+        value === JSON.stringify({ event: 'request_error', code: 'internal' }),
+    ),
+  );
+});

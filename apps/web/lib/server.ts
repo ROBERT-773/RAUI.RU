@@ -1,7 +1,11 @@
 import 'server-only';
+import { publicOrigin } from './security';
 import { cache } from 'react';
 export const apiBase = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:3001';
-export const site = process.env.SITE_URL ?? 'http://localhost:3000';
+export const site = publicOrigin(
+  process.env.SITE_URL,
+  process.env.DEPLOYMENT_ENV === 'production',
+);
 export interface Detail {
   id: string;
   title: string;

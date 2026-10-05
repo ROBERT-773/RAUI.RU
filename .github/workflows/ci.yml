@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -26,12 +28,14 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm security:check
       - run: pnpm build
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm test:integration
       - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
-      - run: pnpm db:migrate
+      - run: pnpm db:migrate && pnpm db:migrate
+      - run: pnpm recovery:drill
       - name: Production smoke
         run: |
           pnpm --filter @raui/api start > /tmp/api.log 2>&1 &
@@ -52,6 +56,27 @@ jobs:
           pnpm worker:trust --once
           pnpm search:reconcile
           pnpm smoke:search
+      - name: Release and rollback artifact dry-run
+        run: |
+          node scripts/release-contract.mjs create .cache/phase4d-release.json "$(git rev-parse HEAD)"
+          pnpm release:verify .cache/phase4d-release.json "$(git rev-parse HEAD)"
+      - name: Preserve verified readiness artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raui-readiness-${{ github.event.pull_request.head.sha || github.sha }}
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .cache/phase4d-release.json
+            .cache/phase4d-load.json
+            .cache/phase4d-recovery.json
+            apps/api/dist
+            apps/api/migrations
+            apps/web/.next
+            !apps/web/.next/cache
+            infra/observability
+            pnpm-lock.yaml
+            package.json
       - name: Diagnostics
         if: failure()
         run: cat /tmp/api.log /tmp/web.log /tmp/media-worker.log 2>/dev/null || true

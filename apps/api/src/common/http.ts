@@ -13,7 +13,11 @@ export class ApiErrors implements ExceptionFilter {
       res.status(error.getStatus()).json(error.getResponse());
       return;
     }
-    const kind = (error as { type?: string }).type;
+    const fields =
+      typeof error === 'object' && error !== null
+        ? (error as { type?: unknown; code?: unknown })
+        : {};
+    const kind = fields.type;
     if (kind === 'entity.too.large') {
       res.status(413).json({ message: 'Request too large' });
       return;
@@ -22,7 +26,7 @@ export class ApiErrors implements ExceptionFilter {
       res.status(400).json({ message: 'Invalid JSON' });
       return;
     }
-    const code = (error as { code?: string }).code;
+    const code = typeof fields.code === 'string' ? fields.code : undefined;
     if (['40P01', '40001', '55P03'].includes(code ?? '')) {
       res
         .status(409)
@@ -37,9 +41,7 @@ export class ApiErrors implements ExceptionFilter {
       res.status(400).json({ message: 'Invalid reference or constraint' });
       return;
     }
-    console.error(
-      JSON.stringify({ event: 'request_error', code: code ?? 'internal' }),
-    );
+    console.error(JSON.stringify({ event: 'request_error', code: 'internal' }));
     res.status(500).json({ message: 'Internal server error' });
   }
 }

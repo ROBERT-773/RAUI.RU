@@ -1,19 +1,38 @@
 import { z } from 'zod';
+export function isProduction(value: {
+  NODE_ENV: string;
+  DEPLOYMENT_ENV?: string;
+}): boolean {
+  return (
+    value.NODE_ENV === 'production' || value.DEPLOYMENT_ENV === 'production'
+  );
+}
+function safeUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
 export const envSchema = z
   .object({
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
       .default('development'),
+    DEPLOYMENT_ENV: z.enum(['local', 'staging', 'production']).default('local'),
+    SITE_URL: z.url().optional(),
     API_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     WEB_ORIGIN: z.url(),
     DATABASE_URL: z
       .url()
       .refine((v) =>
-        ['postgres:', 'postgresql:'].includes(new URL(v).protocol),
+        ['postgres:', 'postgresql:'].includes(safeUrl(v)?.protocol ?? ''),
       ),
     REDIS_URL: z
       .url()
-      .refine((v) => ['redis:', 'rediss:'].includes(new URL(v).protocol)),
+      .refine((v) =>
+        ['redis:', 'rediss:'].includes(safeUrl(v)?.protocol ?? ''),
+      ),
     OPENSEARCH_URL: z.url().default('http://127.0.0.1:9200'),
     OPENSEARCH_ALIAS: z
       .string()
@@ -26,9 +45,9 @@ export const envSchema = z
       .url()
       .refine(
         (v) =>
-          new URL(v).protocol === 'https:' &&
-          !new URL(v).username &&
-          !new URL(v).password,
+          safeUrl(v)?.protocol === 'https:' &&
+          !safeUrl(v)?.username &&
+          !safeUrl(v)?.password,
       )
       .optional(),
     AI_GATEWAY_TOKEN: z.string().min(16).optional(),
@@ -49,9 +68,9 @@ export const envSchema = z
       .url()
       .refine(
         (v) =>
-          new URL(v).protocol === 'https:' &&
-          !new URL(v).username &&
-          !new URL(v).password,
+          safeUrl(v)?.protocol === 'https:' &&
+          !safeUrl(v)?.username &&
+          !safeUrl(v)?.password,
       )
       .optional(),
     NOTIFICATION_GATEWAY_TOKEN: z.string().min(16).optional(),
@@ -64,29 +83,84 @@ export const envSchema = z
     CDN_BASE_URL: z.url().optional(),
     VERIFICATION_GATEWAY_URL: z
       .url()
-      .refine((v) => new URL(v).protocol === 'https:')
+      .refine((v) => safeUrl(v)?.protocol === 'https:')
       .optional(),
     VERIFICATION_GATEWAY_TOKEN: z.string().min(1).optional(),
     GEOCODER_URL: z
       .url()
-      .refine((v) => new URL(v).protocol === 'https:')
+      .refine((v) => safeUrl(v)?.protocol === 'https:')
       .optional(),
     GEOCODER_TOKEN: z.string().optional(),
   })
   .superRefine((value, context) => {
-    if (
-      value.NODE_ENV === 'production' &&
-      new URL(value.OPENSEARCH_URL).protocol !== 'https:'
-    )
+    const production = isProduction(value);
+    const reject = (field: string, message: string) =>
+      context.addIssue({ code: 'custom', path: [field], message });
+    if (production) {
+      const origin = (raw: string | undefined) => {
+        if (!raw) return false;
+        const url = safeUrl(raw);
+        return (
+          url?.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          url.origin === raw
+        );
+      };
+      if (!origin(value.WEB_ORIGIN))
+        reject('WEB_ORIGIN', 'Production requires a clean public HTTPS origin');
+      if (!origin(value.SITE_URL) || value.SITE_URL !== value.WEB_ORIGIN)
+        reject(
+          'SITE_URL',
+          'Production site must match the public HTTPS origin',
+        );
+      const db = safeUrl(value.DATABASE_URL);
+      const tlsKeys = [...(db?.searchParams.keys() ?? [])].filter((key) =>
+        key.toLowerCase().startsWith('ssl'),
+      );
+      if (
+        !db ||
+        db.searchParams.getAll('sslmode').length !== 1 ||
+        db.searchParams.get('sslmode') !== 'verify-full' ||
+        tlsKeys.some(
+          (key) =>
+            !['sslmode', 'sslrootcert', 'sslcert', 'sslkey'].includes(key),
+        )
+      )
+        reject(
+          'DATABASE_URL',
+          'Production PostgreSQL requires verified TLS without override parameters',
+        );
+      if (safeUrl(value.REDIS_URL)?.protocol !== 'rediss:')
+        reject('REDIS_URL', 'Production Redis requires TLS');
+      if (!value.OPENSEARCH_TOKEN || value.OPENSEARCH_TOKEN.length < 16)
+        reject('OPENSEARCH_TOKEN', 'Production search authentication required');
+      for (const field of [
+        'OPENSEARCH_URL',
+        'S3_ENDPOINT',
+        'CDN_BASE_URL',
+      ] as const) {
+        const raw = value[field];
+        if (raw) {
+          const url = safeUrl(raw);
+          if (!url || url.protocol !== 'https:' || url.username || url.password)
+            reject(
+              field,
+              'Production service requires credential-free HTTPS URL',
+            );
+        }
+      }
+    }
+    if (production && safeUrl(value.OPENSEARCH_URL)?.protocol !== 'https:')
       context.addIssue({
         code: 'custom',
         path: ['OPENSEARCH_URL'],
         message: 'Production OpenSearch requires TLS',
       });
     if (
-      value.NODE_ENV === 'production' &&
+      production &&
       value.S3_ENDPOINT &&
-      new URL(value.S3_ENDPOINT).protocol !== 'https:'
+      safeUrl(value.S3_ENDPOINT)?.protocol !== 'https:'
     )
       context.addIssue({
         code: 'custom',
@@ -118,7 +192,7 @@ export const envSchema = z
         message: 'Gateway token required',
       });
     if (
-      value.NODE_ENV === 'production' &&
+      production &&
       (value.STORAGE_DRIVER !== 's3' || !value.VERIFICATION_GATEWAY_URL)
     )
       context.addIssue({
