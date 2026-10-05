@@ -27,7 +27,7 @@ import {
   passwordMatches,
   uuid,
 } from '../../common/security';
-import { loadConfig } from '../../config';
+import { isProduction, loadConfig } from '../../config';
 import {
   ConfiguredDelivery,
   VerificationDelivery,
@@ -168,7 +168,7 @@ export class AuthService {
     if (input.transport === 'cookie')
       res.cookie('raui_session', secret, {
         httpOnly: true,
-        secure: loadConfig().NODE_ENV === 'production',
+        secure: isProduction(loadConfig()),
         sameSite: 'lax',
         path: '/',
         maxAge: days * 86400000,

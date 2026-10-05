@@ -275,6 +275,59 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'Production markers always secure HTTP session cookies',
+      async () => {
+        // Connections and the delivery adapter were constructed against the isolated
+        // local database above; these synthetic production URLs are never contacted.
+        const production = {
+          WEB_ORIGIN: 'https://raui.ru',
+          SITE_URL: 'https://raui.ru',
+          DATABASE_URL:
+            'postgresql://service@db.internal/raui?sslmode=verify-full',
+          REDIS_URL: 'rediss://redis.internal:6380',
+          OPENSEARCH_URL: 'https://search.internal:9200',
+          OPENSEARCH_TOKEN: 'test-only-search-token',
+          STORAGE_DRIVER: 's3',
+          S3_BUCKET: 'raui-private',
+          S3_ENDPOINT: 'https://storage.internal',
+          VERIFICATION_GATEWAY_URL: 'https://verification.example/generate',
+          VERIFICATION_GATEWAY_TOKEN: 'test-only-verification-token',
+          NODE_ENV: 'development',
+          DEPLOYMENT_ENV: 'production',
+        };
+        const saved = Object.fromEntries(
+          Object.keys(production).map((key) => [key, process.env[key]]),
+        );
+        try {
+          Object.assign(process.env, production);
+          for (const markers of [
+            { NODE_ENV: 'development', DEPLOYMENT_ENV: 'production' },
+            { NODE_ENV: 'production', DEPLOYMENT_ENV: 'local' },
+          ]) {
+            Object.assign(process.env, markers);
+            const response = await call('/auth/login', 'POST', {
+              email: 'owner@example.test',
+              password: 'correct-long-password',
+              transport: 'cookie',
+            });
+            assert.equal(response.status, 201);
+            const cookie = response.headers.get('set-cookie') ?? '';
+            assert.ok(
+              cookie.includes('; Secure'),
+              'Production cookie requires Secure',
+            );
+            assert.ok(cookie.includes('; HttpOnly'));
+            assert.ok(cookie.includes('; SameSite=Lax'));
+          }
+        } finally {
+          for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        }
+      },
+    );
+    await t.test(
       'Operations and metrics require admin authorization and expose aggregates without payloads',
       async () => {
         assert.equal((await call('/admin/operations')).status, 401);

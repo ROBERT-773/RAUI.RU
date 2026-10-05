@@ -24,7 +24,7 @@ merge, production deployment or Issue #13/RC execution.
 
 - Frozen pnpm 10 installation, lint, strict typecheck, unit suites and build passed.
 - Unit suites: 51 API, 7 readiness-tool, 7 web, 1 shared UI and 5 Python tests.
-- 84 real PostgreSQL/PostGIS integration tests passed, including protected operations/metrics and no provider alert for six disabled AI fallbacks.
+- 85 real PostgreSQL/PostGIS integration tests passed, including protected operations/metrics, no provider alert for six disabled AI fallbacks and actual secure session cookies for both production markers.
 - Applied migrations 001–011 verified twice; no SQL added or changed.
 - Built API/web, core and real search/PostGIS/SSR smoke passed; media worker used by smoke, commerce/professional/trust workers ran. No production service contacted.
 - 14 desktop/Android Chromium E2E passed, including nonce freshness, safe script policy and working hydration/accessibility/map/account flows.
@@ -76,8 +76,14 @@ frozen install, lint/types/unit/security/build, 84 integration tests, all five b
 projects (35 E2E), load, repeated migrations, authenticated restore, built smoke/
 workers, release/rollback manifest verification and retained readiness artifact.
 
-Three read-only review rounds completed; all reported concrete findings were
-fixed and the final review found no remaining blocker in the reviewed surface.
+The original three read-only review rounds completed. A subsequent RC preflight
+found a Phase 4D regression: `DEPLOYMENT_ENV=production` enabled production
+configuration validation but did not secure session cookies unless `NODE_ENV`
+also indicated production. A real HTTP regression failed on missing `Secure`
+before the fix. Configuration validation and cookie issuance now share the same
+production predicate; the HTTP test checks both marker combinations and restores
+its synthetic configuration afterward. A read-only security review found no
+blocker in this correction. The updated head must pass mandatory CI before merge.
 Local Compose services were stopped without removing persistent volumes. The
 cloud setup install/start instructions were updated as a saved configuration
 draft; publication is a separate environment action, not performed here.

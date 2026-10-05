@@ -1,4 +1,12 @@
 import { z } from 'zod';
+export function isProduction(value: {
+  NODE_ENV: string;
+  DEPLOYMENT_ENV?: string;
+}): boolean {
+  return (
+    value.NODE_ENV === 'production' || value.DEPLOYMENT_ENV === 'production'
+  );
+}
 function safeUrl(value: string): URL | null {
   try {
     return new URL(value);
@@ -85,8 +93,7 @@ export const envSchema = z
     GEOCODER_TOKEN: z.string().optional(),
   })
   .superRefine((value, context) => {
-    const production =
-      value.NODE_ENV === 'production' || value.DEPLOYMENT_ENV === 'production';
+    const production = isProduction(value);
     const reject = (field: string, message: string) =>
       context.addIssue({ code: 'custom', path: [field], message });
     if (production) {
