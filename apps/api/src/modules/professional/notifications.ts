@@ -9,6 +9,9 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { Agent } from 'node:https';
+import { isIP } from 'node:net';
 import { Audit, AuditModule } from '../audit/audit';
 import { Database } from '../database/database';
 import {
@@ -20,6 +23,7 @@ import {
   verified,
 } from '../../common/security';
 import { loadConfig } from '../../config';
+import { publicIPv4 } from './feed-fetch';
 export interface DeliveryEnvelope {
   channel: 'email' | 'push' | 'sms';
   userId: string;
@@ -40,6 +44,32 @@ export class DisabledNotificationAdapter extends NotificationAdapter {
     throw new Error('Notification adapter not configured');
   }
 }
+export function validateNotificationGatewayUrl(value: string) {
+  const url = new URL(value);
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    (url.port && url.port !== '443') ||
+    isIP(url.hostname)
+  )
+    throw new Error('notification_gateway_rejected');
+  return url;
+}
+
+export async function resolveNotificationGatewayHost(
+  hostname: string,
+  resolve: (host: string) => Promise<{ address: string; family: number }[]> = (
+    host,
+  ) => lookup(host, { all: true }),
+) {
+  const addresses = await resolve(hostname);
+  if (!addresses.length || addresses.some((x) => !publicIPv4(x.address)))
+    throw new Error('notification_gateway_address_rejected');
+  return addresses[0]!;
+}
+
 @Injectable()
 export class GatewayNotificationAdapter extends NotificationAdapter {
   get configured() {
@@ -48,10 +78,16 @@ export class GatewayNotificationAdapter extends NotificationAdapter {
   async send(input: DeliveryEnvelope, signal: AbortSignal) {
     const cfg = loadConfig();
     if (!cfg.NOTIFICATION_GATEWAY_URL) throw new Error('unconfigured');
-    const response = await fetch(cfg.NOTIFICATION_GATEWAY_URL, {
+    const url = validateNotificationGatewayUrl(cfg.NOTIFICATION_GATEWAY_URL);
+    const selected = await resolveNotificationGatewayHost(url.hostname);
+    const agent = new Agent({
+      lookup: (_host, _options, done) => done(null, selected.address, 4),
+    });
+    const response = await fetch(url, {
       method: 'POST',
       redirect: 'error',
       signal,
+      dispatcher: agent as never,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${cfg.NOTIFICATION_GATEWAY_TOKEN!}`,
@@ -60,6 +96,7 @@ export class GatewayNotificationAdapter extends NotificationAdapter {
       body: JSON.stringify(input),
     });
     await response.body?.cancel();
+    agent.destroy();
     if (![200, 201, 204].includes(response.status))
       throw new Error('delivery_failed');
   }
