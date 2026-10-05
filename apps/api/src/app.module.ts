@@ -1,6 +1,7 @@
 import { SearchModule } from './modules/search/search';
 import { GeoLayersModule } from './modules/geo/layers';
 import { ProductModule } from './modules/product/product';
+import { CommerceModule } from './modules/commerce/commerce';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { HealthController } from './health.controller';
@@ -33,6 +34,7 @@ import { RateGuard, SessionGuard } from './common/security';
     SearchModule,
     ProductModule,
     GeoLayersModule,
+    CommerceModule,
   ],
   controllers: [HealthController],
   providers: [
