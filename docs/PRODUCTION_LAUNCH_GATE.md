@@ -19,6 +19,7 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 ## Final verification
 
 ### Application and data
+
 - Verify clean build from current master.
 - Verify production environment configuration contract.
 - Verify all migrations in order on staging-like infrastructure.
@@ -28,6 +29,7 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify Redis/OpenSearch recovery notes and health behavior.
 
 ### Security
+
 - Verify no secrets in repository, artifacts or logs.
 - Verify production cookies/session/CSRF/CSP/security headers.
 - Verify privileged admin authorization and audit trails.
@@ -37,12 +39,14 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify dependency and secret scans are green.
 
 ### Payments and commercial features
+
 - Verify payment provider is configured through adapter.
 - Verify idempotency, webhook replay protection and reconciliation.
 - Verify promotion pricing/versioning and expiration.
 - Verify kill switches/default-off behavior for risky integrations.
 
 ### AI and external providers
+
 - Verify AI modules are feature-flagged.
 - Verify provider timeouts/retries/fallbacks.
 - Verify usage/cost limits and metrics.
@@ -50,6 +54,7 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify maps, mail, SMS, storage and other providers use adapters.
 
 ### Product regression
+
 - Verify register/login/session flows.
 - Verify create/edit/publish/pause/archive listing.
 - Verify search/filter/map/listing detail.
@@ -59,11 +64,13 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify mobile/responsive and accessibility critical paths.
 
 ### SEO and analytics
+
 - Verify canonical/noindex/sitemap behavior.
 - Verify structured-data validation.
 - Verify analytics events and privacy boundaries.
 
 ### Operations
+
 - Verify logs, metrics, traces and correlation IDs.
 - Verify dashboards and alerts.
 - Verify queue/DLQ, worker, PostgreSQL, Redis and OpenSearch health.
@@ -72,6 +79,7 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify on-call/escalation and incident notes exist where applicable.
 
 ### Performance
+
 - Verify latest performance evidence.
 - Verify critical p95/error-rate targets are within documented thresholds.
 - Verify graceful degradation for external provider failure.
