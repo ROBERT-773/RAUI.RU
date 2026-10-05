@@ -20,14 +20,17 @@ Do not deploy to production automatically.
 ## Queue
 
 ### Q1 — Production defect burn-down
+
 Source: defects from post-launch verification and operational hardening.
 
 Exit:
+
 - P0/P1 resolved;
 - P2 triaged;
 - regression tests added.
 
 ### Q2 — Search relevance and catalog quality
+
 - ranking/relevance review;
 - stale listing handling;
 - duplicate reduction;
@@ -35,6 +38,7 @@ Exit:
 - indexing correctness.
 
 ### Q3 — Performance optimization
+
 - API latency hotspots;
 - slow queries and indexes;
 - frontend loading;
@@ -42,6 +46,7 @@ Exit:
 - cache opportunities.
 
 ### Q4 — Security hardening
+
 - permission regression tests;
 - auth/session review;
 - rate limits;
@@ -50,6 +55,7 @@ Exit:
 - abuse-path tests.
 
 ### Q5 — Operational automation
+
 - health checks;
 - scheduled verification jobs;
 - backup verification;
@@ -57,6 +63,7 @@ Exit:
 - repeatable incident diagnostics.
 
 ### Q6 — Product polish
+
 - UX defects;
 - accessibility;
 - mobile/responsive behavior;
@@ -64,6 +71,7 @@ Exit:
 - analytics consistency.
 
 ### Q7 — Technical debt
+
 - remove dead code;
 - simplify duplicated modules;
 - improve test fixtures;
@@ -73,6 +81,7 @@ Exit:
 ## Prioritization
 
 Use this order:
+
 1. security or data-loss risk;
 2. production outage/reliability;
 3. broken critical user journey;
@@ -83,6 +92,7 @@ Use this order:
 ## Stop conditions
 
 Codex should stop and request owner input only when:
+
 - a production deployment approval is required;
 - credentials/secrets are required;
 - destructive data migration is required;
