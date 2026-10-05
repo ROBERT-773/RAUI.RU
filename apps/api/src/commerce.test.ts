@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   assertPaymentTransition,
+  assertPromotionActivationTransition,
   normalizeIdempotencyKey,
   normalizePaymentEventKey,
   promotionWindow,
@@ -73,5 +74,19 @@ test('promotion products require versioned, bounded commercial configuration', (
   assert.throws(
     () => validatePromotionProduct({ ...product, version: 0 }),
     BadRequestException,
+  );
+});
+
+test('promotion activation lifecycle blocks invalid terminal transitions', () => {
+  assertPromotionActivationTransition('scheduled', 'active');
+  assertPromotionActivationTransition('active', 'expired');
+  assertPromotionActivationTransition('active', 'cancelled');
+  assert.throws(
+    () => assertPromotionActivationTransition('expired', 'active'),
+    ConflictException,
+  );
+  assert.throws(
+    () => assertPromotionActivationTransition('cancelled', 'active'),
+    ConflictException,
   );
 });
