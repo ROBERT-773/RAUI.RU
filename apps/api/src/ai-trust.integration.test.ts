@@ -1024,6 +1024,45 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         }
       },
     );
+    await t.test(
+      'Scheduled screening rotates past the first hundred pending human-review cases',
+      async () => {
+        const rows = (
+          await pool.query(
+            "INSERT INTO listings(property_id,source_id,seller_id,deal_type,title,price,status) SELECT property_id,source_id,seller_id,deal_type,'Scheduled offer',price,'moderation' FROM listings CROSS JOIN generate_series(1,101) WHERE listings.id=$1 RETURNING id,version",
+            [first],
+          )
+        ).rows;
+        for (const row of rows)
+          await pool.query(
+            'INSERT INTO moderation_cases(listing_id,listing_version) VALUES($1,$2)',
+            [row.id, row.version],
+          );
+        await worker.schedule();
+        await worker.schedule();
+        const count = (
+          await pool.query(
+            'SELECT count(*) FROM trust_jobs WHERE listing_id=ANY($1::uuid[])',
+            [rows.map((x) => x.id)],
+          )
+        ).rows[0].count;
+        assert.equal(count, '101');
+        await pool.query(
+          'UPDATE listings SET title=title || $2,version=version+1 WHERE id=$1',
+          [rows[0]!.id, ' revised'],
+        );
+        await worker.schedule();
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM trust_jobs WHERE listing_id=ANY($1::uuid[])',
+              [rows.map((x) => x.id)],
+            )
+          ).rows[0].count,
+          '102',
+        );
+      },
+    );
   } finally {
     if (oldEnabled === undefined) delete process.env.AI_ENABLED;
     else process.env.AI_ENABLED = oldEnabled;

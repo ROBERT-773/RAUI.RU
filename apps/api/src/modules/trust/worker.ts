@@ -122,6 +122,7 @@ interface Job {
 }
 @Injectable()
 export class TrustWorker {
+  private scheduleCursor: { createdAt: string; id: string } | null = null;
   constructor(
     readonly db: Database,
     readonly trust: Trust,
@@ -129,9 +130,19 @@ export class TrustWorker {
     readonly audit: Audit,
   ) {}
   async schedule() {
-    const rows = await this.db.rows<{ listing_id: string }>(
-      "SELECT listing_id FROM moderation_cases WHERE state='pending' ORDER BY created_at LIMIT 100",
-    );
+    const page = () =>
+      this.db.rows<{ listing_id: string; id: string; created_at: string }>(
+        "SELECT id,listing_id,created_at::text FROM moderation_cases WHERE state='pending' AND ($1::timestamptz IS NULL OR (created_at,id)>($1::timestamptz,$2::uuid)) ORDER BY created_at,id LIMIT 100",
+        [
+          this.scheduleCursor?.createdAt ?? null,
+          this.scheduleCursor?.id ?? null,
+        ],
+      );
+    let rows = await page();
+    if (!rows.length && this.scheduleCursor) {
+      this.scheduleCursor = null;
+      rows = await page();
+    }
     for (const row of rows) {
       const snapshot = await this.trust.snapshot(row.listing_id);
       await this.db.pool.query(
@@ -139,6 +150,8 @@ export class TrustWorker {
         [snapshot.id, snapshot.version, snapshot.factHash, RULE_VERSION],
       );
     }
+    const last = rows.at(-1);
+    if (last) this.scheduleCursor = { createdAt: last.created_at, id: last.id };
   }
   async once() {
     await this.schedule();

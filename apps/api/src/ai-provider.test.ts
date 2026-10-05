@@ -102,6 +102,18 @@ test('AI gateway pins all-validated DNS into TLS transport, bounds responses and
   body = 'x'.repeat(64001);
   await assert.rejects(provider.generate(input, signal), /ai_output_limit/);
   assert.equal(destroyed, true);
+  const escaped = [...cfg.AI_GATEWAY_TOKEN!]
+    .map((c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('');
+  body =
+    '{"suggestion":"' +
+    escaped +
+    '","confidence":0.6,"modelVersion":"test-v1","usage":{"inputTokens":1,"outputTokens":1,"costMicros":1}}';
+  assert.ok(!body.includes(cfg.AI_GATEWAY_TOKEN!));
+  await assert.rejects(
+    provider.generate(input, signal),
+    /ai_response_rejected/,
+  );
   body = JSON.stringify({ suggestion: cfg.AI_GATEWAY_TOKEN });
   await assert.rejects(
     provider.generate(input, signal),

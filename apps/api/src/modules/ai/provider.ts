@@ -103,11 +103,24 @@ export class GatewayAiProvider extends AiProvider {
           response.on('end', () => {
             try {
               const raw = Buffer.concat(chunks).toString('utf8');
-              if (raw.includes(cfg.AI_GATEWAY_TOKEN!)) {
+              let reflected = raw.includes(cfg.AI_GATEWAY_TOKEN!);
+              const decoded: unknown = JSON.parse(
+                raw,
+                (key: string, value: unknown) => {
+                  if (
+                    key.includes(cfg.AI_GATEWAY_TOKEN!) ||
+                    (typeof value === 'string' &&
+                      value.includes(cfg.AI_GATEWAY_TOKEN!))
+                  )
+                    reflected = true;
+                  return value;
+                },
+              );
+              if (reflected) {
                 reject(new Error('ai_response_rejected'));
                 return;
               }
-              done(JSON.parse(raw));
+              done(decoded);
             } catch {
               reject(new Error('ai_invalid_json'));
             }
