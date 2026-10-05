@@ -289,6 +289,13 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
           assert.equal(reply.costMicros, 0);
           assert.equal(provider.calls - before, 6);
         } finally {
+          const budget = (
+            await pool.query(
+              'SELECT spent_micros,reserved_micros FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(Number(budget.spent_micros), 0);
+          assert.equal(Number(budget.reserved_micros), 0);
           provider.fail = false;
           process.env.AI_ENABLED = 'false';
         }
@@ -369,6 +376,41 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
           token(),
         );
         assert.equal(reviewed.status, 201);
+        const beforeDecisionState = await pool.query(
+          'SELECT l.id,l.property_id,l.status,l.version,p.version AS property_version FROM listings l JOIN properties p ON p.id=l.property_id WHERE l.id=ANY($1::uuid[]) ORDER BY l.id',
+          [[first, second]],
+        );
+        const confirmed = await call(
+          '/v1/admin/trust/candidates/' + candidates[0].id + '/decision',
+          'POST',
+          {
+            decision: 'confirmed_duplicate',
+            reason: 'Confirmed duplicate for review only',
+          },
+          2,
+          token(),
+        );
+        assert.equal(confirmed.status, 201);
+        const afterDecisionState = await pool.query(
+          'SELECT l.id,l.property_id,l.status,l.version,p.version AS property_version FROM listings l JOIN properties p ON p.id=l.property_id WHERE l.id=ANY($1::uuid[]) ORDER BY l.id',
+          [[first, second]],
+        );
+        assert.deepEqual(afterDecisionState.rows, beforeDecisionState.rows);
+        await pool.query(
+          'UPDATE listings SET price=price+1,version=version+1 WHERE id=$1',
+          [second],
+        );
+        const stale = await call(
+          '/v1/admin/trust/candidates/' + candidates[0].id + '/decision',
+          'POST',
+          {
+            decision: 'distinct',
+            reason: 'Attempt against stale candidate snapshot',
+          },
+          2,
+          token(),
+        );
+        assert.equal(stale.status, 409);
       },
     );
     await t.test(
@@ -482,6 +524,33 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         assert.equal(stats.schemaVersion, 1);
         assert.ok(!JSON.stringify(stats).includes(stored.actor_hash));
         assert.ok(!JSON.stringify(stats).includes(actors[3]!.id));
+        await pool.query(
+          "INSERT INTO analytics_daily_keys(day) VALUES(CURRENT_DATE-91) ON CONFLICT DO NOTHING",
+        );
+        await pool.query(
+          "INSERT INTO analytics_events(schema_version,event_key,listing_id,actor_hash,kind,day) SELECT 1,$1,$2,encode(hmac($3,secret,'sha256'),'hex'),'view',day FROM analytics_daily_keys WHERE day=CURRENT_DATE-91",
+          [randomUUID(), first, actors[3]!.id],
+        );
+        const analytics = app.get(
+          (await import('./modules/analytics/analytics')).Analytics,
+        );
+        await analytics.prune();
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_events WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_daily_keys WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
         await pool.query("UPDATE listings SET status='paused' WHERE id=$1", [
           first,
         ]);
