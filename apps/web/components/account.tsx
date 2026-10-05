@@ -1,6 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { ListingCard, SearchDefinition } from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
@@ -42,40 +42,71 @@ export default function Account() {
     [cursor, setCursor] = useState<string | null>(null),
     [messageCursor, setMessageCursor] = useState<string | null>(null),
     [notificationEnabled, setNotificationEnabled] = useState(true);
+  const identityEpoch = useRef(0);
+  function clearPrivateState() {
+    const epoch = ++identityEpoch.current;
+    setTab('favorite');
+    setNotice('');
+    setRegister(false);
+    setItems([]);
+    setSaved([]);
+    setThreads([]);
+    setNotifications([]);
+    setActiveThread('');
+    setMessages([]);
+    setCursor(null);
+    setMessageCursor(null);
+    setNotificationEnabled(true);
+    return epoch;
+  }
   useEffect(() => {
+    const epochRef = identityEpoch;
+    const epoch = identityEpoch.current;
     api<{ display_name: string }>('v1/auth/me')
       .then((u) => {
+        if (epoch !== identityEpoch.current) return;
         setUser(u);
         void load('favorite');
       })
       .catch(() => {})
-      .finally(() => setChecking(false));
+      .finally(() => {
+        if (epoch === identityEpoch.current) setChecking(false);
+      });
+    return () => {
+      epochRef.current++;
+    };
   }, []);
   async function load(t: Tab, after?: string) {
+    const epoch = identityEpoch.current;
     try {
       if (['favorite', 'compare', 'recent'].includes(t)) {
         const r = await api<{ items: ListingCard[]; cursor: string | null }>(
           'v1/account/collections/' + t + (after ? '?after=' + after : ''),
         );
+        if (epoch !== identityEpoch.current) return;
         setItems((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'saved') {
         const r = await api<{ items: Saved[]; cursor: string | null }>(
           'v1/account/saved-searches' + (after ? '?after=' + after : ''),
         );
+        if (epoch !== identityEpoch.current) return;
         setSaved((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'messages') {
         const r = await api<{ items: Thread[]; cursor: string | null }>(
           'v1/account/threads' + (after ? '?after=' + after : ''),
         );
+        if (epoch !== identityEpoch.current) return;
         setThreads((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else {
         const r = await api<{ items: Notification[]; cursor: string | null }>(
           'v1/account/notifications' + (after ? '?cursor=' + after : ''),
         );
+        if (epoch !== identityEpoch.current) return;
         const prefs = await api<{ in_app: boolean }>('v1/account/preferences');
+        if (epoch !== identityEpoch.current) return;
         setNotificationEnabled(prefs.in_app);
         setNotifications((previous) =>
           after ? [...previous, ...r.items] : r.items,
@@ -83,10 +114,12 @@ export default function Account() {
         setCursor(r.cursor);
       }
     } catch (e) {
+      if (epoch !== identityEpoch.current) return;
       setNotice((e as Error).message);
     }
   }
   async function openThread(id: string, after?: string) {
+    const epoch = identityEpoch.current;
     try {
       const r = await api<{ items: Message[]; cursor: string | null }>(
         'v1/account/threads/' +
@@ -94,10 +127,12 @@ export default function Account() {
           '/messages' +
           (after ? '?cursor=' + after : ''),
       );
+      if (epoch !== identityEpoch.current) return;
       setActiveThread(id);
       setMessages((previous) => (after ? [...previous, ...r.items] : r.items));
       setMessageCursor(r.cursor);
     } catch (e) {
+      if (epoch !== identityEpoch.current) return;
       setNotice((e as Error).message);
     }
   }
@@ -110,6 +145,7 @@ export default function Account() {
           className="account-form panel"
           onSubmit={async (e) => {
             e.preventDefault();
+            const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
               if (register)
@@ -119,6 +155,7 @@ export default function Account() {
                   displayName: d.get('name'),
                   role: 'buyer',
                 });
+              if (epoch !== identityEpoch.current) return;
               const result = await api<{
                 csrfToken: string;
                 user: { display_name: string };
@@ -127,10 +164,13 @@ export default function Account() {
                 password: d.get('password'),
                 transport: 'cookie',
               });
+              if (epoch !== identityEpoch.current) return;
+              clearPrivateState();
               setCsrf(result.csrfToken);
               setUser(result.user);
               void load('favorite');
             } catch (error) {
+              if (epoch !== identityEpoch.current) return;
               setNotice((error as Error).message);
             }
           }}
@@ -171,11 +211,15 @@ export default function Account() {
       <p>{user.display_name}</p>
       <Button
         onClick={async () => {
+          const epoch = clearPrivateState();
           try {
             await api('v1/auth/logout', 'POST');
+            if (epoch !== identityEpoch.current) return;
+            clearPrivateState();
             setCsrf('');
             setUser(null);
           } catch (e) {
+            if (epoch !== identityEpoch.current) return;
             setNotice((e as Error).message);
           }
         }}
@@ -220,11 +264,13 @@ export default function Account() {
                   actions={
                     <Button
                       onClick={async () => {
+                        const epoch = identityEpoch.current;
                         try {
                           await api(
                             'v1/account/collections/' + tab + '/' + item.id,
                             'DELETE',
                           );
+                          if (epoch !== identityEpoch.current) return;
                           setItems(items.filter((v) => v.id !== item.id));
                           if (tab === 'favorite')
                             track({
@@ -232,6 +278,7 @@ export default function Account() {
                               listingId: item.id,
                             });
                         } catch (e) {
+                          if (epoch !== identityEpoch.current) return;
                           setNotice((e as Error).message);
                         }
                       }}
@@ -291,13 +338,16 @@ export default function Account() {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  const epoch = identityEpoch.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'PATCH', {
                       name: new FormData(e.currentTarget).get('name'),
                       definition: s.definition,
                     });
+                    if (epoch !== identityEpoch.current) return;
                     await load('saved');
                   } catch (error) {
+                    if (epoch !== identityEpoch.current) return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -315,10 +365,13 @@ export default function Account() {
               </form>
               <Button
                 onClick={async () => {
+                  const epoch = identityEpoch.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'DELETE');
+                    if (epoch !== identityEpoch.current) return;
                     await load('saved');
                   } catch (e) {
+                    if (epoch !== identityEpoch.current) return;
                     setNotice((e as Error).message);
                   }
                 }}
@@ -360,6 +413,7 @@ export default function Account() {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  const epoch = identityEpoch.current;
                   const form = e.currentTarget;
                   try {
                     await api(
@@ -367,9 +421,12 @@ export default function Account() {
                       'POST',
                       { body: new FormData(form).get('body') },
                     );
+                    if (epoch !== identityEpoch.current) return;
                     await openThread(activeThread);
+                    if (epoch !== identityEpoch.current) return;
                     form.reset();
                   } catch (error) {
+                    if (epoch !== identityEpoch.current) return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -391,6 +448,7 @@ export default function Account() {
               type="checkbox"
               checked={notificationEnabled}
               onChange={async (e) => {
+                const epoch = identityEpoch.current;
                 const value = e.target.checked;
                 try {
                   const prefs = await api<{
@@ -399,12 +457,15 @@ export default function Account() {
                     sms: boolean;
                     push: boolean;
                   }>('v1/account/preferences');
+                  if (epoch !== identityEpoch.current) return;
                   await api('v1/account/preferences', 'PATCH', {
                     ...prefs,
                     in_app: value,
                   });
+                  if (epoch !== identityEpoch.current) return;
                   setNotificationEnabled(value);
                 } catch (error) {
+                  if (epoch !== identityEpoch.current) return;
                   setNotice((error as Error).message);
                 }
               }}
@@ -419,15 +480,19 @@ export default function Account() {
               </p>
               <Button
                 onClick={async () => {
+                  const epoch = identityEpoch.current;
                   try {
                     await api(
                       'v1/account/notifications/' + n.id + '/read',
                       'POST',
                     );
+                    if (epoch !== identityEpoch.current) return;
                     setTab('messages');
                     await load('messages');
+                    if (epoch !== identityEpoch.current) return;
                     await openThread(n.thread_id);
                   } catch (e) {
+                    if (epoch !== identityEpoch.current) return;
                     setNotice((e as Error).message);
                   }
                 }}

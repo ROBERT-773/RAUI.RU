@@ -146,6 +146,135 @@ test('inquiry and account messages', async ({ page }, testInfo) => {
     .click();
   await expect(page.getByText(text, { exact: false })).toBeVisible();
 });
+for (const delayed of [false, true]) {
+  test(`Account private messages cannot cross identities${delayed ? ' even with a late response' : ''}`, async ({
+    page,
+  }, info) => {
+    const text = `RC private ${delayed} ${info.project.name}`;
+    if (delayed)
+      await page.addInitScript(() => {
+        const state = window as unknown as { rcMessagesRead: number };
+        state.rcMessagesRead = 0;
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const response = await nativeFetch(...args);
+          if (String(args[0]).includes('/messages')) {
+            const json = response.json.bind(response);
+            response.json = async () => {
+              const value: unknown = await json();
+              state.rcMessagesRead++;
+              return value;
+            };
+          }
+          return response;
+        };
+      });
+    await login(page);
+    await page.goto('/');
+    await page
+      .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
+      .click();
+    await page.getByLabel('Сообщение продавцу', { exact: true }).fill(text);
+    await page
+      .getByRole('button', { name: 'Отправить сообщение', exact: true })
+      .click();
+    await expect(page.getByRole('status')).toContainText(
+      'Сообщение отправлено',
+    );
+    await page.goto('/account');
+    const threadsResponse = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/account/threads'),
+    );
+    await page.getByRole('button', { name: 'Сообщения', exact: true }).click();
+    const { items } = (await (await threadsResponse).json()) as {
+      items: { id: string }[];
+    };
+    expect(items).toHaveLength(1);
+    const messagesPath = `/api/v1/account/threads/${items[0]!.id}/messages`;
+    let release: (() => void) | undefined;
+    let delivered: Promise<void> | undefined;
+    if (delayed) {
+      let prepared!: () => void, finished!: () => void;
+      const ready = new Promise<void>((done) => {
+        prepared = done;
+      });
+      delivered = new Promise<void>((done) => {
+        finished = done;
+      });
+      const resume = new Promise<void>((done) => {
+        release = done;
+      });
+      await page.route('**' + messagesPath, async (route) => {
+        const actual = await route.fetch();
+        expect(actual.status()).toBe(200);
+        const payload = (await actual.json()) as { items: { body: string }[] };
+        expect(payload.items.some((item) => item.body === text)).toBe(true);
+        prepared();
+        await resume;
+        await route.fulfill({ response: actual });
+        finished();
+      });
+      await page
+        .getByRole('button', { name: 'Открыть переписку', exact: true })
+        .click();
+      await ready;
+    } else {
+      await page
+        .getByRole('button', { name: 'Открыть переписку', exact: true })
+        .click();
+      await expect(page.getByText(text, { exact: false })).toBeVisible();
+    }
+    try {
+      await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+      await expect(
+        page.getByRole('heading', { name: 'Войти в аккаунт' }),
+      ).toBeVisible();
+      expect((await page.request.get(messagesPath)).status()).toBe(401);
+      // Stay in the mounted account component: navigation/reload would hide the regression.
+      await page.getByLabel('Email', { exact: true }).fill('outsider@e2e.test');
+      await page
+        .getByLabel('Пароль', { exact: true })
+        .fill('E2E-only-password-42!');
+      await page.getByRole('button', { name: 'Войти', exact: true }).click();
+      await expect(
+        page.getByRole('heading', { name: 'Мой аккаунт' }),
+      ).toBeVisible();
+      release?.();
+      if (delivered) {
+        await delivered;
+        await page.waitForFunction(
+          () =>
+            (window as unknown as { rcMessagesRead: number }).rcMessagesRead >
+            0,
+        );
+        await page.evaluate(
+          () =>
+            new Promise<void>((done) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => done())),
+            ),
+        );
+      }
+      await expect(page.getByText(text, { exact: false })).toHaveCount(0);
+      await page
+        .getByRole('button', { name: 'Сообщения', exact: true })
+        .click();
+      await expect(
+        page.getByText('Напишите продавцу на странице объявления.'),
+      ).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Переписка' })).toHaveCount(
+        0,
+      );
+      // Participant denial deliberately hides thread existence (existing API contract).
+      const denied = await page.request.get(messagesPath);
+      expect(denied.status()).toBe(404);
+      expect(await denied.text()).not.toContain(text);
+    } finally {
+      release?.();
+      await page.unroute('**' + messagesPath);
+    }
+  });
+}
+
 test('accessibility and responsive search baseline', async ({ page }) => {
   await page.goto('/');
   await expect(

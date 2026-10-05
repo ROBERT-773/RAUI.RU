@@ -56,6 +56,7 @@ try {
   for (const [id, email, role] of [
     [seller, 'seller@e2e.test', 'owner'],
     [buyer, 'buyer@e2e.test', 'buyer'],
+    [randomUUID(), 'outsider@e2e.test', 'buyer'],
   ])
     await pool.query(
       'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,now(),now())',
