@@ -68,6 +68,7 @@ This package starts only after the production launch gate has been satisfied and
 ## Codex handoff rule
 
 When complete:
+
 1. run all required checks;
 2. commit the report and fixes in a dedicated branch;
 3. open a PR;
