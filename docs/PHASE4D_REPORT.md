@@ -83,17 +83,19 @@ also indicated production. A real HTTP regression failed on missing `Secure`
 before the fix. Configuration validation and cookie issuance now share the same
 production predicate; the HTTP test checks both marker combinations and restores
 its synthetic configuration afterward. A read-only security review found no
-blocker in this correction. The updated head must pass mandatory CI before merge.
-The first cookie-fix CI run (37347596475) passed lint/types/unit/security/build
-and integration gates but failed the E2E step. Cloud access to detailed job-log
-downloads is denied. CI now uses Playwright's GitHub annotations and bounded
-preflight-stage annotations to expose the failure without publishing credentials
-or raw service logs. No assertion, browser project or performance threshold was
-disabled; current-head validation remains required.
+blocker in this correction. The first cookie-fix CI run (37347596475) passed
+lint/types/unit/security/build and integration gates but failed the E2E step.
+Cloud access to detailed job-log downloads was denied, so CI now uses Playwright's
+GitHub annotations and bounded preflight-stage annotations to expose failures
+without publishing credentials or raw service logs. No assertion, browser project
+or performance threshold was disabled. Final head
+`4b664fb601d54d1526e3ba54a32681201a63726c` passed exact-head RAUI CI run
+37348437508, including the complete browser matrix and readiness gates.
 Local Compose services were stopped without removing persistent volumes. The
 cloud setup install/start instructions were updated as a saved configuration
 draft; publication is a separate environment action, not performed here.
 
-The final documentation head remains subject to the same mandatory PR CI. Mark
-PR #35 ready only after its exact-head checks are green. Owner acceptance is still
-separate; no merge, deploy or next gated phase is automatic.
+PR #35 is merge-ready from the documented Phase 4D validation perspective: its
+exact-head mandatory CI is green and no unresolved review blocker is recorded.
+Owner acceptance remains separate; no merge, deploy or next gated phase is
+automatic.
