@@ -49,6 +49,30 @@ export function assertPaymentTransition(
     );
 }
 
+export function normalizePaymentEventKey(value: unknown): string {
+  if (typeof value !== 'string')
+    throw new BadRequestException('Payment event key is required');
+  const key = value.trim();
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(key))
+    throw new BadRequestException('Invalid payment event key');
+  return key;
+}
+
+export function promotionWindow(
+  startsAt: string | undefined,
+  durationHours: number,
+): { startsAt: string; endsAt: string } {
+  if (!Number.isInteger(durationHours) || durationHours < 1)
+    throw new BadRequestException('Invalid promotion duration');
+  const start = startsAt ? new Date(startsAt) : new Date();
+  if (Number.isNaN(start.getTime()))
+    throw new BadRequestException('Invalid promotion start time');
+  return {
+    startsAt: start.toISOString(),
+    endsAt: new Date(start.getTime() + durationHours * 60 * 60 * 1000).toISOString(),
+  };
+}
+
 export function normalizeIdempotencyKey(value: unknown): string {
   if (typeof value !== 'string')
     throw new BadRequestException('Idempotency key is required');
@@ -234,8 +258,7 @@ export class CommerceService {
     source: string,
     payload: unknown,
   ) {
-    if (!/^[A-Za-z0-9._:-]{8,160}$/.test(eventKey))
-      throw new BadRequestException('Invalid payment event key');
+    eventKey = normalizePaymentEventKey(eventKey);
     if (!/^[a-z0-9_-]{2,40}$/.test(source))
       throw new BadRequestException('Invalid payment event source');
 
@@ -340,14 +363,13 @@ export class CommerceService {
           throw new ConflictException('Captured payment required');
       }
 
-      const startsAt = input.startsAt ?? new Date().toISOString();
+      const window = promotionWindow(input.startsAt, product.duration_hours);
       const [activation] = await this.db.rows(
         `INSERT INTO commerce_promotion_activations(
           account_id,listing_id,promotion_product_id,payment_order_id,
           starts_at,ends_at,status
         ) VALUES(
-          $1,$2,$3,$4,$5::timestamptz,
-          $5::timestamptz + ($6::text || ' hours')::interval,
+          $1,$2,$3,$4,$5::timestamptz,$6::timestamptz,
           CASE WHEN $5::timestamptz>now() THEN 'scheduled' ELSE 'active' END
         )
         RETURNING id,listing_id,payment_order_id,starts_at,ends_at,status`,
@@ -356,8 +378,8 @@ export class CommerceService {
           input.listingId,
           product.id,
           input.paymentOrderId ?? null,
-          startsAt,
-          product.duration_hours,
+          window.startsAt,
+          window.endsAt,
         ],
         sql,
       );
