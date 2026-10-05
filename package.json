@@ -27,7 +27,8 @@
     "test:e2e": "pnpm --filter @raui/api test:e2e",
     "smoke:search": "node scripts/search-smoke.mjs",
     "worker:commerce": "pnpm --filter @raui/api worker:commerce",
-    "worker:professional": "pnpm --filter @raui/api worker:professional"
+    "worker:professional": "pnpm --filter @raui/api worker:professional",
+    "worker:trust": "pnpm --filter @raui/api worker:trust"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

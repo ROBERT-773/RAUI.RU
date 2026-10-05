@@ -1,3 +1,4 @@
+import { Trust, TrustModule } from '../trust/trust';
 import {
   Body,
   Controller,
@@ -35,6 +36,7 @@ export class Administration {
     private readonly audit: Audit,
     private readonly listings: Listings,
     private readonly idem: Idempotency,
+    private readonly trust: Trust,
   ) {}
   async mediaJobs() {
     return this.db.rows(
@@ -213,6 +215,7 @@ export class Administration {
       if (input.decision === 'approve') {
         seller(sellerActor);
         await this.listings.validate(sql, listing!, sellerActor);
+        await this.trust.checkPublication(sql, listing!.id);
       }
       const status = input.decision === 'approve' ? 'published' : 'rejected';
       await sql.query(
@@ -296,7 +299,7 @@ export class AdminController {
   }
 }
 @Module({
-  imports: [ListingsModule],
+  imports: [ListingsModule, TrustModule],
   controllers: [AdminController],
   providers: [Administration, Idempotency],
 })

@@ -1,0 +1,267 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { interpretSearch, redactQuery, runAi } from './modules/ai/runtime';
+import { evaluateRules } from './modules/trust/rules';
+
+test('Natural language fallback preserves explicit filters and redacts contact data', () => {
+  const filters = interpretSearch('Купить 2 комнаты в Москве до 15 млн');
+  assert.equal(filters.dealType, 'sale');
+  assert.equal(filters.price?.max, 15000000);
+  assert.deepEqual(filters.attributes.rooms, { min: 2, max: 2 });
+  assert.equal(filters.locality, 'Москва');
+  assert.ok(
+    !redactQuery(
+      'test@example.com +7 (999) 123-45-67 https://private.test/token',
+    ).includes('test@example.com'),
+  );
+  assert.ok(
+    !redactQuery(
+      'test@example.com +7 (999) 123-45-67 https://private.test/token',
+    ).includes('999'),
+  );
+});
+test('AI off never calls provider and keeps facts in fallback authoritative', async () => {
+  let calls = 0;
+  const answer = await runAi({
+    capability: 'description',
+    context: {},
+    fallback: { area: 50 },
+    enabled: async () => false,
+    provider: {
+      async generate() {
+        calls++;
+        throw new Error('unused');
+      },
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(answer.mode, 'fallback');
+  assert.deepEqual(answer.result, { area: 50 });
+});
+test('AI retries are bounded, timeouts abort and provider errors are sanitized', async () => {
+  let aborted = false,
+    calls = 0;
+  const answer = await runAi({
+    capability: 'search',
+    context: {},
+    fallback: {},
+    enabled: async () => true,
+    timeoutMs: 10,
+    provider: {
+      async generate(_input, signal) {
+        calls++;
+        signal.addEventListener('abort', () => {
+          aborted = true;
+        });
+        return new Promise(() => {});
+      },
+    },
+  });
+  assert.equal(answer.mode, 'fallback');
+  assert.equal(answer.reason, 'provider_unavailable');
+  assert.equal(calls, 2);
+  assert.equal(aborted, true);
+  assert.ok(!JSON.stringify(answer).includes('secret'));
+});
+test('Invalid or fabricated provider facts fail closed and kill switch overrides in-flight replies', async () => {
+  const invalid = await runAi({
+    capability: 'description',
+    context: {},
+    fallback: { area: 50 },
+    enabled: async () => true,
+    provider: {
+      async generate() {
+        return { area: 99, token: 'secret' };
+      },
+    },
+  });
+  assert.equal(invalid.mode, 'fallback');
+  assert.deepEqual(invalid.result, { area: 50 });
+  let checks = 0;
+  const disabled = await runAi({
+    capability: 'description',
+    context: {},
+    fallback: { area: 50 },
+    enabled: async () => ++checks <= 2,
+    provider: {
+      async generate() {
+        return {
+          suggestion: 'Advice',
+          confidence: 0.5,
+          modelVersion: 'test-v1',
+          usage: { inputTokens: 1, outputTokens: 1, costMicros: 1 },
+        };
+      },
+    },
+  });
+  assert.equal(disabled.mode, 'fallback');
+  assert.equal(disabled.reason, 'disabled');
+});
+test('Deterministic fraud rules require human review without any AI dependency', () => {
+  const issues = evaluateRules({
+    title: 'Квартира',
+    description: 'Переведите предоплату до просмотра квартиры',
+    price: 10000000,
+  });
+  assert.ok(
+    issues.some(
+      (x) =>
+        x.code === 'advance_payment_before_viewing' && x.severity === 'review',
+    ),
+  );
+  assert.ok(
+    evaluateRules({
+      title: 'Flat',
+      description: 'Normal description',
+      price: null,
+    }).some((x) => x.severity === 'block'),
+  );
+  assert.deepEqual(
+    evaluateRules({
+      title: 'Flat',
+      description: 'Normal description',
+      price: 10000000,
+    }),
+    [],
+  );
+});
+
+test('AI retry attempts use one stable provider idempotency identity and explicit generation limits', async () => {
+  const inputs: unknown[] = [];
+  await runAi({
+    capability: 'description',
+    context: { area: 50 },
+    fallback: { area: 50 },
+    enabled: async () => true,
+    provider: {
+      async generate(input) {
+        inputs.push(input);
+        throw new Error('private provider error');
+      },
+    },
+  });
+  const first = inputs[0] as {
+    requestId: string;
+    limits: { maxCostMicros: number; maxOutputTokens: number };
+  };
+  const second = inputs[1] as { requestId: string };
+  assert.match(first.requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(first.requestId, second.requestId);
+  assert.equal(first.limits.maxCostMicros, 100000);
+  assert.equal(first.limits.maxOutputTokens, 1000);
+});
+
+test('Search fallback removes understood instructions from keyword query and never guesses foreign currency conversion', () => {
+  const understood = interpretSearch(
+    'Купить 2 комнатную квартиру в Москве до 15 млн',
+  );
+  assert.equal(understood.q, '');
+  assert.equal(understood.category, 'apartment');
+  assert.equal(understood.price?.max, 15000000);
+  const foreign = interpretSearch('Купить квартиру до 15 млн евро');
+  assert.equal(foreign.price, undefined);
+});
+
+test('Flag-store errors after a valid provider reply fail closed without repeating or double-counting idempotent generation', async () => {
+  let checks = 0,
+    calls = 0;
+  const answer = await runAi({
+    capability: 'search',
+    context: {},
+    fallback: {},
+    maxCostMicros: 100000,
+    enabled: async () => {
+      checks++;
+      if (checks === 3 || checks === 5) throw new Error('flag-store-secret');
+      return true;
+    },
+    provider: {
+      async generate() {
+        calls++;
+        return {
+          suggestion: 'Advice',
+          confidence: 0.5,
+          modelVersion: 'test-v1',
+          usage: { inputTokens: 1, outputTokens: 1, costMicros: 100000 },
+        };
+      },
+    },
+  });
+  assert.equal(answer.mode, 'fallback');
+  assert.equal(calls, 1);
+  assert.equal(answer.attempts, 1);
+  assert.equal(answer.costMicros, 100000);
+  assert.equal(answer.inputTokens, 1);
+  assert.equal(answer.outputTokens, 1);
+  assert.equal(answer.uncertainMicros, 0);
+  assert.equal(answer.unknownCostAttempts, 0);
+  assert.equal(answer.reason, 'flag_unavailable');
+  assert.ok(!('advice' in answer));
+  assert.ok(!JSON.stringify(answer).includes('flag-store-secret'));
+});
+
+test('Unknown provider failures do not fabricate actual spend while retaining a separate bounded exposure', async () => {
+  for (const kind of ['transport', 'invalid', 'timeout']) {
+    const result = await runAi({
+      capability: 'search',
+      context: {},
+      fallback: {},
+      enabled: async () => true,
+      maxCostMicros: 100,
+      timeoutMs: 5,
+      provider: {
+        generate: async () => {
+          if (kind === 'transport') throw new Error('unavailable');
+          if (kind === 'timeout') return new Promise(() => {});
+          return { suggestion: 'invalid' };
+        },
+      },
+    });
+    assert.equal(result.attempts, 2);
+    assert.equal(result.costMicros, 0);
+    assert.equal(result.inputTokens, 0);
+    assert.equal(result.outputTokens, 0);
+    assert.equal(
+      (result as unknown as { unknownCostAttempts: number })
+        .unknownCostAttempts,
+      2,
+    );
+    assert.equal(
+      (result as unknown as { uncertainMicros: number }).uncertainMicros,
+      200,
+    );
+  }
+});
+
+test('Mixed unknown and reported attempts preserve exact reported usage separately from uncertain exposure', async () => {
+  let calls = 0;
+  const result = await runAi({
+    capability: 'search',
+    context: {},
+    fallback: {},
+    enabled: async () => true,
+    maxCostMicros: 100,
+    provider: {
+      generate: async () => {
+        if (++calls === 1) throw new Error('transport');
+        return {
+          suggestion: 'Review',
+          confidence: 0.5,
+          modelVersion: 'test-v1',
+          usage: { inputTokens: 4, outputTokens: 5, costMicros: 7 },
+        };
+      },
+    },
+  });
+  assert.equal(result.costMicros, 7);
+  assert.equal(result.inputTokens, 4);
+  assert.equal(result.outputTokens, 5);
+  assert.equal(
+    (result as unknown as { uncertainMicros: number }).uncertainMicros,
+    100,
+  );
+  assert.equal(
+    (result as unknown as { unknownCostAttempts: number }).unknownCostAttempts,
+    1,
+  );
+});
