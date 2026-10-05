@@ -69,7 +69,9 @@ export function promotionWindow(
     throw new BadRequestException('Invalid promotion start time');
   return {
     startsAt: start.toISOString(),
-    endsAt: new Date(start.getTime() + durationHours * 60 * 60 * 1000).toISOString(),
+    endsAt: new Date(
+      start.getTime() + durationHours * 60 * 60 * 1000,
+    ).toISOString(),
   };
 }
 
