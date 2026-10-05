@@ -59,7 +59,12 @@ export class ProfessionalFeeds {
     private readonly idem: Idempotency,
   ) {}
 
-  async create(actor: Actor, organizationId: string, body: unknown, key: unknown) {
+  async create(
+    actor: Actor,
+    organizationId: string,
+    body: unknown,
+    key: unknown,
+  ) {
     const organization = parse(uuid, organizationId);
     await this.organizations.permission(actor, organization, true);
     const input = parse(feedInput, body);
@@ -108,7 +113,11 @@ export class ProfessionalFeeds {
           'professional.feed.created',
           'professional_feed',
           feed!.id,
-          { organizationId: organization, name: input.name, format: input.format },
+          {
+            organizationId: organization,
+            name: input.name,
+            format: input.format,
+          },
         );
         return feed!;
       },
