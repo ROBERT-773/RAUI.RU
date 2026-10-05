@@ -161,3 +161,31 @@ test('Search fallback removes understood instructions from keyword query and nev
   const foreign = interpretSearch('Купить квартиру до 15 млн евро');
   assert.equal(foreign.price, undefined);
 });
+
+test('Flag-store errors after a valid provider reply cannot double-charge an attempt beyond reserved cost', async () => {
+  let checks = 0;
+  const answer = await runAi({
+    capability: 'search',
+    context: {},
+    fallback: {},
+    maxCostMicros: 100000,
+    enabled: async () => {
+      checks++;
+      if (checks === 3 || checks === 5) throw new Error('flag-store-secret');
+      return true;
+    },
+    provider: {
+      async generate() {
+        return {
+          suggestion: 'Advice',
+          confidence: 0.5,
+          modelVersion: 'test-v1',
+          usage: { inputTokens: 1, outputTokens: 1, costMicros: 100000 },
+        };
+      },
+    },
+  });
+  assert.equal(answer.mode, 'fallback');
+  assert.ok(answer.costMicros <= 200000);
+  assert.ok(!JSON.stringify(answer).includes('flag-store-secret'));
+});

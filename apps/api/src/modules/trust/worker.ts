@@ -149,6 +149,17 @@ export class TrustWorker {
         sql,
       );
       if (!j) return null;
+      if (j.attempts >= 3) {
+        await sql.query(
+          "UPDATE trust_jobs SET state='dead',lease_token=NULL,lease_until=NULL,last_error='lease_attempts_exhausted' WHERE id=$1",
+          [j.id],
+        );
+        await this.audit.record(sql, null, 'trust.dead', 'trust_job', j.id, {
+          attempt: j.attempts,
+          reason: 'lease_attempts_exhausted',
+        });
+        return null;
+      }
       const lease = randomUUID();
       await sql.query(
         "UPDATE trust_jobs SET state='running',attempts=attempts+1,lease_token=$2,lease_until=now()+interval '60 seconds' WHERE id=$1",
@@ -185,17 +196,6 @@ export class TrustWorker {
         ...subject,
         price: subject.price ? Number(subject.price) : null,
       });
-      // Multiple signals are evidence for review, never automatic mutation or publication.
-      if (
-        scored.candidates.some(
-          (c) => c.confidence >= 0.5 && !c.reasons.includes('unit_conflict'),
-        )
-      )
-        findings.push({
-          code: 'duplicate_candidate',
-          severity: 'review',
-          confidence: Math.max(...scored.candidates.map((c) => c.confidence)),
-        });
       await this.db.transaction(async (sql) => {
         const [held] = await this.db.rows(
           "SELECT id FROM trust_jobs WHERE id=$1 AND state='running' AND lease_token=$2 AND lease_until>now() FOR UPDATE",
@@ -226,6 +226,17 @@ export class TrustWorker {
             original = snapshots.find((s) => s.id === c.id)!;
           if (fresh.factHash === original.factHash) stable.push(c);
         }
+        // Multiple signals are evidence for review, never automatic mutation or publication.
+        if (
+          stable.some(
+            (c) => c.confidence >= 0.5 && !c.reasons.includes('unit_conflict'),
+          )
+        )
+          findings.push({
+            code: 'duplicate_candidate',
+            severity: 'review',
+            confidence: Math.max(...stable.map((c) => c.confidence)),
+          });
         const [assessment] = await this.db.rows<{ id: string }>(
           'INSERT INTO trust_assessments(listing_id,listing_version,fact_hash,rule_version,findings) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING id',
           [

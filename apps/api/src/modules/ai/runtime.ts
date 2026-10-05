@@ -100,6 +100,7 @@ export async function runAi(options: Options) {
     attempts++;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let accounted = false;
     try {
       const raw = await Promise.race([
         options.provider.generate(
@@ -127,6 +128,7 @@ export async function runAi(options: Options) {
       )
         throw new Error('invalid_output');
       costMicros += reply.usage.costMicros;
+      accounted = true;
       inputTokens += reply.usage.inputTokens;
       outputTokens += reply.usage.outputTokens;
       modelVersion = reply.modelVersion;
@@ -134,7 +136,7 @@ export async function runAi(options: Options) {
       return answer('generated', reply);
     } catch {
       // Ambiguous/invalid provider responses are charged at the reserved upper bound.
-      costMicros += cap;
+      if (!accounted) costMicros += cap;
     } finally {
       clearTimeout(timer);
       controller.abort();

@@ -11,6 +11,7 @@ import { Database } from './modules/database/database';
 import { hash, token, Actor } from './common/security';
 import { AiProvider } from './modules/ai/provider';
 import { Trust } from './modules/trust/trust';
+import { Analytics } from './modules/analytics/analytics';
 import { TrustWorker } from './modules/trust/worker';
 
 class TestProvider extends AiProvider {
@@ -259,42 +260,6 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
       },
     );
     await t.test(
-      'Repeated provider failures open a cooldown circuit with no new attempts or cost',
-      async () => {
-        await pool.query(
-          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0 WHERE day=CURRENT_DATE',
-        );
-        process.env.AI_ENABLED = 'true';
-        provider.fail = true;
-        const before = provider.calls;
-        try {
-          for (let i = 0; i < 3; i++) {
-            const reply = (await (
-              await call('/v1/ai/assist', 'POST', {
-                capability: 'search',
-                query: 'Квартира',
-              })
-            ).json()) as { mode: string; reason: string };
-            assert.equal(reply.mode, 'fallback');
-            assert.equal(reply.reason, 'provider_unavailable');
-          }
-          const reply = (await (
-            await call('/v1/ai/assist', 'POST', {
-              capability: 'search',
-              query: 'Квартира',
-            })
-          ).json()) as { reason: string; attempts: number; costMicros: number };
-          assert.equal(reply.reason, 'circuit_open');
-          assert.equal(reply.attempts, 0);
-          assert.equal(reply.costMicros, 0);
-          assert.equal(provider.calls - before, 6);
-        } finally {
-          provider.fail = false;
-          process.env.AI_ENABLED = 'false';
-        }
-      },
-    );
-    await t.test(
       'Scan is contextual, idempotent and Python multi-signal scoring creates immutable candidates only',
       async () => {
         assert.equal(
@@ -427,6 +392,255 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         await assert.rejects(
           pool.query("UPDATE trust_reviews SET decision='reject'"),
           /immutable/,
+        );
+      },
+    );
+    await t.test(
+      'Candidate edits during scoring cannot leave a stale duplicate hold',
+      async (t2) => {
+        await pool.query(
+          "UPDATE listings SET description='Normal description',version=version+1 WHERE id=$1",
+          [first],
+        );
+        await trust.enqueue(actors[0]!, first, token());
+        const score = worker.scorer.score.bind(worker.scorer);
+        t2.mock.method(
+          worker.scorer,
+          'score',
+          async (input: Parameters<typeof score>[0]) => {
+            const report = await score(input);
+            await pool.query(
+              'UPDATE properties SET version=version+1 WHERE id=(SELECT property_id FROM listings WHERE id=$1)',
+              [second],
+            );
+            return report;
+          },
+        );
+        assert.equal(await worker.once(), true);
+        const snapshot = await trust.snapshot(first);
+        const assessment = (
+          await pool.query(
+            'SELECT id,findings FROM trust_assessments WHERE listing_id=$1 AND fact_hash=$2',
+            [first, snapshot.factHash],
+          )
+        ).rows[0];
+        assert.ok(assessment);
+        assert.ok(
+          !assessment.findings.some(
+            (x: { code: string }) => x.code === 'duplicate_candidate',
+          ),
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM duplicate_candidates WHERE assessment_id=$1',
+              [assessment.id],
+            )
+          ).rows[0].count,
+          '0',
+        );
+        const old = (
+          await pool.query(
+            'SELECT id FROM duplicate_candidates WHERE listing_id=$1',
+            [first],
+          )
+        ).rows[0];
+        assert.equal(
+          (
+            await call(
+              '/v1/admin/trust/candidates/' + old.id + '/decision',
+              'POST',
+              { decision: 'distinct', reason: 'Recheck after property change' },
+              2,
+              token(),
+            )
+          ).status,
+          409,
+        );
+      },
+    );
+    await t.test(
+      'Trust jobs fence stale snapshots, claim once concurrently and dead-letter bounded failures with audited admin retry',
+      async (t2) => {
+        await pool.query(
+          'UPDATE listings SET price=price+1,version=version+1 WHERE id=$1',
+          [first],
+        );
+        await trust.enqueue(actors[0]!, first, token());
+        await pool.query(
+          'UPDATE listings SET price=price+1,version=version+1 WHERE id=$1',
+          [first],
+        );
+        await worker.once();
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*) FROM trust_jobs WHERE listing_id=$1 AND state='stale'",
+              [first],
+            )
+          ).rows[0].count,
+          '1',
+        );
+        const snapshot = await trust.snapshot(first);
+        await trust.enqueue(actors[0]!, first, token());
+        const score = worker.scorer.score.bind(worker.scorer);
+        const mock = t2.mock.method(worker.scorer, 'score', async () => {
+          throw new Error('provider-secret-should-not-leak');
+        });
+        for (let i = 0; i < 3; i++) {
+          await worker.once();
+          await pool.query(
+            'UPDATE trust_jobs SET available_at=now() WHERE listing_id=$1 AND fact_hash=$2',
+            [first, snapshot.factHash],
+          );
+        }
+        const job = (
+          await pool.query(
+            'SELECT * FROM trust_jobs WHERE listing_id=$1 AND fact_hash=$2',
+            [first, snapshot.factHash],
+          )
+        ).rows[0];
+        assert.equal(job.state, 'dead');
+        assert.equal(job.attempts, 3);
+        assert.equal(job.last_error, 'assessment_failed');
+        assert.equal(
+          (
+            await call(
+              '/v1/admin/trust/jobs/' + job.id + '/retry',
+              'POST',
+              {},
+              0,
+              token(),
+            )
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await call(
+              '/v1/admin/trust/jobs/' + job.id + '/retry',
+              'POST',
+              {},
+              2,
+              token(),
+            )
+          ).status,
+          201,
+        );
+        mock.mock.restore();
+        const calls = t2.mock.method(worker.scorer, 'score', score);
+        await Promise.all([worker.once(), worker.once()]);
+        assert.equal(calls.mock.callCount(), 1);
+        assert.equal(
+          (
+            await pool.query('SELECT state FROM trust_jobs WHERE id=$1', [
+              job.id,
+            ])
+          ).rows[0].state,
+          'done',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*) FROM audit_events WHERE action='trust.job.retried' AND entity_id=$1",
+              [job.id],
+            )
+          ).rows[0].count,
+          '1',
+        );
+      },
+    );
+    await t.test(
+      'Expired leases after three crashed attempts dead-letter without an unbounded fourth scoring attempt',
+      async (t2) => {
+        await pool.query(
+          'UPDATE listings SET price=price+1,version=version+1 WHERE id=$1',
+          [first],
+        );
+        const snapshot = await trust.snapshot(first);
+        await trust.enqueue(actors[0]!, first, token());
+        await pool.query(
+          "UPDATE trust_jobs SET state='running',attempts=3,lease_token=$3,lease_until=now()-interval '1 second' WHERE listing_id=$1 AND fact_hash=$2",
+          [first, snapshot.factHash, randomUUID()],
+        );
+        const score = t2.mock.method(
+          worker.scorer,
+          'score',
+          worker.scorer.score.bind(worker.scorer),
+        );
+        await worker.once();
+        const job = (
+          await pool.query(
+            'SELECT * FROM trust_jobs WHERE listing_id=$1 AND fact_hash=$2',
+            [first, snapshot.factHash],
+          )
+        ).rows[0];
+        assert.equal(job.state, 'dead');
+        assert.equal(job.attempts, 3);
+        assert.equal(score.mock.callCount(), 0);
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM trust_assessments WHERE listing_id=$1 AND fact_hash=$2',
+              [first, snapshot.factHash],
+            )
+          ).rows[0].count,
+          '0',
+        );
+      },
+    );
+    await t.test(
+      'HTTP publication cannot bypass deterministic trust review when AI is off',
+      async () => {
+        await pool.query(
+          "UPDATE listings SET status='moderation',description='Переведите предоплату до просмотра квартиры',version=version+1 WHERE id=$1",
+          [first],
+        );
+        const snapshot = await trust.snapshot(first),
+          id = randomUUID();
+        await pool.query(
+          'INSERT INTO moderation_cases(id,listing_id,listing_version) VALUES($1,$2,$3)',
+          [id, first, snapshot.version],
+        );
+        const approve = () =>
+          call(
+            '/v1/admin/moderation/' + id + '/decision',
+            'POST',
+            { decision: 'approve', reason: 'Independent verified review' },
+            2,
+            token(),
+          );
+        assert.equal(process.env.AI_ENABLED, 'false');
+        assert.equal((await approve()).status, 409);
+        assert.equal(
+          (
+            await pool.query('SELECT state FROM moderation_cases WHERE id=$1', [
+              id,
+            ])
+          ).rows[0].state,
+          'pending',
+        );
+        assert.equal(
+          (
+            await call(
+              '/v1/admin/trust/listings/' + first + '/decision',
+              'POST',
+              {
+                factHash: snapshot.factHash,
+                decision: 'allow',
+                reason: 'Risk checked independently',
+              },
+              2,
+              token(),
+            )
+          ).status,
+          201,
+        );
+        const published = await approve();
+        assert.equal(published.status, 201);
+        assert.equal(
+          ((await published.json()) as { status: string }).status,
+          'published',
         );
       },
     );
@@ -590,6 +804,62 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'In-flight recommendation withdrawal removes stale AI advice but settles provider cost',
+      async (t2) => {
+        await pool.query(
+          "UPDATE listings SET status='published',published_at=now() WHERE id=ANY($1::uuid[])",
+          [[first, second]],
+        );
+        await pool.query(
+          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0 WHERE day=CURRENT_DATE',
+        );
+        const enabled = await call(
+          '/v1/admin/ai/features/recommendations',
+          'PATCH',
+          { version: 1, enabled: true },
+          2,
+        );
+        assert.equal(enabled.status, 200);
+        process.env.AI_ENABLED = 'true';
+        const generate = provider.generate.bind(provider);
+        t2.mock.method(provider, 'generate', async () => {
+          const reply = await generate();
+          await pool.query(
+            "UPDATE listings SET status='paused',version=version+1 WHERE id=$1",
+            [second],
+          );
+          return { ...reply, suggestion: 'Recommended listing ' + second };
+        });
+        try {
+          const response = await call(
+            '/v1/ai/assist',
+            'POST',
+            { capability: 'recommendations', listingId: first },
+            3,
+          );
+          assert.equal(response.status, 201);
+          const answer = (await response.json()) as {
+            mode: string;
+            reason: string;
+            costMicros: number;
+          };
+          assert.equal(answer.mode, 'fallback');
+          assert.equal(answer.reason, 'context_changed');
+          assert.ok(!JSON.stringify(answer).includes(second));
+          assert.equal(answer.costMicros, 7);
+          const budget = (
+            await pool.query(
+              'SELECT reserved_micros,spent_micros FROM ai_budget_days WHERE day=CURRENT_DATE',
+            )
+          ).rows[0];
+          assert.equal(budget.reserved_micros, '0');
+          assert.equal(budget.spent_micros, '7');
+        } finally {
+          process.env.AI_ENABLED = 'false';
+        }
+      },
+    );
+    await t.test(
       'Market intelligence suppresses small cohorts and uses only live-public offers',
       async () => {
         const market = (await (await call('/v1/analytics/market')).json()) as {
@@ -608,6 +878,150 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         };
         assert.ok(spec.paths['/v1/ai/assist']!.post.requestBody);
         assert.ok(spec.paths['/v1/analytics/events']!.post.requestBody);
+      },
+    );
+    await t.test(
+      'Market and valuation require five live offers from three sellers and suppress withdrawn comparables',
+      async () => {
+        const ids: string[] = [];
+        for (let i = 0; i < 4; i++) {
+          const source = randomUUID(),
+            property = randomUUID(),
+            id = randomUUID();
+          await pool.query(
+            "INSERT INTO listing_sources(id,kind,metadata) VALUES($1,'direct','{}')",
+            [source],
+          );
+          await pool.query(
+            'INSERT INTO properties(id,created_by,category_code,address_id,attributes,unit_number) SELECT $1,$2,category_code,address_id,attributes,$3 FROM properties WHERE id=(SELECT property_id FROM listings WHERE id=$4)',
+            [property, actors[i % 3]!.id, String(30 + i), first],
+          );
+          await pool.query(
+            "INSERT INTO listings(id,property_id,source_id,seller_id,deal_type,title,price,status,published_at) VALUES($1,$2,$3,$4,'sale','Market offer',$5,'published',now())",
+            [id, property, source, actors[i % 3]!.id, 9000000 + i * 1000000],
+          );
+          ids.push(id);
+        }
+        const market = await app.get(Analytics).market(actors[3]!, {
+          category: 'apartment',
+          locality: 'Москва',
+          dealType: 'sale',
+        });
+        assert.equal(market.cohorts.length, 1);
+        assert.equal(market.cohorts[0]!.sample_size_floor, 5);
+        assert.ok(!ids.some((id) => JSON.stringify(market).includes(id)));
+        const answer = (await (
+          await call(
+            '/v1/ai/assist',
+            'POST',
+            { capability: 'valuation', listingId: first },
+            3,
+          )
+        ).json()) as {
+          result: {
+            status: string;
+            range: { currency: string; min: number; max: number } | null;
+          };
+        };
+        assert.equal(answer.result.status, 'indicative');
+        assert.equal(answer.result.range?.currency, 'RUB');
+        assert.ok(answer.result.range!.max >= answer.result.range!.min);
+        await pool.query("UPDATE listings SET status='paused' WHERE id=$1", [
+          ids[0],
+        ]);
+        assert.deepEqual(
+          (await app.get(Analytics).market(actors[3]!, { dealType: 'sale' }))
+            .cohorts,
+          [],
+        );
+        const fallback = (await (
+          await call(
+            '/v1/ai/assist',
+            'POST',
+            { capability: 'valuation', listingId: first },
+            3,
+          )
+        ).json()) as { result: { status: string; range: null } };
+        assert.equal(fallback.result.status, 'insufficient_data');
+        assert.equal(fallback.result.range, null);
+      },
+    );
+    await t.test(
+      'Analytics retention removes expired events and matching pseudonym keys without touching current events',
+      async () => {
+        await pool.query(
+          'INSERT INTO analytics_daily_keys(day) VALUES(CURRENT_DATE-91)',
+        );
+        await pool.query(
+          "INSERT INTO analytics_events(schema_version,event_key,listing_id,day,actor_hash,kind,promoted) VALUES(1,$1,$2,CURRENT_DATE-91,repeat('a',64),'view',false)",
+          [randomUUID(), first],
+        );
+        const before = (
+          await pool.query(
+            'SELECT count(*) FROM analytics_events WHERE day=CURRENT_DATE',
+          )
+        ).rows[0].count;
+        await app.get(Analytics).prune();
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_events WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_daily_keys WHERE day<CURRENT_DATE-90',
+            )
+          ).rows[0].count,
+          '0',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*) FROM analytics_events WHERE day=CURRENT_DATE',
+            )
+          ).rows[0].count,
+          before,
+        );
+      },
+    );
+    await t.test(
+      'Repeated provider failures open a cooldown circuit with no new attempts or cost',
+      async () => {
+        await pool.query(
+          'UPDATE ai_budget_days SET spent_micros=0,reserved_micros=0 WHERE day=CURRENT_DATE',
+        );
+        process.env.AI_ENABLED = 'true';
+        provider.fail = true;
+        const before = provider.calls;
+        try {
+          for (let i = 0; i < 3; i++) {
+            const reply = (await (
+              await call('/v1/ai/assist', 'POST', {
+                capability: 'search',
+                query: 'Квартира',
+              })
+            ).json()) as { mode: string; reason: string };
+            assert.equal(reply.mode, 'fallback');
+            assert.equal(reply.reason, 'provider_unavailable');
+          }
+          const reply = (await (
+            await call('/v1/ai/assist', 'POST', {
+              capability: 'search',
+              query: 'Квартира',
+            })
+          ).json()) as { reason: string; attempts: number; costMicros: number };
+          assert.equal(reply.reason, 'circuit_open');
+          assert.equal(reply.attempts, 0);
+          assert.equal(reply.costMicros, 0);
+          assert.equal(provider.calls - before, 6);
+        } finally {
+          provider.fail = false;
+          process.env.AI_ENABLED = 'false';
+        }
       },
     );
   } finally {

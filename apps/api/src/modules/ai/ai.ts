@@ -234,8 +234,18 @@ export class AiService {
       !['recommendations', 'valuation'].includes(input.capability)
     )
       await this.access.get(actor, input.listingId);
-    if (['recommendations', 'valuation'].includes(input.capability))
-      answer.result = await this.prepare(actor, input);
+    if (['recommendations', 'valuation'].includes(input.capability)) {
+      const current = await this.prepare(actor, input);
+      if (JSON.stringify(current) !== JSON.stringify(fallback)) {
+        // Advice can echo now-private comparables even when the fresh result omits them.
+        delete answer.advice;
+        delete answer.suggestedFilters;
+        answer.mode = 'fallback';
+        answer.reason = 'context_changed';
+        answer.confidence = 0;
+      }
+      answer.result = current;
+    }
     return answer;
   }
   async flags(actor: Actor) {

@@ -105,6 +105,13 @@ export class Analytics {
     return {
       schemaVersion: 1,
       windowDays: 14,
+      metricWindows: {
+        views: 'last-14-UTC-days',
+        contacts: 'last-14-UTC-days',
+        favorites: 'current',
+        leads: 'all-time',
+        messages: 'all-time',
+      },
       daily,
       totals: { ...totals, views, contactReveals: contacts },
       contactConversion: views ? contacts / views : null,
