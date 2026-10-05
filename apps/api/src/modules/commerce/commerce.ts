@@ -299,6 +299,72 @@ export class CommerceService {
     );
   }
 
+  async activatePromotion(actor: Actor, body: unknown) {
+    const input = parse(
+      z
+        .object({
+          listingId: z.uuid(),
+          code: z.string().min(2).max(64),
+          version: z.number().int().positive(),
+          paymentOrderId: z.uuid().optional(),
+          startsAt: z.iso.datetime().optional(),
+        })
+        .strict(),
+      body,
+    );
+
+    return this.db.transaction(async (sql) => {
+      const [product] = await this.db.rows<{
+        id: string;
+        duration_hours: number;
+        enabled: boolean;
+      }>(
+        `SELECT id,duration_hours,enabled
+         FROM commerce_promotion_products
+         WHERE code=$1 AND version=$2`,
+        [input.code, input.version],
+        sql,
+      );
+      if (!product || !product.enabled)
+        throw new BadRequestException('Promotion product unavailable');
+
+      if (input.paymentOrderId) {
+        const [payment] = await this.db.rows<{ state: PaymentState }>(
+          `SELECT state
+           FROM commerce_payment_orders
+           WHERE id=$1 AND account_id=$2`,
+          [input.paymentOrderId, actor.id],
+          sql,
+        );
+        if (!payment || payment.state !== 'captured')
+          throw new ConflictException('Captured payment required');
+      }
+
+      const startsAt = input.startsAt ?? new Date().toISOString();
+      const [activation] = await this.db.rows(
+        `INSERT INTO commerce_promotion_activations(
+          account_id,listing_id,promotion_product_id,payment_order_id,
+          starts_at,ends_at,status
+        ) VALUES(
+          $1,$2,$3,$4,$5::timestamptz,
+          $5::timestamptz + ($6::text || ' hours')::interval,
+          CASE WHEN $5::timestamptz>now() THEN 'scheduled' ELSE 'active' END
+        )
+        RETURNING id,listing_id,payment_order_id,starts_at,ends_at,status`,
+        [
+          actor.id,
+          input.listingId,
+          product.id,
+          input.paymentOrderId ?? null,
+          startsAt,
+          product.duration_hours,
+        ],
+        sql,
+      );
+      return activation;
+    });
+  }
+
   async createPromotion(body: unknown) {
     const product = this.policy.promotion(parse(promotionInput, body));
     const [row] = await this.db.rows(
@@ -342,6 +408,14 @@ export class CommerceController {
   @Get('promotions')
   promotions() {
     return this.commerce.promotions();
+  }
+
+  @Post('promotions/activate')
+  activatePromotion(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+  ) {
+    return this.commerce.activatePromotion(actor, body);
   }
 
   @AdminOnly()
