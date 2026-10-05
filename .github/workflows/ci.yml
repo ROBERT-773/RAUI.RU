@@ -48,6 +48,7 @@ jobs:
           pnpm smoke
           pnpm smoke:core
           pnpm worker:commerce --once
+          pnpm worker:professional --once
           pnpm search:reconcile
           pnpm smoke:search
       - name: Diagnostics

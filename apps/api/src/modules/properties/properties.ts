@@ -106,61 +106,67 @@ export class Properties {
       'property.create',
       key,
       input,
-      async (sql) => {
-        if (input.organizationId)
-          await this.orgs.permission(actor, input.organizationId, false, sql);
-        validateAttributes(
-          await this.catalog.definitions(input.category, sql),
-          input.attributes,
-        );
-        if (input.buildingId) {
-          const [building] = await this.db.rows<{ organization_id: string }>(
-            'SELECT organization_id FROM buildings WHERE id=$1',
-            [input.buildingId],
-            sql,
-          );
-          if (!building || building.organization_id !== input.organizationId)
-            throw new ForbiddenException('Building organization mismatch');
-        }
-        if (input.floorId) {
-          const [floor] = await this.db.rows<{ building_id: string }>(
-            'SELECT s.building_id FROM floors f JOIN sections s ON s.id=f.section_id WHERE f.id=$1',
-            [input.floorId],
-            sql,
-          );
-          if (!floor || floor.building_id !== input.buildingId)
-            throw new BadRequestException('Floor/building mismatch');
-        }
-        const addressId = await this.geo.create(sql, input.address);
-        const [property] = await this.db.rows<Property>(
-          'INSERT INTO properties(created_by,organization_id,category_code,address_id,building_id,floor_id,unit_number,attributes) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
-          [
-            actor.id,
-            input.organizationId ?? null,
-            input.category,
-            addressId,
-            input.buildingId ?? null,
-            input.floorId ?? null,
-            input.unitNumber ?? null,
-            JSON.stringify(input.attributes),
-          ],
-          sql,
-        );
-        await this.audit.record(
-          sql,
-          actor.id,
-          'property.created',
-          'property',
-          property!.id,
-          input,
-        );
-        return property!;
-      },
+      (sql) => this.createWithSql(actor, input, sql),
       async (sql) => {
         if (input.organizationId)
           await this.orgs.permission(actor, input.organizationId, false, sql);
       },
     );
+  }
+  async createWithSql(
+    actor: Actor,
+    input: z.infer<typeof createSchema>,
+    sql: Sql,
+  ) {
+    seller(actor);
+    if (input.organizationId)
+      await this.orgs.permission(actor, input.organizationId, false, sql);
+    validateAttributes(
+      await this.catalog.definitions(input.category, sql),
+      input.attributes,
+    );
+    if (input.buildingId) {
+      const [building] = await this.db.rows<{ organization_id: string }>(
+        'SELECT organization_id FROM buildings WHERE id=$1',
+        [input.buildingId],
+        sql,
+      );
+      if (!building || building.organization_id !== input.organizationId)
+        throw new ForbiddenException('Building organization mismatch');
+    }
+    if (input.floorId) {
+      const [floor] = await this.db.rows<{ building_id: string }>(
+        'SELECT s.building_id FROM floors f JOIN sections s ON s.id=f.section_id WHERE f.id=$1',
+        [input.floorId],
+        sql,
+      );
+      if (!floor || floor.building_id !== input.buildingId)
+        throw new BadRequestException('Floor/building mismatch');
+    }
+    const addressId = await this.geo.create(sql, input.address);
+    const [property] = await this.db.rows<Property>(
+      'INSERT INTO properties(created_by,organization_id,category_code,address_id,building_id,floor_id,unit_number,attributes) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [
+        actor.id,
+        input.organizationId ?? null,
+        input.category,
+        addressId,
+        input.buildingId ?? null,
+        input.floorId ?? null,
+        input.unitNumber ?? null,
+        JSON.stringify(input.attributes),
+      ],
+      sql,
+    );
+    await this.audit.record(
+      sql,
+      actor.id,
+      'property.created',
+      'property',
+      property!.id,
+      input,
+    );
+    return property!;
   }
   async get(actor: Actor, id: string) {
     const property = await this.access(actor, id);

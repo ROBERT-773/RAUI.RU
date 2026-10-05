@@ -99,6 +99,13 @@ test('saved search CRUD and reopening filters', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Цена до', { exact: true }).fill('15000000');
   await page.getByRole('button', { name: 'Найти', exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?definition=/);
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toHaveCount(0);
   await page
     .getByRole('button', { name: 'Сохранить поиск', exact: true })
     .click();

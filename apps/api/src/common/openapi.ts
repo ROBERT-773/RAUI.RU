@@ -1,4 +1,9 @@
 import {
+  feedInput,
+  feedConfig,
+  importInput,
+} from '../modules/professional/contracts';
+import {
   orderInput,
   placementInput,
   campaignInput,
@@ -23,6 +28,37 @@ const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/organizations/{organizationId}/feeds': feedInput,
+  'post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run': importInput,
+  'post /v1/organizations/{organizationId}/feeds/{feedId}/apply': importInput,
+  'patch /v1/organizations/{organizationId}/feeds/{feedId}': feedConfig,
+  'patch /v1/admin/integrations/feeds/{id}': feedConfig,
+  'post /v1/partner/feeds/{id}/apply': importInput,
+  'post /v1/organizations/{organizationId}/professional/portfolios': object({
+    name: z.string().trim().min(2).max(120),
+  }),
+  'post /v1/organizations/{organizationId}/professional/portfolios/{portfolioId}/listings':
+    object({ listingIds: z.array(uuid).min(1).max(200) }),
+  'post /v1/organizations/{organizationId}/professional/listings/bulk-pause':
+    object({ listingIds: z.array(uuid).min(1).max(200) }),
+  'post /v1/partner/listings/bulk-pause': object({
+    listingIds: z.array(uuid).min(1).max(200),
+  }),
+  'post /v1/organizations/{organizationId}/professional/partner-clients':
+    object({
+      name: z.string().trim().min(2).max(120),
+      scopes: z
+        .array(z.enum(['listings:read', 'listings:write', 'feeds:write']))
+        .min(1)
+        .max(10),
+      expiresAt: z.iso.datetime().optional(),
+      requestsPerMinute: z.number().int().min(1).max(1000).default(60),
+    }),
+  'patch /v1/notifications/preferences': object({
+    email: z.boolean(),
+    push: z.boolean(),
+    transactional: z.boolean(),
+  }),
   'post /v1/commerce/orders': orderInput,
   'post /v1/commerce/ads/placements': placementInput,
   'post /v1/commerce/ads/campaigns': campaignInput,
@@ -177,6 +213,14 @@ const bodyContracts: Record<string, z.ZodType> = {
   }),
 };
 export function enrichOpenApi(document: OpenAPIObject) {
+  document.components ??= {};
+  document.components.securitySchemes ??= {};
+  document.components.securitySchemes.partner = {
+    type: 'apiKey',
+    in: 'header',
+    name: 'X-Partner-Token',
+    description: 'Organization-scoped server-side partner token',
+  };
   for (const [path, methods] of Object.entries(document.paths))
     for (const [method, operation] of Object.entries(methods)) {
       if (!operation || typeof operation !== 'object') continue;
@@ -198,6 +242,8 @@ export function enrichOpenApi(document: OpenAPIObject) {
       operation.security = publicEndpoint
         ? []
         : [{ bearer: [] }, { cookie: [] }];
+      if (path.startsWith('/v1/partner/'))
+        operation.security = [{ partner: [] }];
       const schema = bodyContracts[`${method} ${path}`];
       if (schema)
         operation.requestBody = {
@@ -219,7 +265,8 @@ export function enrichOpenApi(document: OpenAPIObject) {
         path !== '/v1/commerce/webhook' &&
         !path.endsWith('/start') &&
         !path.endsWith('/cancel') &&
-        !path.endsWith('/revoke')
+        !path.endsWith('/revoke') &&
+        !path.endsWith('/retry')
       )
         operation.parameters = [
           ...(operation.parameters ?? []),

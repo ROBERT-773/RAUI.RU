@@ -20,6 +20,17 @@ export const envSchema = z
       .regex(/^[a-z][a-z0-9_-]{2,80}$/)
       .default('raui-listings'),
     OPENSEARCH_TOKEN: z.string().optional(),
+    FEED_ALLOWED_HOSTS: z.string().default(''),
+    NOTIFICATION_GATEWAY_URL: z
+      .url()
+      .refine(
+        (v) =>
+          new URL(v).protocol === 'https:' &&
+          !new URL(v).username &&
+          !new URL(v).password,
+      )
+      .optional(),
+    NOTIFICATION_GATEWAY_TOKEN: z.string().min(16).optional(),
     SESSION_DAYS: z.coerce.number().int().min(1).max(30).default(7),
     LOCAL_PRIVATE_DIR: z.string().default('.cache/private'),
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
@@ -63,6 +74,12 @@ export const envSchema = z
         code: 'custom',
         path: ['S3_BUCKET'],
         message: 'S3 bucket required',
+      });
+    if (value.NOTIFICATION_GATEWAY_URL && !value.NOTIFICATION_GATEWAY_TOKEN)
+      context.addIssue({
+        code: 'custom',
+        path: ['NOTIFICATION_GATEWAY_TOKEN'],
+        message: 'Notification token required',
       });
     if (value.VERIFICATION_GATEWAY_URL && !value.VERIFICATION_GATEWAY_TOKEN)
       context.addIssue({

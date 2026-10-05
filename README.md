@@ -87,3 +87,10 @@ adapters запрещены при NODE_ENV=production; см. документа
 После Этапа 2 разработка останавливается до отдельного разрешения на Этап 3.
 
 Phase 3 search/product setup, API, privacy, tests and rollback: [docs/PHASE_3_SEARCH_PRODUCT.md](docs/PHASE_3_SEARCH_PRODUCT.md).
+
+Phase 4B professional integrations: see [the implementation report](docs/PHASE4B_REPORT.md)
+for feed contracts, scheduled retrieval, scoped partner tokens, notification delivery,
+local verification and rollback. Run `pnpm worker:professional` alongside the existing
+API/search/media/commerce workers; `pnpm worker:professional --once` runs one bounded
+notification/import pass. External feeds and delivery gateways require explicit
+server-side configuration; local tests do not send real notifications.

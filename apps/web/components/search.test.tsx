@@ -26,8 +26,18 @@ test('loading → empty results and accessible filters', async () => {
   );
   render(<SearchProduct />);
   expect(screen.getByRole('status').textContent).toContain('Загрузка');
+  expect(
+    screen
+      .getByRole('button', { name: 'Сохранить поиск' })
+      .hasAttribute('disabled'),
+  ).toBe(true);
   expect(await screen.findByText(/Объявления не найдены/)).toBeTruthy();
   expect(screen.getByLabelText('Цена до')).toBeTruthy();
+  expect(
+    screen
+      .getByRole('button', { name: 'Сохранить поиск' })
+      .hasAttribute('disabled'),
+  ).toBe(false);
 });
 test('API error is actionable and retry reissues the request', async () => {
   const fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
