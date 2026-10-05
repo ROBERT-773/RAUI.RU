@@ -1,31 +1,37 @@
 # Codex Task Router
 
-This file is the authoritative no-idle execution order after the already completed Phase 2 and Phase 3 work.
+This file is the authoritative no-idle execution order after the completed Phase 2, Phase 3, and Phase 4A work.
 
 ## Current chain
 
-1. Issue #9 — Phase 4
-   - Spec: `docs/PHASE4_SPEC.md`
-   - Branch: `feat/stage-4-monetization-ai-production`
+1. Issue #24 — Phase 4B — Professional tooling, feeds and integrations
+   - Spec: `docs/PHASE4B_PROFESSIONAL_INTEGRATIONS_SPEC.md`
+   - Branch: `feat/phase-4b-professional-integrations`
+   - PR: #28
+   - Continue on this same branch until CI and review are merge-ready.
 
-2. Issue #13 — Release candidate stabilization
+2. Phase 4C
+   - Start only after Phase 4B is merged.
+   - Update from latest `master` before creating the dedicated branch.
+
+3. Issue #13 — Release candidate stabilization
    - Spec: `docs/RC_STABILIZATION_SPEC.md`
    - Branch: `feat/rc-stabilization`
 
-3. Issue #15 — Final production launch gate
+4. Issue #15 — Final production launch gate
    - Spec: `docs/PRODUCTION_LAUNCH_GATE.md`
    - No automatic production deployment.
 
-4. Issue #17 — Post-launch verification
+5. Issue #17 — Post-launch verification
    - Spec: `docs/POST_LAUNCH_VERIFICATION_SPEC.md`
 
-5. Issue #18 — Operations hardening
+6. Issue #18 — Operations hardening
    - Spec: `docs/OPERATIONS_HARDENING_SPEC.md`
 
-6. Issue #19 — Product quality iteration
+7. Issue #19 — Product quality iteration
    - Spec: `docs/PRODUCT_QUALITY_ITERATION_SPEC.md`
 
-7. Issue #20 — Continuous improvement queue
+8. Issue #20 — Continuous improvement queue
    - Spec: `docs/CONTINUOUS_IMPROVEMENT_QUEUE.md`
 
 ## No-idle rule
@@ -58,4 +64,4 @@ A pending CI run, an open PR, or a normal review cycle is not a reason to stop w
 
 ## Completed historical issues
 
-Phase 2 and Phase 3 are complete and should not be selected as new work.
+Phase 2, Phase 3, and Phase 4A are complete and should not be selected as new work. The legacy Issue #9 / `feat/stage-4-monetization-ai-production` route is superseded by the Phase 4A/4B/4C split and must not be selected as current work.
