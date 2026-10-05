@@ -56,6 +56,35 @@ CREATE INDEX IF NOT EXISTS commerce_promotion_activations_listing_idx
 CREATE INDEX IF NOT EXISTS commerce_promotion_activations_account_idx
   ON commerce_promotion_activations(account_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS advertising_placements (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text NOT NULL UNIQUE,
+  description text NOT NULL DEFAULT '',
+  enabled boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS advertising_campaigns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id uuid,
+  placement_id uuid NOT NULL REFERENCES advertising_placements(id),
+  name text NOT NULL,
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  budget_minor bigint CHECK (budget_minor IS NULL OR budget_minor >= 0),
+  spent_minor bigint NOT NULL DEFAULT 0 CHECK (spent_minor >= 0),
+  geo_target jsonb NOT NULL DEFAULT '{}'::jsonb,
+  category_target jsonb NOT NULL DEFAULT '{}'::jsonb,
+  creative_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL CHECK (status IN ('draft','scheduled','active','paused','ended')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at > starts_at),
+  CHECK (budget_minor IS NULL OR spent_minor <= budget_minor)
+);
+
+CREATE INDEX IF NOT EXISTS advertising_campaigns_placement_status_idx
+  ON advertising_campaigns(placement_id, status, starts_at, ends_at);
+
 CREATE TABLE IF NOT EXISTS commerce_payment_events (
   id bigserial PRIMARY KEY,
   payment_order_id uuid NOT NULL REFERENCES commerce_payment_orders(id) ON DELETE CASCADE,
