@@ -7,12 +7,12 @@ export const metadata: Metadata = {
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ definition?: string }>;
+  searchParams: Promise<{ definition?: string; mode?: string }>;
 }) {
-  const { definition } = await searchParams;
+  const { definition, mode } = await searchParams;
   let initial: import('@raui/types/product').SearchDefinition = { limit: 20 };
   try {
-    if (definition && definition.length <= 4000) {
+    if (definition && definition.length <= 16000) {
       const value = JSON.parse(definition);
       if (value && typeof value === 'object' && !Array.isArray(value))
         initial = value;
@@ -22,7 +22,10 @@ export default async function Page({
   }
   return (
     <main id="content">
-      <SearchProduct initialDefinition={initial} />
+      <SearchProduct
+        initialDefinition={initial}
+        initialMode={mode === 'map' ? 'map' : 'list'}
+      />
     </main>
   );
 }

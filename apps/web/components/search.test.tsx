@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import SearchProduct from './search';
+vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('next/link', () => ({
   default: ({

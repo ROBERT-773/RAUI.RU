@@ -29,6 +29,17 @@ test('search → filter → detail → favorite and comparison', async ({ page }
   await expect(
     page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
   ).toHaveCount(0);
+  await expect(page).toHaveURL(/\/search\?definition=/);
+  await page.reload();
+  await expect(page.getByLabel('Цена до', { exact: true })).toHaveValue(
+    '15000000',
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toHaveCount(0);
   await page
     .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
     .click();

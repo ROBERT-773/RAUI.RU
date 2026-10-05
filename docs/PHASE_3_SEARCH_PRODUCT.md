@@ -51,6 +51,8 @@ PostgreSQL is authoritative. `public_search_listings` encapsulates the existing 
 - `GET /v1/search/sitemap`: public IDs/dates, bounded at 50,000. This is a sitemap hook; sitemap splitting and content automation remain Phase 4.
 - `POST /v1/geo/layers`: typed boundary/POI provider hook; the default adapter explicitly returns `configured: false` and empty features.
 
+Search filters and map/list mode persist in `/search?definition=...&mode=...`; cursor tokens are excluded from shareable state. The search route is `noindex`, and reload restores filters/results.
+
 OpenAPI includes request contracts. `search/contracts.ts` centralizes extensible filter configuration; per-attribute typed nested clauses and parameterized PG predicates avoid a monolithic hard-coded query. Optional attribute definitions are seeded by migration 002 and feed the advanced filter UI. Extending the initial search attribute set requires adding the code to that registry; index mapping remains stable because nested values use number/keyword/boolean fields.
 
 Public cards are fetched in batches and live filters/authorization/geometry are rechecked in PostgreSQL. Index lag can suppress newly published results until the worker catches up, but cannot return private or newly ineligible listings. Counts/facets are derived estimates and may lag. Cursor pagination is live, without a point-in-time snapshot; concurrent price/publication changes can move entries between pages. Clients must restart a changed search, and expired cursors return 400. Search outages return 503 with an actionable frontend error instead of silently falling back to incompatible database semantics.

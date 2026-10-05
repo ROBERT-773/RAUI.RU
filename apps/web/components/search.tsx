@@ -3,6 +3,7 @@ import { Button } from '@raui/ui';
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
 import AdvancedFilters, { advancedDefinition } from './advanced-filters';
@@ -13,15 +14,18 @@ const MapPanel = dynamic(() => import('./map'), {
 });
 export default function SearchProduct({
   initialDefinition = { limit: 20 },
+  initialMode = 'list',
 }: {
   initialDefinition?: SearchDefinition;
+  initialMode?: 'list' | 'map';
 }) {
+  const router = useRouter();
   const [definition, setDefinition] =
       useState<SearchDefinition>(initialDefinition),
     [page, setPage] = useState<SearchPage | null>(null),
     [error, setError] = useState(''),
     [loading, setLoading] = useState(true),
-    [mode, setMode] = useState<'list' | 'map'>('list'),
+    [mode, setMode] = useState<'list' | 'map'>(initialMode),
     [selected, setSelected] = useState<string[] | null>(null),
     [notice, setNotice] = useState(''),
     [filterCategory, setFilterCategory] = useState(
@@ -47,7 +51,15 @@ export default function SearchProduct({
       active = false;
     };
   }, [definition]);
-  function update(d: SearchDefinition) {
+  function update(d: SearchDefinition, nextMode = mode) {
+    const next = { ...d, cursor: undefined };
+    const query = new URLSearchParams({
+      definition: JSON.stringify(next),
+      mode: nextMode,
+    });
+    const target = '/search?' + query.toString();
+    if (window.location.pathname + window.location.search !== target)
+      router.replace(target, { scroll: false });
     setLoading(true);
     setSelected(null);
     setDefinition({ ...d, cursor: undefined });
@@ -135,7 +147,10 @@ export default function SearchProduct({
         </label>
         <label>
           Сделка
-          <select name="dealType">
+          <select
+            name="dealType"
+            defaultValue={initialDefinition.dealType ?? ''}
+          >
             <option value="">Все сделки</option>
             <option value="sale">Купить</option>
             <option value="long_rent">Снять надолго</option>
@@ -162,19 +177,38 @@ export default function SearchProduct({
         </label>
         <label>
           Город
-          <input name="locality" />
+          <input name="locality" defaultValue={initialDefinition.locality} />
         </label>
         <label>
           Комнат
-          <input name="rooms" type="number" min="0" max="50" />
+          <input
+            name="rooms"
+            defaultValue={
+              typeof initialDefinition.attributes?.rooms === 'object'
+                ? initialDefinition.attributes.rooms.min
+                : undefined
+            }
+            type="number"
+            min="0"
+            max="50"
+          />
         </label>
         <label>
           Площадь от, м²
-          <input name="area" type="number" min="0" />
+          <input
+            name="area"
+            defaultValue={
+              typeof initialDefinition.attributes?.area === 'object'
+                ? initialDefinition.attributes.area.min
+                : undefined
+            }
+            type="number"
+            min="0"
+          />
         </label>
         <label>
           Сортировка
-          <select name="sort">
+          <select name="sort" defaultValue={initialDefinition.sort ?? 'newest'}>
             <option value="newest">Сначала новые</option>
             <option value="price_asc">Дешевле</option>
             <option value="price_desc">Дороже</option>
@@ -194,6 +228,7 @@ export default function SearchProduct({
           aria-pressed={mode === 'list'}
           onClick={() => {
             setMode('list');
+            update({ ...definition }, 'list');
             track({ type: 'mode_changed', mode: 'list' });
           }}
         >
@@ -203,10 +238,13 @@ export default function SearchProduct({
           aria-pressed={mode === 'map'}
           onClick={() => {
             setMode('map');
-            update({
-              ...definition,
-              bounds: definition.bounds ?? [37.3, 55.5, 37.9, 56.0],
-            });
+            update(
+              {
+                ...definition,
+                bounds: definition.bounds ?? [37.3, 55.5, 37.9, 56.0],
+              },
+              'map',
+            );
             track({ type: 'mode_changed', mode: 'map' });
           }}
         >
