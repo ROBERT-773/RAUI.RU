@@ -81,7 +81,7 @@ export class Operations {
       "SELECT count(*) FILTER (WHERE mode='fallback')::integer AS ai_fallbacks,count(*) FILTER (WHERE attempts>0 AND reason='provider_unavailable')::integer AS ai_failures,count(*) FILTER (WHERE unknown_cost_attempts>0)::integer AS ai_uncertain FROM ai_usage WHERE created_at>now()-interval '1 hour'",
     );
     const payments = await this.db.rows<{ failed: number }>(
-      "SELECT count(*) FILTER (WHERE state='failed')::integer AS failed FROM commerce_payment_orders WHERE created_at>now()-interval '1 hour'",
+      "SELECT count(DISTINCT payment_order_id)::integer AS failed FROM commerce_payment_events WHERE to_state='failed' AND from_state IS DISTINCT FROM 'failed' AND created_at>now()-interval '1 hour'",
     );
     return {
       dependencies,

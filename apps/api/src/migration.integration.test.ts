@@ -73,6 +73,14 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       "UPDATE search_jobs SET updated_at=now()-interval '10 minutes' WHERE listing_id=$1",
       [listing],
     );
+    await pool.query(
+      'INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,\'created\',\'{"fixture":"upgrade"}\')',
+      [listing, user],
+    );
+    await pool.query(
+      'INSERT INTO notification_preferences(user_id,in_app,email,sms,push,transactional) VALUES($1,false,true,false,true,false)',
+      [user],
+    );
     const snapshot = async () => {
       const tables = (
         await pool.query(
@@ -81,9 +89,13 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       ).rows;
       const facts = [];
       for (const { tablename } of tables) {
+        const data =
+          tablename === 'search_jobs'
+            ? "to_jsonb(t)-'enqueued_at'"
+            : 'to_jsonb(t)';
         const rows = (
           await pool.query(
-            `SELECT to_jsonb(t)-'enqueued_at' AS data FROM public.${quote(tablename)} t ORDER BY (to_jsonb(t)-'enqueued_at')::text`,
+            `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
           )
         ).rows;
         facts.push({
@@ -120,7 +132,22 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
     await migrate(pool);
+    const upgradedLedger = (
+      await pool.query('SELECT * FROM schema_migrations ORDER BY name')
+    ).rows;
+    assert.equal(upgradedLedger.length, 12);
+    assert.equal(upgradedLedger[11].name, '012_search_queue_observability.sql');
+    assert.equal(
+      upgradedLedger[11].checksum,
+      createHash('sha256')
+        .update(await readFile('migrations/012_search_queue_observability.sql'))
+        .digest('hex'),
+    );
     await migrate(pool);
+    assert.deepEqual(
+      (await pool.query('SELECT * FROM schema_migrations ORDER BY name')).rows,
+      upgradedLedger,
+    );
     assert.deepEqual(await snapshot(), before);
     assert.deepEqual(
       (
@@ -137,6 +164,14 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     assert.equal(queue.preserved, true);
     await assert.rejects(pool.query('UPDATE audit_events SET action=action'));
     await assert.rejects(pool.query('DELETE FROM audit_events'));
+    await assert.rejects(
+      pool.query('UPDATE listing_history SET event=event'),
+      /History is append-only/,
+    );
+    await assert.rejects(
+      pool.query('DELETE FROM listing_history'),
+      /History is append-only/,
+    );
     const next = (
       await pool.query(
         "INSERT INTO audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'rc.after-upgrade','listing',$2) RETURNING id",

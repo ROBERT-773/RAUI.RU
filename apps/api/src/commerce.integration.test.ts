@@ -23,6 +23,7 @@ import {
 } from './modules/commerce/commerce';
 import { CommerceFeatures } from './modules/commerce/features';
 import { PaymentReconciliation } from './modules/commerce/reconciliation';
+import { Operations } from './modules/operations/operations';
 class TestPaymentProvider extends PaymentProvider {
   readonly name = 'test';
   readonly configured = true;
@@ -910,6 +911,79 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
               "SELECT id FROM audit_events WHERE action='commerce.ad.click'",
             )
           ).length >= 2,
+        );
+      },
+    );
+    await t.test(
+      'Payment failure alerts include late transitions and exclude historical same-state events',
+      async () => {
+        const operations = app.get(Operations);
+        const before = (await operations.snapshot()).failures.payments;
+        const order = await commerce.createOrder(
+          owner,
+          'operations-late-failure-001',
+          orderBody,
+        );
+        const id = String(order.id);
+        await commerce.startPayment(owner, id);
+        await pool.query(
+          "UPDATE commerce_payment_orders SET created_at=now()-interval '2 hours' WHERE id=$1",
+          [id],
+        );
+        await commerce.applyPaymentEvent(
+          id,
+          'rc-late-failure-001',
+          'failed',
+          'rc',
+          {},
+        );
+        assert.equal(
+          (await operations.snapshot()).failures.payments,
+          before + 1,
+        );
+        await commerce.applyPaymentEvent(
+          id,
+          'rc-late-failure-001',
+          'failed',
+          'rc',
+          {},
+        );
+        await commerce.applyPaymentEvent(
+          id,
+          'rc-same-failure-001',
+          'failed',
+          'rc',
+          {},
+        );
+        assert.equal(
+          (await operations.snapshot()).failures.payments,
+          before + 1,
+        );
+        const historical = await commerce.createOrder(
+          owner,
+          'operations-historical-failure-001',
+          orderBody,
+        );
+        const historicalId = String(historical.id);
+        await commerce.startPayment(owner, historicalId);
+        await pool.query(
+          "UPDATE commerce_payment_orders SET created_at=now()-interval '2 hours',state='failed' WHERE id=$1",
+          [historicalId],
+        );
+        await pool.query(
+          "INSERT INTO commerce_payment_events(payment_order_id,from_state,to_state,source,event_key,created_at) VALUES($1,'pending','failed','rc','rc-historical-failure-001',now()-interval '2 hours')",
+          [historicalId],
+        );
+        await commerce.applyPaymentEvent(
+          historicalId,
+          'rc-historical-noop-001',
+          'failed',
+          'rc',
+          {},
+        );
+        assert.equal(
+          (await operations.snapshot()).failures.payments,
+          before + 1,
         );
       },
     );

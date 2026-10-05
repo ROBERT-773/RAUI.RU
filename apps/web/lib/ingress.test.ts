@@ -113,13 +113,20 @@ test('Production SSR detail and sitemap sign every internal API request', async 
   expect(requests).toBe(2);
 });
 test('Sitemap never exceeds the fifty-thousand URL protocol limit', async () => {
-  const rows = Array.from({ length: 50000 }, (_, n) => ({
+  const rows = Array.from({ length: 50001 }, (_, n) => ({
     id: `${n.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`,
     published_at: '2026-10-05T00:00:00.000Z',
   }));
   expect(() => sitemapPage(rows, true)).toThrow('Sitemap page invalid');
   const first = sitemapPage(rows.slice(0, 49999), true);
   expect(first.match(/<url>/g)).toHaveLength(50000);
+  const second = sitemapPage(rows.slice(49999), false);
+  expect(second.match(/<url>/g)).toHaveLength(2);
+  const ids = [
+    ...first.matchAll(/\/listings\/([^<]+)/g),
+    ...second.matchAll(/\/listings\/([^<]+)/g),
+  ].map((match) => match[1]);
+  expect(ids).toEqual(rows.map((row) => row.id));
   expect(sitemapPage(rows.slice(0, 49999), false).match(/<url>/g)).toHaveLength(
     49999,
   );

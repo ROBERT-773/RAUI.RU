@@ -95,11 +95,11 @@ image merely because its DB reader is compatible.
    first-enqueue reconstruction. A timeout rolls the migration back for a later
    window; do not increase limits without measurements.
 4. Start the compatible API/web behind private ingress, before public traffic.
-   Check readiness, auth/CSRF, signed proxy and SSR, sitemap index/shards and built
-   smoke. The new queue metric requires 012; do not start that reader before the
+   Check readiness, auth/CSRF, signed proxy and SSR, sitemap index/shards and
+   worker-independent smoke. The new queue metric requires 012; do not start that reader before the
    migration succeeds.
 5. Start compatible media/search/commerce/professional/trust workers. Run bounded
-   reconciliation and smoke, observe actual queue progress, lease recovery and
+   reconciliation and full core/search smoke, observe actual queue progress, lease recovery and
    deduplicated effects. Keep feature flags off while confirming fallback paths.
 6. Switch staging ingress, observe the recorded thresholds, then separately
    enable approved flags. This sequence does not authorize production traffic.
@@ -117,3 +117,10 @@ portfolio membership prevents duplicate links, but an additional audit record
 can appear. Preserve the old ledger, and let clients keep their original keys.
 Sitemap pages are live eligible reads, without a multi-request snapshot guarantee;
 concurrent publication changes can alter boundaries until the next index fetch.
+
+Use a bounded isolated staging workload and an explicit operator time limit for
+reconciliation: the current `--once` worker can drain until the queue is empty.
+The repository core/search smoke scripts write development fixtures and require
+local adapters; do not run them unchanged against real provider bindings or a
+production-shaped signed ingress. Adapt sandbox fixture authentication and
+identity explicitly before executing corresponding staging acceptance checks.
