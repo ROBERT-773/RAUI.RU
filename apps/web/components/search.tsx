@@ -1,6 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -20,6 +20,7 @@ export default function SearchProduct({
   initialMode?: 'list' | 'map';
 }) {
   const router = useRouter();
+  const [navigationPending, startNavigation] = useTransition();
   const [definition, setDefinition] =
       useState<SearchDefinition>(initialDefinition),
     [page, setPage] = useState<SearchPage | null>(null),
@@ -59,7 +60,7 @@ export default function SearchProduct({
     });
     const target = '/search?' + query.toString();
     if (window.location.pathname + window.location.search !== target)
-      router.replace(target, { scroll: false });
+      startNavigation(() => router.replace(target, { scroll: false }));
     setLoading(true);
     setSelected(null);
     setDefinition({ ...d, cursor: undefined });
@@ -250,7 +251,9 @@ export default function SearchProduct({
         >
           Карта
         </Button>
-        <Button onClick={save}>Сохранить поиск</Button>
+        <Button onClick={save} disabled={loading || navigationPending}>
+          Сохранить поиск
+        </Button>
         <Link href="/account">Избранное и аккаунт</Link>
       </div>
       {notice && <p role="status">{notice}</p>}

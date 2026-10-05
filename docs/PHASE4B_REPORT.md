@@ -47,19 +47,19 @@ Existing `/v1/organizations/{organizationId}/feeds` and professional/partner rou
 
 ## Verification
 
-Required gates are retained, including mandatory Prettier and the full existing GitHub Actions browser matrix.
+Required gates are retained, including mandatory Prettier and the full existing GitHub Actions browser matrix. An E2E race in saved-search confirmation was fixed: saving waits until navigation/results finish; the scenario verifies the committed filtered route before saving. Concurrent partner requests also have a PostgreSQL regression test for lock-upgrade deadlocks.
 
 - `pnpm lint` — ESLint + Prettier.
 - `pnpm typecheck` — all strict TypeScript workspaces.
 - `pnpm test` — 29 API, 3 web, 1 UI, 1 Python tests.
-- `pnpm test:integration` — 61 node-reported tests across core (15), search (11), commerce (15), professional (20), including parent tests. Each suite uses a fresh local database removed on completion.
+- `pnpm test:integration` — 62 node-reported tests across core (15), search (11), commerce (15), professional (21), including parent tests. Each suite uses a fresh local database removed on completion.
 - `pnpm build` — API and optimized Next.js artifacts.
 - `pnpm db:migrate` — local database only.
 - `pnpm smoke`, `pnpm smoke:core`, `pnpm search:reconcile`, `pnpm smoke:search` — running built API/web/media artifacts and real local services.
 - `pnpm worker:commerce --once`, `pnpm worker:professional --once` — actual standalone worker bootstrap/execution.
 - `CHROMIUM_EXECUTABLE=/usr/bin/chromium pnpm test:e2e` — 12 desktop/Android Chromium flows locally; remote CI retains the broader browser matrix.
 
-Professional acceptance specifically covers duplicate/invalid dry-run, category/attribute validation, upsert replay and identity, cross-feed references, active-offer protection, concurrent enqueue/FIFO, portfolio rollback/member permissions, every developer hierarchy level, key hash/one-time reveal/scopes/rate/expiry/revocation/membership, cross-organization denial, scheduled imports/backoff/DLQ/admin retry, stale import lease, product outbox bridge/concurrent deduplication, preference suppression, unconfigured adapter behavior, notification DLQ/fencing, OpenAPI and immutable admin audit.
+Professional acceptance specifically covers duplicate/invalid dry-run, category/attribute validation, upsert replay and identity, cross-feed references, active-offer protection, concurrent enqueue/FIFO, portfolio rollback/member permissions, every developer hierarchy level, key hash/one-time reveal/scopes/rate/expiry/revocation/membership/concurrent usage, cross-organization denial, scheduled imports/backoff/DLQ/admin retry, stale import lease, product outbox bridge/concurrent deduplication, preference suppression, unconfigured adapter behavior, notification DLQ/fencing, OpenAPI and immutable admin audit.
 
 ## Rollback and next gate
 

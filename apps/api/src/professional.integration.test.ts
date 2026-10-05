@@ -705,6 +705,42 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'Concurrent partner calls serialize key usage without lock-upgrade deadlocks',
+      async () => {
+        const client = await platform.createPartnerClient(
+          actors[0]!,
+          org,
+          {
+            name: 'Concurrent reader',
+            scopes: ['listings:read'],
+            requestsPerMinute: 10,
+          },
+          token(),
+        );
+        const responses = await Promise.all(
+          Array.from({ length: 4 }, () =>
+            call(
+              '/v1/partner/listings',
+              'GET',
+              undefined,
+              0,
+              undefined,
+              client.token!,
+            ),
+          ),
+        );
+        assert.deepEqual(
+          responses.map((r) => r.status),
+          [200, 200, 200, 200],
+        );
+        const [usage] = await db.rows<{ count: number }>(
+          'SELECT count FROM partner_client_usage WHERE client_id=$1',
+          [client.id],
+        );
+        assert.equal(usage!.count, 4);
+      },
+    );
+    await t.test(
       'Partner feeds:write cannot escape its organization and revocation is audited',
       async () => {
         await pool.query(

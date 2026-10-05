@@ -296,7 +296,7 @@ export class ProfessionalPlatform {
         requests_per_minute: number;
         created_by: string;
       }>(
-        `SELECT k.id,k.organization_id,k.scopes,k.requests_per_minute,k.created_by FROM partner_clients k JOIN organizations o ON o.id=k.organization_id JOIN memberships m ON m.organization_id=k.organization_id AND m.user_id=k.created_by JOIN users u ON u.id=k.created_by WHERE k.token_digest=$1 AND k.active AND (k.expires_at IS NULL OR k.expires_at>now()) AND o.active AND m.active AND m.role IN ('owner','admin') AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL FOR SHARE OF k,o,m`,
+        `SELECT k.id,k.organization_id,k.scopes,k.requests_per_minute,k.created_by FROM partner_clients k JOIN organizations o ON o.id=k.organization_id JOIN memberships m ON m.organization_id=k.organization_id AND m.user_id=k.created_by JOIN users u ON u.id=k.created_by WHERE k.token_digest=$1 AND k.active AND (k.expires_at IS NULL OR k.expires_at>now()) AND o.active AND m.active AND m.role IN ('owner','admin') AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL FOR UPDATE OF k FOR SHARE OF o,m`,
         [hash(raw)],
         sql,
       );
