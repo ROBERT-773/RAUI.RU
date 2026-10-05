@@ -61,6 +61,9 @@ test('AI retries are bounded, timeouts abort and provider errors are sanitized',
   assert.equal(answer.reason, 'provider_unavailable');
   assert.equal(calls, 2);
   assert.equal(aborted, true);
+  assert.equal(answer.costMicros, 0);
+  assert.equal(answer.inputTokens, 0);
+  assert.equal(answer.outputTokens, 0);
   assert.ok(!JSON.stringify(answer).includes('secret'));
 });
 test('Invalid or fabricated provider facts fail closed and kill switch overrides in-flight replies', async () => {
