@@ -1,4 +1,8 @@
 import {
+  paidPlacementProjection,
+  PaidPlacementSignal,
+} from '../commerce/placements';
+import {
   Body,
   Controller,
   Get,
@@ -11,9 +15,9 @@ import { z } from 'zod';
 import { Public, parse, hash, uuid } from '../../common/security';
 import { Database } from '../database/database';
 import {
-  CommerceModule,
+  PaidPlacementModule,
   PaidPlacementService,
-} from '../commerce/commerce';
+} from '../commerce/placements';
 import { SearchIndex, listingMapping } from './index';
 import {
   searchSchema,
@@ -153,10 +157,11 @@ export class Search {
     const assets = rows.length
       ? await this.db.rows<{
           listing_id: string;
-          id: string;
+          id: string | null;
+          paidPlacement: PaidPlacementSignal | null;
           variants: Record<string, unknown>;
         }>(
-          "SELECT DISTINCT ON(listing_id) listing_id,id,variants FROM media WHERE listing_id=ANY($1::uuid[]) AND state='ready' ORDER BY listing_id,created_at,id",
+          `SELECT candidate.listing_id,m.id,m.variants,${paidPlacementProjection} AS "paidPlacement" FROM unnest($1::uuid[]) AS candidate(listing_id) LEFT JOIN LATERAL (SELECT id,variants FROM media WHERE listing_id=candidate.listing_id AND state='ready' ORDER BY created_at,id LIMIT 1) m ON true`,
           [rows.map((r) => r.id)],
         )
       : [];
@@ -166,14 +171,16 @@ export class Search {
       return {
         ...row,
         media: assets
-          .filter((a) => a.listing_id === row.id)
+          .filter((a) => a.listing_id === row.id && a.id !== null)
           .slice(0, 1)
           .map((a) => ({ id: a.id, url: '/v1/media/' + a.id + '/small' })),
       };
     });
     return this.paidPlacements.attach(
       organic,
-      await this.paidPlacements.signals(organic.map((row) => row.id)),
+      assets.flatMap((asset) =>
+        asset.paidPlacement ? [asset.paidPlacement] : [],
+      ),
     );
   }
   async validatePolygon(input: SearchInput) {
@@ -444,7 +451,7 @@ export class SearchController {
   }
 }
 @Module({
-  imports: [CommerceModule],
+  imports: [PaidPlacementModule],
   controllers: [SearchController],
   providers: [Search, SearchIndex],
   exports: [Search, SearchIndex],

@@ -25,7 +25,8 @@
     "search:reindex": "pnpm --filter @raui/api worker:search --reindex --once",
     "search:reconcile": "pnpm --filter @raui/api worker:search --reconcile --once",
     "test:e2e": "pnpm --filter @raui/api test:e2e",
-    "smoke:search": "node scripts/search-smoke.mjs"
+    "smoke:search": "node scripts/search-smoke.mjs",
+    "worker:commerce": "pnpm --filter @raui/api worker:commerce"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

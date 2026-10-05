@@ -1,99 +1,134 @@
 # Phase 4A Report — Commerce and Monetization
 
-## Implementation summary
+## Scope and implementation
 
-Phase 4A now includes:
+Work continues exclusively in `feat/phase-4a-commerce` and PR #27. This block
+implements commerce from `PHASE4A_COMMERCE_SPEC.md`; feeds, AI and production
+hardening remain separate phases. No production deployment or direct master
+update was performed.
 
-- provider-agnostic payment domain;
-- explicit payment state machine;
-- idempotent payment-order creation;
-- replay-safe payment events;
-- webhook verification boundary through `PaymentProvider`;
-- versioned promotion products;
-- promotion activation lifecycle;
-- paid-placement metadata isolated from organic search ordering;
-- advertising placements and campaigns separated from listing search;
-- default-off behavior for risky commercial integrations.
+The Prettier failures reported by RAUI CI #51 have been corrected. Formatting
+remains part of the mandatory `pnpm lint` gate.
 
-## Schema changes
+Delivered:
 
-Migration `003_commerce.sql` adds:
+- account-owned invoice/payment orders with concurrent idempotent creation;
+- provider start using the order UUID as the provider idempotency key;
+- explicit payment state machine and append-only payment events;
+- original-byte webhook verification, provider/order/amount/currency binding,
+  replay detection and rejection of changed event payloads;
+- provider reconciliation with durable jobs, bounded calls, leases, fencing,
+  retry/backoff, dead-letter status and audited administrator retry;
+- versioned promotion products, purchase eligibility/ownership checks, exact
+  captured-payment matching and single-use paid activation;
+- scheduled activation, automatic expiry, idempotent cancellation and audited
+  administrator revocation;
+- catalog enable/disable controls that preserve already purchased entitlements;
+- paid metadata attached after organic ranking, with deterministic selection of
+  the highest-priority signal and no additional search database round trips;
+- isolated advertising placements/campaigns, validated targeting/creative
+  metadata and campaign-owned impression/click events;
+- transactional, idempotent advertising counters and server-priced spend,
+  including concurrent budget enforcement;
+- persisted default-off commercial flags, optimistic updates and audit;
+- OpenAPI contracts and separate worker startup coverage.
 
-- `commerce_payment_orders`;
-- `commerce_payment_events`;
-- `commerce_promotion_products`;
-- `commerce_promotion_activations`;
-- `advertising_placements`;
-- `advertising_campaigns`.
+## Schema and migration safety
 
-The schema enforces unique idempotency keys per account, replay protection for payment events, bounded state values, promotion validity windows, and budget constraints.
+Existing migration `003_commerce.sql` is unchanged.
 
-## Provider boundaries
+Additive migration `004_commerce_reconciliation.sql` adds:
 
-`PaymentProvider` is the payment-provider contract.
+- `commerce_feature_flags`;
+- `commerce_reconciliation_jobs`;
+- impression/click counters and unit costs on `advertising_campaigns`;
+- append-only `advertising_events`;
+- append-only enforcement for `commerce_payment_events`;
+- uniqueness of non-null promotion `payment_order_id`;
+- account/listing/organization foreign keys using `NOT VALID` for legacy rows.
 
-The default implementation is intentionally unconfigured:
+The foreign keys enforce new writes immediately. Legacy rows require a separate
+backfill/validation pass before production readiness; this migration deliberately
+does not delete or rewrite historical data.
 
-- payment creation fails closed;
-- refunds fail closed;
-- webhook signature verification returns false;
-- no provider-specific payment logic is embedded in the domain.
+Before applying migration 004 to a populated staging database, inspect duplicate
+non-null activation payment IDs and orphan account/listing/organization references.
+Duplicate paid activations must be resolved through an approved data-repair plan;
+there is no automatic deletion or irreversible cleanup.
 
-Real provider credentials and implementation remain production prerequisites.
+The migration runner now executes the contents of older outer `BEGIN/COMMIT`
+wrappers inside its own transaction. Checksums still cover the original source
+bytes. An integration test proves that failure rolls back both schema changes
+and the migration record.
 
-## Search and ranking safety
+## Provider and worker contracts
 
-Paid promotion metadata is attached only after the organic result order is resolved. Promotion priority does not reorder organic results in the Phase 4A implementation.
+`PaymentProvider` remains the vendor boundary. A configured adapter supplies:
 
-Advertising campaigns are stored and queried independently from search/listing relevance logic.
+- stable provider name and `configured=true`;
+- idempotent `createPayment`, honoring the supplied `AbortSignal`;
+- `lookupPayment`, returning provider ID, state, amount in minor units and currency;
+- provider-specific signature verification and webhook normalization;
+- the existing refund adapter contract.
 
-## Tests added
+The shipped adapter is unconfigured and fails closed. Live card/SBP integration,
+fiscal receipts and operational refund execution need a real provider adapter and
+sandbox certification before commercial enablement. No live charges or refunds
+were used to validate this work. Card data and provider secrets are not stored.
 
-Unit coverage includes:
+`verifyPaymentSignature` provides an optional timestamped HMAC gateway contract,
+constant-time comparison and a five-minute signature window. Other provider
+protocols stay behind `verifyWebhook`.
 
-- payment state transitions;
-- idempotency-key validation;
-- payment event-key validation;
-- promotion product validation;
-- promotion activation lifecycle;
-- deterministic promotion windows;
-- paid placement preserving organic order.
+Run `pnpm worker:commerce` after migrations. `--once` performs one bounded
+reconciliation iteration and promotion lifecycle sweep. Continuous workers claim
+jobs with `SKIP LOCKED`; network calls happen outside database transactions.
+Provider calls have a five-second deadline, reconciliation leases last thirty
+seconds, successful checks recur after five minutes, and eight failures move a
+job into the dead-letter state. Admin retry is idempotent and audited.
 
-Integration coverage includes:
+Payments off blocks new orders/provider start and pauses reconciliation calls.
+Authenticated provider webhooks still record settlement facts while payments are
+off. Promotions off suppresses purchases and paid metadata; advertising off
+suppresses serving and measurement mutations. Promotion expiry continues even
+when commercial flags are off.
 
-- idempotent payment-order creation;
-- conflicting idempotency payload rejection;
-- replay-safe payment events;
-- invalid payment transitions;
-- webhook signature rejection and accepted replay-safe event processing;
-- promotion activation requiring an enabled product and captured payment.
+Advertising measurement is currently a verified-admin/server ingestion API.
+Anonymous browser events cannot mutate billable counters. Unit costs are taken
+from campaign configuration, never from the incoming event body.
 
-The integration runner was updated to include the commerce suite, and the existing migration-count expectation was updated for migration 003.
+## Verification evidence
 
-## Security properties
+Local checks run in the published cloud environment:
 
-- webhook events fail closed without provider verification;
-- terminal payment/promotion states reject invalid transitions;
-- repeated provider events are not re-applied;
-- payment card data is not stored;
-- risky integrations remain provider/configuration dependent rather than silently active.
+- `pnpm lint`: ESLint and mandatory Prettier;
+- `pnpm typecheck`: all strict TypeScript workspaces;
+- `pnpm test`: API, web, UI and Python suites;
+- `pnpm test:integration`: isolated PostgreSQL/PostGIS/OpenSearch databases;
+- `pnpm build`: API and optimized Next.js artifacts;
+- `pnpm db:migrate`: local development database;
+- `pnpm smoke`, `pnpm smoke:core`, `pnpm smoke:search`: built local services;
+- `pnpm worker:commerce --once`, `pnpm search:reconcile`: separate built workers;
+- `CHROMIUM_EXECUTABLE=/usr/bin/chromium pnpm test:e2e`: twelve desktop/mobile
+  Chromium browser regressions.
 
-## Known risks and remaining work
+Integration coverage includes monetary binding, missed webhook repair, replay
+conflicts, concurrent creation/counters/budgets, worker lease loss, DLQ retry,
+flag behavior, admin authorization/audit, paid entitlement preservation,
+scheduled activation/expiry and transaction-wrapped migration atomicity. Existing
+Phase 2/3 regressions include the unchanged three-query search budget.
 
-Before production use:
+Local browser coverage uses the installed Chromium. GitHub Actions retains the
+full Chromium/Firefox/WebKit matrix; local results do not substitute for the CI
+result on the pushed head. CI also smoke-tests the built commerce worker.
 
-- implement a real payment-provider adapter;
-- configure secrets outside the repository;
-- add reconciliation against the real provider;
-- connect scheduled promotion expiry to a worker/cron execution path;
-- add spend/impression/click mutation paths for advertising;
-- validate campaign targeting against real catalog/geo semantics;
-- run full load/security/release-candidate validation in later phases.
+## Rollback and next gate
 
-## Rollback / forward-fix
+Disable commercial flags, stop the commerce worker if needed, and roll back the
+application artifact while retaining the additive schema and audit records.
+After commercial data exists, use forward-fix migrations rather than dropping
+payment/event tables. Keep the retained local volumes and existing `.env`.
 
-Phase 4A is additive. Application rollback can stop using the new commerce module while retaining the new tables. A schema rollback should only be considered before production data exists; after data exists, use forward-fix migrations.
-
-## Release status
-
-This report does not authorize production deployment. Phase 4A should merge only after all required CI checks are green.
+PR #27 must have green required CI checks and complete review before merge.
+After confirmed merge, update from fresh master and continue Issue #24 / Phase
+4B. This report does not authorize production deployment.

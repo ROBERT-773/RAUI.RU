@@ -45,10 +45,7 @@ test('promotion windows are deterministic from an explicit start time', () => {
   const window = promotionWindow('2026-10-05T10:00:00.000Z', 24);
   assert.equal(window.startsAt, '2026-10-05T10:00:00.000Z');
   assert.equal(window.endsAt, '2026-10-06T10:00:00.000Z');
-  assert.throws(
-    () => promotionWindow('not-a-date', 24),
-    BadRequestException,
-  );
+  assert.throws(() => promotionWindow('not-a-date', 24), BadRequestException);
   assert.throws(
     () => promotionWindow('2026-10-05T10:00:00.000Z', 0),
     BadRequestException,
@@ -109,4 +106,42 @@ test('paid placement metadata never reorders organic search results', () => {
   );
   assert.equal(result[2]!.paidPlacement?.priority, 999);
   assert.equal(result[0]!.paidPlacement, null);
+});
+
+test('highest paid signal wins independently of input order and currency amounts stay exact', () => {
+  const high = {
+      listingId: 'a',
+      code: 'vip',
+      kind: 'vip' as const,
+      priority: 100,
+      endsAt: '2026-10-06T10:00:00.000Z',
+    },
+    low = { ...high, code: 'highlighted', priority: 10 };
+  for (const signals of [
+    [high, low],
+    [low, high],
+  ])
+    assert.equal(
+      attachPaidPlacementSignals([{ id: 'a' }], signals)[0]!.paidPlacement!
+        .priority,
+      100,
+    );
+  assert.throws(
+    () =>
+      validatePromotionProduct({
+        code: 'vip_24h',
+        kind: 'vip',
+        priceMinor: Number.MAX_SAFE_INTEGER + 1,
+        currency: 'RUB',
+        durationHours: 24,
+        priority: 1,
+        enabled: true,
+        version: 1,
+      }),
+    BadRequestException,
+  );
+  assert.throws(
+    () => promotionWindow(undefined, Number.MAX_SAFE_INTEGER),
+    BadRequestException,
+  );
 });

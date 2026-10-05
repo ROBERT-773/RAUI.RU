@@ -35,7 +35,11 @@ export async function migrate(
         await sql.query(
           "SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='60s'",
         );
-        await sql.query(body);
+        // Older checked-in SQL includes an outer BEGIN/COMMIT. Execute its
+        // contents within our transaction so schema and checksum stay atomic.
+        // The checksum always covers the original immutable source bytes.
+        const outer = body.trim().match(/^BEGIN;([\s\S]*)COMMIT;$/i);
+        await sql.query(outer ? outer[1]! : body);
         await sql.query(
           'INSERT INTO schema_migrations(name,checksum) VALUES($1,$2)',
           [name, checksum],
