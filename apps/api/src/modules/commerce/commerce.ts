@@ -14,6 +14,7 @@ import {
   Headers,
   Injectable,
   Module,
+  Param,
   Post,
 } from '@nestjs/common';
 import { z } from 'zod';
@@ -56,6 +57,31 @@ export function normalizePaymentEventKey(value: unknown): string {
   if (!/^[A-Za-z0-9._:-]{8,160}$/.test(key))
     throw new BadRequestException('Invalid payment event key');
   return key;
+}
+
+export type PromotionActivationState =
+  | 'scheduled'
+  | 'active'
+  | 'expired'
+  | 'cancelled';
+
+export function assertPromotionActivationTransition(
+  from: PromotionActivationState,
+  to: PromotionActivationState,
+): void {
+  const allowed: Record<
+    PromotionActivationState,
+    readonly PromotionActivationState[]
+  > = {
+    scheduled: ['active', 'cancelled'],
+    active: ['expired', 'cancelled'],
+    expired: [],
+    cancelled: [],
+  };
+  if (!allowed[from].includes(to))
+    throw new ConflictException(
+      `Invalid promotion transition: ${from} -> ${to}`,
+    );
 }
 
 export function promotionWindow(
@@ -430,6 +456,46 @@ export class CommerceService {
     );
   }
 
+  async transitionActivation(
+    actor: Actor,
+    activationId: string,
+    toState: PromotionActivationState,
+  ) {
+    return this.db.transaction(async (sql) => {
+      const [activation] = await this.db.rows<{
+        status: PromotionActivationState;
+      }>(
+        `SELECT status
+         FROM commerce_promotion_activations
+         WHERE id=$1 AND account_id=$2
+         FOR UPDATE`,
+        [activationId, actor.id],
+        sql,
+      );
+      if (!activation)
+        throw new BadRequestException('Unknown promotion activation');
+      assertPromotionActivationTransition(activation.status, toState);
+      const [updated] = await this.db.rows(
+        `UPDATE commerce_promotion_activations
+         SET status=$3
+         WHERE id=$1 AND account_id=$2
+         RETURNING id,listing_id,payment_order_id,starts_at,ends_at,status`,
+        [activationId, actor.id, toState],
+        sql,
+      );
+      return updated;
+    });
+  }
+
+  async expirePromotions() {
+    return this.db.rows(
+      `UPDATE commerce_promotion_activations
+       SET status='expired'
+       WHERE status='active' AND ends_at<=now()
+       RETURNING id,listing_id,status`,
+    );
+  }
+
   async createPromotion(body: unknown) {
     const product = this.policy.promotion(parse(promotionInput, body));
     const [row] = await this.db.rows(
@@ -492,6 +558,14 @@ export class CommerceController {
     @Body() body: unknown,
   ) {
     return this.commerce.activatePromotion(actor, body);
+  }
+
+  @Post('promotions/activations/:id/cancel')
+  cancelActivation(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+  ) {
+    return this.commerce.transitionActivation(actor, id, 'cancelled');
   }
 
   @AdminOnly()
