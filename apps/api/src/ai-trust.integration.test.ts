@@ -383,7 +383,10 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         const confirmed = await call(
           '/v1/admin/trust/candidates/' + candidates[0].id + '/decision',
           'POST',
-          { decision: 'confirmed_duplicate', reason: 'Confirmed duplicate for review only' },
+          {
+            decision: 'confirmed_duplicate',
+            reason: 'Confirmed duplicate for review only',
+          },
           2,
           token(),
         );
@@ -400,7 +403,10 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         const stale = await call(
           '/v1/admin/trust/candidates/' + candidates[0].id + '/decision',
           'POST',
-          { decision: 'distinct', reason: 'Attempt against stale candidate snapshot' },
+          {
+            decision: 'distinct',
+            reason: 'Attempt against stale candidate snapshot',
+          },
           2,
           token(),
         );
