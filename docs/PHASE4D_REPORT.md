@@ -84,6 +84,12 @@ before the fix. Configuration validation and cookie issuance now share the same
 production predicate; the HTTP test checks both marker combinations and restores
 its synthetic configuration afterward. A read-only security review found no
 blocker in this correction. The updated head must pass mandatory CI before merge.
+The first cookie-fix CI run (37347596475) passed lint/types/unit/security/build
+and integration gates but failed the E2E step. Cloud access to detailed job-log
+downloads is denied. CI now uses Playwright's GitHub annotations and bounded
+preflight-stage annotations to expose the failure without publishing credentials
+or raw service logs. No assertion, browser project or performance threshold was
+disabled; current-head validation remains required.
 Local Compose services were stopped without removing persistent volumes. The
 cloud setup install/start instructions were updated as a saved configuration
 draft; publication is a separate environment action, not performed here.

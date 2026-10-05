@@ -36,6 +36,7 @@ const index = new SearchIndex(),
   children = [];
 const directory = resolve('../../.cache');
 await mkdir(directory, { recursive: true });
+let stage = 'fixtures';
 function start(args, cwd, label) {
   const child = spawn(process.execPath, args, {
     cwd,
@@ -115,6 +116,7 @@ try {
     resolve('../web'),
     'e2e-web',
   );
+  stage = 'service-readiness';
   for (const url of [
     'http://127.0.0.1:3101/health',
     'http://127.0.0.1:3100/health',
@@ -134,11 +136,13 @@ try {
     }
     if (!ready) throw new Error('E2E service readiness failed');
   }
+  stage = 'load';
   await measureLoad(
     'http://127.0.0.1:3101',
     rows[0].id,
     resolve(directory, 'phase4d-load.json'),
   );
+  stage = 'browser-regression';
   const child = spawn(
     process.execPath,
     ['node_modules/@playwright/test/cli.js', 'test'],
@@ -148,6 +152,11 @@ try {
     child.once('error', j);
     child.once('exit', (c) => r(c ?? 1));
   });
+} catch (error) {
+  // Report only the bounded stage identifier, never provider/DB errors or URLs.
+  if (process.env.GITHUB_ACTIONS === 'true')
+    console.error(`::error title=E2E preflight::Failed stage: ${stage}`);
+  throw error;
 } finally {
   for (const child of children) child.kill('SIGTERM');
   await Promise.all(
