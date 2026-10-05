@@ -7,6 +7,7 @@ Make the released system easier to operate, diagnose, recover and scale.
 ## Workstreams
 
 ### Observability
+
 - structured logging consistency;
 - service and worker metrics;
 - latency/error dashboards;
@@ -14,6 +15,7 @@ Make the released system easier to operate, diagnose, recover and scale.
 - correlation/request IDs.
 
 ### Reliability
+
 - retry/backoff policy review;
 - dead-letter handling;
 - idempotency validation;
@@ -21,6 +23,7 @@ Make the released system easier to operate, diagnose, recover and scale.
 - failure injection for critical workflows.
 
 ### Backup and recovery
+
 - automated backup verification;
 - documented restore procedure;
 - restore rehearsal;
@@ -28,7 +31,9 @@ Make the released system easier to operate, diagnose, recover and scale.
 - post-restore validation checklist.
 
 ### Runbooks
+
 Create or update:
+
 - incident response;
 - degraded search;
 - database pressure;
@@ -38,6 +43,7 @@ Create or update:
 - rollback procedure.
 
 ### Capacity
+
 - baseline load profile;
 - bottleneck capture;
 - query/index review;
