@@ -16,6 +16,7 @@ Purpose: collect the external non-production evidence required by RAU-12 and the
 - Evidence links:
 
 Acceptance:
+
 - [ ] Runtime artifact is immutable and traceable to the accepted source SHA.
 - [ ] Staging is isolated from production.
 - [ ] No local/dev-only storage or demo/seed mode is enabled.
@@ -35,6 +36,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] HTTPS only.
 - [ ] Valid trusted certificate and hostname match.
 - [ ] Private API ingress topology is documented.
@@ -53,6 +55,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] Staging environment exists and is protected.
 - [ ] Required reviewers are configured.
 - [ ] Workload IAM is least-privilege.
@@ -74,6 +77,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] TLS uses trusted verification equivalent to `sslmode=verify-full`.
 - [ ] All migrations apply in order.
 - [ ] Existing migration bytes/checksums are preserved.
@@ -91,6 +95,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] TLS uses `rediss://` or equivalent trusted transport.
 - [ ] Service is not publicly exposed.
 - [ ] Auth is enabled.
@@ -106,6 +111,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] Authenticated HTTPS only.
 - [ ] Service is not publicly writable.
 - [ ] Search/index reconciliation smoke passes.
@@ -123,6 +129,7 @@ Acceptance:
 - Evidence links:
 
 Acceptance:
+
 - [ ] Bucket/container is private.
 - [ ] Public delivery, if used, is through the intended CDN/policy.
 - [ ] Local development storage is not used.
@@ -133,15 +140,15 @@ Acceptance:
 
 Record provider names and binding status only; never credential values.
 
-| Capability | Provider | Sandbox/staging bound | Health test | Failure/degradation test | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| Verification |  | [ ] | [ ] | [ ] |  |
-| Maps/geocoding |  | [ ] | [ ] | [ ] |  |
-| Email |  | [ ] | [ ] | [ ] |  |
-| SMS |  | [ ] | [ ] | [ ] |  |
-| Notifications gateway |  | [ ] | [ ] | [ ] |  |
-| AI gateway |  | [ ] | [ ] | [ ] |  |
-| Payments (if in launch scope) |  | [ ] | [ ] | [ ] |  |
+Track each launch-scope capability separately:
+
+- Verification: provider, staging binding, health test, failure/degradation test, evidence.
+- Maps/geocoding: provider, staging binding, health test, failure/degradation test, evidence.
+- Email: provider, staging binding, health test, failure/degradation test, evidence.
+- SMS: provider, staging binding, health test, failure/degradation test, evidence.
+- Notifications gateway: provider, staging binding, health test, failure/degradation test, evidence.
+- AI gateway: provider, staging binding, health test, failure/degradation test, evidence.
+- Payments, if in launch scope: provider, staging binding, health test, failure/degradation test, evidence.
 
 ## 9. Observability binding
 
@@ -154,6 +161,7 @@ Record provider names and binding status only; never credential values.
 - Evidence links:
 
 Acceptance:
+
 - [ ] Metrics scrape is private/authenticated.
 - [ ] Dashboards ingest real staging data.
 - [ ] Critical alerts have fired and recovered in staging-like conditions.
@@ -206,6 +214,7 @@ Target: ordinary backend API p95 <= 300 ms under the agreed representative profi
 - Evidence links:
 
 Acceptance:
+
 - [ ] Remote recovery is demonstrated in non-production.
 - [ ] RPO/RTO are measured and owner-accepted.
 - [ ] Cleanup targets exact owned resources only; no broad-prefix deletion.
@@ -221,6 +230,7 @@ Acceptance:
 - Open P0/P1 findings:
 
 Acceptance:
+
 - [ ] No unresolved P0/P1.
 - [ ] Runtime image is scanned/attested.
 - [ ] Independent pentest is complete.
