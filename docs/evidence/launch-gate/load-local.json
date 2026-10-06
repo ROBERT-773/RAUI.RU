@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "measuredAt": "2026-10-06T09:02:05.299Z",
+  "runtime": "v24.19.0",
+  "availableCpuCount": 5,
+  "availableMemoryBytes": 35743784960,
+  "fixture": "two published listings and one buyer session; isolated scratch PostgreSQL/PostGIS and OpenSearch; warm local read workload across four native loopback peers; application rate quotas unchanged",
+  "results": [
+    {
+      "scenario": "catalog",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 4.300228000000061,
+      "p95Ms": 18.122363999999834,
+      "p99Ms": 22.528008000000227,
+      "requestsPerSecond": 674.9095848938226,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "search",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 18.426230000000032,
+      "p95Ms": 31.057588000000123,
+      "p99Ms": 37.804529999999886,
+      "requestsPerSecond": 182.30483878470935,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "public-detail",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 5.279688000000078,
+      "p95Ms": 7.458730999999716,
+      "p99Ms": 8.604538000000048,
+      "requestsPerSecond": 700.6698228338856,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "map",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 14.676120999999966,
+      "p95Ms": 20.984222000000045,
+      "p99Ms": 21.290799999999763,
+      "requestsPerSecond": 252.3961655898811,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "auth-me",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 4.364587999999912,
+      "p95Ms": 7.029589000000215,
+      "p99Ms": 8.072368000000097,
+      "requestsPerSecond": 839.7118721844283,
+      "targetP95Ms": 300
+    },
+    {
+      "scenario": "auth-sessions",
+      "requests": 40,
+      "successes": 40,
+      "concurrency": 4,
+      "warmup": 5,
+      "warmupErrors": 0,
+      "errors": 0,
+      "errorKinds": {
+        "transport": 0,
+        "status": 0,
+        "body": 0,
+        "contract": 0
+      },
+      "p50Ms": 4.1112949999997,
+      "p95Ms": 5.098066999999901,
+      "p99Ms": 5.288715000000138,
+      "requestsPerSecond": 937.4196235908668,
+      "targetP95Ms": 300
+    }
+  ]
+}

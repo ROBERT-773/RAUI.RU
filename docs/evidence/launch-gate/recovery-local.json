@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "measuredAt": "2026-10-06T09:01:51.855Z",
+  "sourceUntouched": true,
+  "sourceWritersQuiesced": true,
+  "databaseRestore": "verified",
+  "objectFixtureRestore": "verified",
+  "cipher": "AES-256-GCM",
+  "databaseDumpMs": 422.598418,
+  "totalDrillMs": 1445.6408059999999,
+  "tablesVerified": 61,
+  "migrationsVerified": 12,
+  "sequencesVerified": 9,
+  "sequenceStateAndConfig": "verified",
+  "sequenceNextValuesVerified": 9,
+  "pristineSequencesVerified": 6,
+  "calledSequencesVerified": 3,
+  "postgis": "3.5 USE_GEOS=1 USE_PROJ=1 USE_STATS=1",
+  "encryptedSha256": "9e8a79b008d6077bcec94bd54e77aa63006a0f87e380d927a52d2d17fe667f67",
+  "coverage": "local consistent DB snapshot and fixture object; not remote S3 or production standby certification"
+}

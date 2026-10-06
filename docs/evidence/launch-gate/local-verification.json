@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "applicationBaseline": "9d2ec36614a6b4de60f9c8f23a1a99f21bcc73b7",
+  "branch": "feat/production-launch-gate",
+  "scope": "fresh local verification from accepted master application source; not deployed staging",
+  "checks": {
+    "frozenInstall": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "unit": "passed",
+    "cleanBuild": "passed",
+    "integration": "passed",
+    "securityAndDependencyAudit": "passed",
+    "promtool": "passed",
+    "controlledRecovery": "passed",
+    "productionBuildSmoke": "passed",
+    "localBrowserE2E": {
+      "passed": 18,
+      "projects": ["chromium", "android-chromium"]
+    },
+    "load": {
+      "scenarios": 6,
+      "measuredRequests": 240,
+      "errors": 0,
+      "p95LimitMs": 300
+    }
+  },
+  "githubProtectedEnvironments": {
+    "count": 0,
+    "verifiedVia": "read-only repository environments API"
+  },
+  "productionDeploymentPerformed": false,
+  "liveProductionFlagsVerified": false,
+  "readOnlyReview": {
+    "areas": ["security", "database", "contracts", "qa", "operations", "web"],
+    "findingsAddressed": [
+      "pre-RC upgrade baseline wording",
+      "master CI and dry-run receipts",
+      "search-only automated accessibility scope"
+    ],
+    "implementationWriter": "root"
+  }
+}
