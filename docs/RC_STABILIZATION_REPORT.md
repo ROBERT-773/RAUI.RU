@@ -24,7 +24,7 @@ Clean migrations, repeat migration runs and upgrade from published master were e
 
 Six read-only reviewers covered security, DB, contracts, QA, operations and web. Their CDN, evidence-publication and HTTP response findings were fixed and tested. No known P0/P1 finding remains in the reviewed surface; external acceptance below remains mandatory.
 
-The previous pushed commit `aaecf14a8ee064aaa2e59daab5e1562885a19cc6` passed [CI run 37376658144](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37376658144). That run does **not** certify subsequent changes. Final-head CI, retained artifact identity/hash verification and PR readiness must be recorded after this increment is pushed.
+Implementation commit `68ea250eb50d7e0b55cfbfcb89f82d39d74d7b74` passed the complete [CI run 37432028661](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432028661), including the five-project browser matrix, migrations, recovery, worker smoke and readiness creation/verification/upload. Retained artifact `11397836249` is bound to that SHA. Independent downloaded-artifact verification passed in [staging dry-run 37432647149](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432647149) and [rollback dry-run 37432651613](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432651613). These workflows verify successful CI provenance, manifest identity and all artifact hashes; neither deploys. Direct download from this cloud environment was denied, so GitHub runners performed that verification. Final documentation-head CI and artifact verification are recorded in PR #37 to avoid a self-referential commit SHA in this file.
 
 ## Measured local evidence
 

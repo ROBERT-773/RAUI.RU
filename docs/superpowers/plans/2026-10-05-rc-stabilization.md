@@ -30,7 +30,7 @@ not new product features. Apply TDD: observe meaningful red, minimal fix, suites
       safe failure diagnostics, meaningful visual comparison where portable.
 - [x] Evidence: expand existing critical-flow performance measurements, restore
       identity including sequence state, external production prerequisites.
-- [ ] Final: lint/typecheck/unit/integration/build, full cross-browser E2E, migration,
+- [x] Final: lint/typecheck/unit/integration/build, full cross-browser E2E, migration,
       smoke/workers, security audit, load/restore and readiness artifact verification.
       Review exact final surface, fix findings, push PR/report. Stop at RC review;
       no production deployment or next gated implementation in this pass.
