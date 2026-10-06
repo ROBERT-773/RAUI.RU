@@ -35,10 +35,25 @@ function releasePath(path) {
     !path.endsWith('.env')
   );
 }
-export function validateRelease(manifest, expectedSha) {
+export function validateCiRun(run, expectedSha, expectedRunId) {
+  if (
+    !/^[1-9][0-9]*$/.test(expectedRunId ?? '') ||
+    !/^[a-f0-9]{40}$/.test(expectedSha ?? '') ||
+    String(run?.id) !== expectedRunId ||
+    run.head_sha !== expectedSha ||
+    run.conclusion !== 'success' ||
+    run.status !== 'completed' ||
+    run.path !== '.github/workflows/ci.yml'
+  )
+    throw new Error('Invalid successful CI workflow provenance');
+}
+export function validateRelease(manifest, expectedSha, expectedRunId) {
   if (
     !manifest ||
     manifest.version !== 1 ||
+    typeof manifest.runId !== 'string' ||
+    !/^[1-9][0-9]*$/.test(manifest.runId) ||
+    (expectedRunId !== undefined && manifest.runId !== expectedRunId) ||
     !/^[a-f0-9]{40}$/.test(expectedSha) ||
     manifest.sha !== expectedSha ||
     manifest.migrations !== 12 ||
@@ -157,6 +172,17 @@ export async function verifyFiles(manifest, root) {
         result.p95Ms < 0 ||
         result.p95Ms > 300 ||
         result.errors !== 0 ||
+        !result.errorKinds ||
+        Object.keys(result.errorKinds).length !== 4 ||
+        ['transport', 'status', 'body', 'contract'].some(
+          (kind) =>
+            !Number.isSafeInteger(result.errorKinds[kind]) ||
+            result.errorKinds[kind] < 0,
+        ) ||
+        Object.values(result.errorKinds).reduce(
+          (sum, count) => sum + count,
+          0,
+        ) !== result.errors ||
         result.requests !== 40 ||
         result.concurrency !== 4,
     ) ||
@@ -187,7 +213,17 @@ export async function verifyFiles(manifest, root) {
     throw new Error('Invalid restore evidence');
 }
 async function main() {
-  const [mode, manifestPath, expectedSha] = process.argv.slice(2);
+  const [mode, manifestPath, expectedSha, expectedRunId] =
+    process.argv.slice(2);
+  if (mode === 'provenance') {
+    validateCiRun(
+      JSON.parse(await readFile(manifestPath, 'utf8')),
+      expectedSha,
+      expectedRunId,
+    );
+    console.log('Successful CI workflow identity, commit and run verified');
+    return;
+  }
   if (
     !['create', 'verify'].includes(mode) ||
     !manifestPath ||
@@ -230,7 +266,7 @@ async function main() {
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   } else {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    validateRelease(manifest, expectedSha);
+    validateRelease(manifest, expectedSha, expectedRunId);
     await verifyFiles(manifest, process.cwd());
     console.log(
       'Release/rollback artifact identity, hashes, gates and migration/flag contract verified; no deployment',

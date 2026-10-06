@@ -68,6 +68,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
   const good = {
     version: 1,
     sha: 'a'.repeat(40),
+    runId: '123',
     migrations: 12,
     riskyDefaults: 'off',
     gates: [
@@ -124,6 +125,9 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     );
   for (const patch of [
     { sha: 'master' },
+    { runId: undefined },
+    { runId: '0' },
+    { runId: '123x' },
     { migrations: 0 },
     { riskyDefaults: 'on' },
     { gates: ['lint'] },
@@ -132,6 +136,8 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
   ])
     assert.throws(() => validateRelease({ ...good, ...patch }, 'a'.repeat(40)));
   assert.throws(() => validateRelease(good, 'c'.repeat(40)));
+  assert.throws(() => validateRelease(good, 'a'.repeat(40), '456'));
+  assert.doesNotThrow(() => validateRelease(good, 'a'.repeat(40), '123'));
 });
 
 test('Recovery cleanup removes private artifacts and wipes keys even when scratch DROP fails', async () => {
@@ -182,6 +188,7 @@ test('Release verification binds measured evidence and rejects tampering', async
           warmupErrors: 0,
           targetP95Ms: 300,
           errors: 0,
+          errorKinds: { transport: 0, status: 0, body: 0, contract: 0 },
           requests: 40,
           concurrency: 4,
         })),
@@ -223,6 +230,11 @@ test('Release verification binds measured evidence and rejects tampering', async
     ];
     for (const patch of [
       { errors: 1 },
+      { errorKinds: undefined },
+      { errorKinds: { transport: 40, status: 0, body: 0, contract: 0 } },
+      { errorKinds: { transport: -1, status: 1, body: 0, contract: 0 } },
+      { errorKinds: { transport: 0.5, status: 0, body: 0, contract: 0 } },
+      { errorKinds: { transport: 0, status: 0, body: 0 } },
       { p95Ms: 301 },
       { p50Ms: null },
       { p99Ms: -1 },
@@ -462,4 +474,27 @@ test('Recovery success evidence is published only after lifecycle cleanup succee
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('CI provenance rejects same-name workflows and binds successful immutable run identity', async () => {
+  const { validateCiRun } =
+    await import('../../../scripts/release-contract.mjs');
+  const sha = 'a'.repeat(40);
+  const run = {
+    id: 123,
+    head_sha: sha,
+    conclusion: 'success',
+    status: 'completed',
+    name: 'RAUI CI',
+    path: '.github/workflows/ci.yml',
+  };
+  assert.doesNotThrow(() => validateCiRun(run, sha, '123'));
+  for (const patch of [
+    { path: '.github/workflows/other.yml' },
+    { id: 456 },
+    { head_sha: 'b'.repeat(40) },
+    { conclusion: 'failure' },
+    { status: 'in_progress' },
+  ])
+    assert.throws(() => validateCiRun({ ...run, ...patch }, sha, '123'));
 });

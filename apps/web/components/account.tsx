@@ -43,6 +43,7 @@ export default function Account() {
     [messageCursor, setMessageCursor] = useState<string | null>(null),
     [notificationEnabled, setNotificationEnabled] = useState(true);
   const identityEpoch = useRef(0);
+  const collectionRequest = useRef(0);
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab('favorite');
@@ -78,35 +79,56 @@ export default function Account() {
   }, []);
   async function load(t: Tab, after?: string) {
     const epoch = identityEpoch.current;
+    const request = ++collectionRequest.current;
     try {
       if (['favorite', 'compare', 'recent'].includes(t)) {
         const r = await api<{ items: ListingCard[]; cursor: string | null }>(
           'v1/account/collections/' + t + (after ? '?after=' + after : ''),
         );
-        if (epoch !== identityEpoch.current) return;
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setItems((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'saved') {
         const r = await api<{ items: Saved[]; cursor: string | null }>(
           'v1/account/saved-searches' + (after ? '?after=' + after : ''),
         );
-        if (epoch !== identityEpoch.current) return;
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setSaved((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'messages') {
         const r = await api<{ items: Thread[]; cursor: string | null }>(
           'v1/account/threads' + (after ? '?after=' + after : ''),
         );
-        if (epoch !== identityEpoch.current) return;
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setThreads((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else {
         const r = await api<{ items: Notification[]; cursor: string | null }>(
           'v1/account/notifications' + (after ? '?cursor=' + after : ''),
         );
-        if (epoch !== identityEpoch.current) return;
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         const prefs = await api<{ in_app: boolean }>('v1/account/preferences');
-        if (epoch !== identityEpoch.current) return;
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setNotificationEnabled(prefs.in_app);
         setNotifications((previous) =>
           after ? [...previous, ...r.items] : r.items,
@@ -114,7 +136,11 @@ export default function Account() {
         setCursor(r.cursor);
       }
     } catch (e) {
-      if (epoch !== identityEpoch.current) return;
+      if (
+        epoch !== identityEpoch.current ||
+        request !== collectionRequest.current
+      )
+        return;
       setNotice((e as Error).message);
     }
   }
@@ -242,6 +268,7 @@ export default function Account() {
             aria-pressed={tab === key}
             onClick={() => {
               setTab(key);
+              setItems([]);
               void load(key);
               setCursor(null);
             }}
@@ -265,20 +292,31 @@ export default function Account() {
                     <Button
                       onClick={async () => {
                         const epoch = identityEpoch.current;
+                        const request = collectionRequest.current;
                         try {
                           await api(
                             'v1/account/collections/' + tab + '/' + item.id,
                             'DELETE',
                           );
-                          if (epoch !== identityEpoch.current) return;
-                          setItems(items.filter((v) => v.id !== item.id));
+                          if (
+                            epoch !== identityEpoch.current ||
+                            request !== collectionRequest.current
+                          )
+                            return;
+                          setItems((previous) =>
+                            previous.filter((v) => v.id !== item.id),
+                          );
                           if (tab === 'favorite')
                             track({
                               type: 'favorite_removed',
                               listingId: item.id,
                             });
                         } catch (e) {
-                          if (epoch !== identityEpoch.current) return;
+                          if (
+                            epoch !== identityEpoch.current ||
+                            request !== collectionRequest.current
+                          )
+                            return;
                           setNotice((e as Error).message);
                         }
                       }}
@@ -339,15 +377,24 @@ export default function Account() {
                 onSubmit={async (e) => {
                   e.preventDefault();
                   const epoch = identityEpoch.current;
+                  const request = collectionRequest.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'PATCH', {
                       name: new FormData(e.currentTarget).get('name'),
                       definition: s.definition,
                     });
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     await load('saved');
                   } catch (error) {
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -366,12 +413,21 @@ export default function Account() {
               <Button
                 onClick={async () => {
                   const epoch = identityEpoch.current;
+                  const request = collectionRequest.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'DELETE');
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     await load('saved');
                   } catch (e) {
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     setNotice((e as Error).message);
                   }
                 }}

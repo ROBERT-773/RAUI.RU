@@ -26,6 +26,12 @@ Six read-only reviewers covered security, DB, contracts, QA, operations and web.
 
 Implementation commit `68ea250eb50d7e0b55cfbfcb89f82d39d74d7b74` passed the complete [CI run 37432028661](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432028661), including the five-project browser matrix, migrations, recovery, worker smoke and readiness creation/verification/upload. Retained artifact `11397836249` is bound to that SHA. Independent downloaded-artifact verification passed in [staging dry-run 37432647149](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432647149) and [rollback dry-run 37432651613](https://github.com/ROBERT-773/RAUI.RU/actions/runs/37432651613). These workflows verify successful CI provenance, manifest identity and all artifact hashes; neither deploys. Direct download from this cloud environment was denied, so GitHub runners performed that verification. Final documentation-head CI and artifact verification are recorded in PR #37 to avoid a self-referential commit SHA in this file.
 
+## Continued acceptance hardening
+
+A subsequent independent audit found and reproduced two readiness false-positive checks and account collection races. The verifier now binds successful CI to the exact workflow path, immutable SHA and selected run ID, including the downloaded manifest run ID. Load error-kind counters must be the exact four nonnegative safe integers and match the overall error count. Semantic negatives recompute file hashes.
+
+Account loads and collection/saved-search mutation completions now reject stale request generations across tab changes. Deferred Favorites responses and deletes cannot replace Comparison cards or cursor; late saved-search rename/delete cannot supersede its pending load. New regressions were observed failing before the fixes. No new migrations or product features are introduced. Current-head full CI and independent artifact dry-runs are recorded in PR #37 after push.
+
 ## Measured local evidence
 
 Sanitized evidence is retained separately from historical Phase 4D results in `docs/evidence/rc/`. Fixture: two published listings, one buyer session, isolated PostgreSQL/PostGIS and OpenSearch, warm reads, four real loopback peers, concurrency four. Each scenario has five warmups and 40 measured requests; all 240 measured requests succeeded, with zero warmup errors. Target p95 remains 300 ms.
@@ -47,7 +53,7 @@ Latest controlled restore: 61 tables, 12 migrations, nine sequences and all nine
 - Run representative data/traffic, publish/import/provider load and deployment smoke with staging authentication. Measure migration lock/backfill duration and bounded worker draining.
 - Exercise remote backups/PITR, object-store restoration and KMS recovery; validate runtime image identity against the immutable readiness artifact.
 - Parent process SIGKILL/machine failure can interrupt fixture cleanup. Residual resources are disposable owned `raui_test_*` / `raui_restore_test_*` databases and private recovery workspaces; identify the exact run-owned resources before manual cleanup. Ordinary child failure/timeouts are bounded and cleaned. This documented P2 limitation is not a production DR guarantee.
-- Database command deadlines, live pagination consistency and broader OpenAPI response-schema detail remain follow-up hardening considerations. Current runtime authorization/contract tests and pre-RC idempotency/audit coverage stay enabled.
+- Database command deadlines, live pagination consistency and broader OpenAPI response-schema detail remain follow-up hardening considerations. A separate P2 account thread-pagination race remains: a late page for thread A can supersede thread B within the same signed-in identity; fence thread requests/mutations in a follow-up regression increment. Current runtime authorization/contract tests and pre-RC idempotency/audit coverage stay enabled.
 
 ## Rollback and forward fix
 

@@ -35,7 +35,7 @@ jobs:
         run: |
           [[ "$RUN_ID" =~ ^[0-9]+$ && "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > /tmp/raui-run.json
-          jq -e --arg sha "$SOURCE_SHA" '.head_sha == $sha and .conclusion == "success" and .name == "RAUI CI"' /tmp/raui-run.json
+          node scripts/release-contract.mjs provenance /tmp/raui-run.json "$SOURCE_SHA" "$RUN_ID"
       - uses: actions/download-artifact@v4
         with:
           name: raui-readiness-${{ inputs.sha }}
@@ -46,6 +46,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.sha }}
           MODE: ${{ inputs.mode }}
+          RUN_ID: ${{ inputs.run_id }}
         run: |
-          node "$GITHUB_WORKSPACE/scripts/release-contract.mjs" verify .cache/phase4d-release.json "$SOURCE_SHA"
+          node "$GITHUB_WORKSPACE/scripts/release-contract.mjs" verify .cache/phase4d-release.json "$SOURCE_SHA" "$RUN_ID"
         working-directory: verified-artifact
