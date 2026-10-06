@@ -29,23 +29,23 @@
 
 **Files:** Create sanitized `docs/evidence/launch-gate/` evidence; reuse existing quality commands/workflows.
 
-- [ ] Frozen dependency installation and clean build from baseline master.
-- [ ] Lint, typecheck, unit, integration, build, security, Promtool, restore and smoke/E2E pass; preserve actual exit codes.
-- [ ] Confirm master CI success and independent staging/rollback artifact dry-runs bound to its run ID/SHA.
-- [ ] Inventory GitHub protected environments and required binding names only; never record secret values.
+- [x] Frozen dependency installation and clean build from baseline master.
+- [x] Lint, typecheck, unit, integration, build, security, Promtool, restore and smoke/E2E pass; preserve actual exit codes.
+- [x] Confirm master CI success and independent staging/rollback artifact dry-runs bound to its run ID/SHA.
+- [x] Inventory GitHub protected environments and required binding names only; never record secret values.
 
 ## Task 2: Evidence package and recovery correction
 
 **Files:** Create `docs/PRODUCTION_LAUNCH_GATE_REPORT.md`; modify `docs/BACKUP_DR.md`.
 
-- [ ] Report exact master, CI/artifact links, migrations, recovery, performance, security, flags, rollback, risks, external prerequisites and deployment recommendation.
-- [ ] Correct Redis-session incident wording to PostgreSQL session revocation/rotation and derived Redis recovery.
-- [ ] Map every spec item to local/CI evidence or explicit unmet staging acceptance.
+- [x] Report exact master, CI/artifact links, migrations, recovery, performance, security, flags, rollback, risks, external prerequisites and deployment recommendation.
+- [x] Correct Redis-session incident wording to PostgreSQL session revocation/rotation and derived Redis recovery.
+- [x] Map every spec item to local/CI evidence or explicit unmet staging acceptance.
 - [ ] Resolve the actual launch payment-scope owner decision when supplied; do not enable an unimplemented provider.
 
 ## Task 3: Review and handoff
 
-- [ ] Six independent read-only reviews; root resolves concrete findings.
-- [ ] Run formatting/lint and required checks for final changes; commit/push after checking remote head.
-- [ ] Prepare PR with exact-head CI and package status.
-- [ ] Continue only tasks whose real prerequisites are satisfied. Issue #17 requires an authorized actual release; broad development access alone does not deploy production.
+- [x] Six independent read-only reviews; root resolves concrete findings.
+- [x] Run formatting/lint and required checks for final changes; commit/push after checking remote head.
+- [ ] PR #38 prepared; await exact-head CI before final package handoff.
+- [x] Continue only tasks whose real prerequisites are satisfied. Issue #17 requires an authorized actual release; broad development access alone does not deploy production.
