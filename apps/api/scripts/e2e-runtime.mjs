@@ -130,3 +130,35 @@ export function watchPoolErrors(pools, onFailure) {
     },
   };
 }
+
+export function summarizeLoadSpans(log) {
+  const timings = [];
+  if (typeof log === 'string' && log.length <= 1024 * 1024) {
+    for (const line of log.split('\n').slice(0, 5000)) {
+      if (line.length > 1024) continue;
+      try {
+        const span = JSON.parse(line);
+        if (
+          span.event === 'http_span' &&
+          span.route === '/v1/listings/:id/public' &&
+          span.method === 'GET' &&
+          span.status === 200 &&
+          Number.isSafeInteger(span.durationMs) &&
+          span.durationMs >= 0 &&
+          span.durationMs <= 30000
+        )
+          timings.push(span.durationMs);
+      } catch {
+        /* Raw logs and other payloads are never emitted. */
+      }
+    }
+  }
+  timings.sort((a, b) => a - b);
+  return {
+    count: timings.length,
+    p95Ms: timings.length
+      ? timings[Math.ceil(timings.length * 0.95) - 1]
+      : null,
+    maxMs: timings.length ? timings[timings.length - 1] : null,
+  };
+}

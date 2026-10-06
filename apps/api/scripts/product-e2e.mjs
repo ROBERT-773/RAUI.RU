@@ -4,13 +4,14 @@ import { createLoopbackLoadClients } from './load-transport.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import {
   trackProcess,
   waitService,
   terminate,
   boundedOperation,
   watchPoolErrors,
+  summarizeLoadSpans,
 } from './e2e-runtime.mjs';
 import { resolve } from 'node:path';
 let stage = 'initialization';
@@ -263,6 +264,19 @@ async function run() {
       children.some((record) => record.logFailed)
     )
       cleanupFailed = true;
+    if (failed && stage === 'load') {
+      try {
+        const logPath = resolve(directory, 'e2e-api.log');
+        if ((await stat(logPath)).size <= 1024 * 1024) {
+          const timing = summarizeLoadSpans(await readFile(logPath, 'utf8'));
+          console.error(
+            `::notice title=Load server spans::public-detail count=${timing.count} p95Ms=${timing.p95Ms ?? 'unavailable'} maxMs=${timing.maxMs ?? 'unavailable'}`,
+          );
+        }
+      } catch {
+        /* Diagnostics cannot replace the original failed gate. */
+      }
+    }
     try {
       await index.request('/' + index.alias + '-*', 'DELETE');
     } catch {

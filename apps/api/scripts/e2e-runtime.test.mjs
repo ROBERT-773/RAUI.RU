@@ -201,3 +201,49 @@ test('Idle error fences an operation queued for the next microtask', async () =>
   await assert.rejects(pending, /database connection failed/);
   assert.equal(invoked, false);
 });
+
+test('Load server-span diagnostics expose only bounded public route timings', async () => {
+  const { summarizeLoadSpans } = await import('./e2e-runtime.mjs');
+  const rows = [
+    {
+      event: 'http_span',
+      route: '/v1/listings/:id/public',
+      method: 'GET',
+      status: 200,
+      durationMs: 5,
+      traceId: 'PRIVATE_TRACE',
+    },
+    {
+      event: 'http_span',
+      route: '/v1/listings/:id/public',
+      method: 'GET',
+      status: 200,
+      durationMs: 401,
+      body: 'PRIVATE_BODY',
+    },
+    {
+      event: 'http_span',
+      route: '/v1/auth/login',
+      method: 'POST',
+      status: 201,
+      durationMs: 3000,
+    },
+    {
+      event: 'http_span',
+      route: '/v1/listings/:id/public',
+      method: 'GET',
+      status: 200,
+      durationMs: -1,
+    },
+  ];
+  const summary = summarizeLoadSpans(
+    rows.map((r) => JSON.stringify(r)).join('\n') + '\nprivate raw error',
+  );
+  assert.deepEqual(summary, { count: 2, p95Ms: 401, maxMs: 401 });
+  assert.equal(JSON.stringify(summary).includes('PRIVATE'), false);
+  assert.deepEqual(summarizeLoadSpans('x'.repeat(1024 * 1024 + 1)), {
+    count: 0,
+    p95Ms: null,
+    maxMs: null,
+  });
+});
