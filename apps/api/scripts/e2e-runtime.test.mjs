@@ -264,3 +264,16 @@ test('Map server-span diagnostics count successful POST 201 responses', async ()
     { count: 1, p95Ms: 42, maxMs: 42 },
   );
 });
+
+test('Slow-query diagnostics retain fixed query classes and numeric timings only', async () => {
+  const { summarizeSlowQueries } = await import('./e2e-runtime.mjs');
+  const input =
+    'postgres | LOG: duration: 280.42 ms execute <unnamed>: SELECT l.* FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1\nDETAIL: parameters: $1 = PRIVATE_ID\nLOG: duration: 100.25 ms execute <unnamed>: SELECT p.id,p.category_code,p.attributes,a.formatted FROM properties p\nLOG: duration: 120 ms execute <unnamed>: SELECT id,kind,variants FROM media WHERE listing_id=$1\nLOG: duration: 200 ms execute <unnamed>: SELECT PRIVATE_TOKEN FROM sessions';
+  const summary = summarizeSlowQueries(input);
+  assert.deepEqual(summary, [
+    { query: 'visibility', count: 1, maxMs: 280.42 },
+    { query: 'property', count: 1, maxMs: 100.25 },
+    { query: 'media', count: 1, maxMs: 120 },
+  ]);
+  assert.equal(JSON.stringify(summary).includes('PRIVATE'), false);
+});

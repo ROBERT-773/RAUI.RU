@@ -36,6 +36,8 @@ jobs:
       - run: pnpm test:integration
       - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
+        env:
+          PGOPTIONS: -c log_min_duration_statement=100
       - run: pnpm db:migrate && pnpm db:migrate
       - run: pnpm recovery:drill
       - name: Production smoke
@@ -81,7 +83,9 @@ jobs:
             package.json
       - name: Diagnostics
         if: failure()
-        run: cat .cache/phase4d-e2e-summary.json 2>/dev/null || true
+        run: |
+          cat .cache/phase4d-e2e-summary.json 2>/dev/null || true
+          docker compose --env-file .env.example -f infra/compose.yaml logs --no-color postgres | node scripts/sql-load-diagnostics.mjs
       - name: Safe E2E failure summary
         if: failure()
         uses: actions/upload-artifact@v4

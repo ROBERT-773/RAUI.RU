@@ -174,3 +174,30 @@ export function summarizeLoadSpans(log, route = '/v1/listings/:id/public') {
     maxMs: timings.length ? timings[timings.length - 1] : null,
   };
 }
+
+export function summarizeSlowQueries(log) {
+  const groups = [
+    ['visibility', 'SELECT l.* FROM listings l JOIN users u'],
+    ['property', 'SELECT p.id,p.category_code,p.attributes,a.formatted'],
+    ['media', 'SELECT id,kind,variants FROM media'],
+  ];
+  return groups.map(([query, prefix]) => {
+    const durations = [];
+    if (typeof log === 'string' && log.length <= 1024 * 1024)
+      for (const line of log.split('\n').slice(0, 5000)) {
+        if (line.length > 4096) continue;
+        const match = line.match(
+          /duration: ([0-9]+(?:\.[0-9]+)?) ms\s+(?:execute [^:]{1,128}|statement|bind [^:]{1,128}):\s+(SELECT.*)/,
+        );
+        if (match && match[2].startsWith(prefix)) {
+          const ms = Number(match[1]);
+          if (Number.isFinite(ms) && ms >= 0 && ms <= 30000) durations.push(ms);
+        }
+      }
+    return {
+      query,
+      count: durations.length,
+      maxMs: durations.length ? Math.max(...durations) : null,
+    };
+  });
+}
