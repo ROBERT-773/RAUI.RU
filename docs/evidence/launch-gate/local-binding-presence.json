@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "scope": "current development cloud process with preserved local .env; not production credential certification",
+  "measuredAt": "2026-10-06T09:01:58.431Z",
+  "bindings": [
+    {
+      "name": "DATABASE_URL",
+      "present": true
+    },
+    {
+      "name": "REDIS_URL",
+      "present": true
+    },
+    {
+      "name": "OPENSEARCH_URL",
+      "present": false
+    },
+    {
+      "name": "OPENSEARCH_TOKEN",
+      "present": false
+    },
+    {
+      "name": "PROXY_IDENTITY_SECRET",
+      "present": false
+    },
+    {
+      "name": "TRUSTED_PROXY_PEERS",
+      "present": false
+    },
+    {
+      "name": "TRUSTED_INGRESS_IP_HEADER",
+      "present": false
+    },
+    {
+      "name": "S3_BUCKET",
+      "present": false
+    },
+    {
+      "name": "AWS_ACCESS_KEY_ID",
+      "present": false
+    },
+    {
+      "name": "AWS_SECRET_ACCESS_KEY",
+      "present": false
+    },
+    {
+      "name": "VERIFICATION_GATEWAY_URL",
+      "present": false
+    },
+    {
+      "name": "VERIFICATION_GATEWAY_TOKEN",
+      "present": false
+    },
+    {
+      "name": "AI_GATEWAY_URL",
+      "present": false
+    },
+    {
+      "name": "AI_GATEWAY_TOKEN",
+      "present": false
+    },
+    {
+      "name": "NOTIFICATION_GATEWAY_URL",
+      "present": false
+    },
+    {
+      "name": "NOTIFICATION_GATEWAY_TOKEN",
+      "present": false
+    },
+    {
+      "name": "GEOCODER_URL",
+      "present": false
+    },
+    {
+      "name": "GEOCODER_TOKEN",
+      "present": false
+    }
+  ],
+  "secretsRecorded": false,
+  "productionVerified": false
+}

@@ -70,8 +70,9 @@ run a cross-region recovery exercise quarterly.
 4. Restore object versions matching the DB recovery window. Verify migrations,
    PostGIS, sequences, domain/audit/billing identities and permissions; never
    blindly replay payment captures or externally delivered notifications.
-5. Rebuild disposable OpenSearch indexes from PostgreSQL, rotate Redis sessions
-   if necessary, and restart workers after fencing/lease review. Check queue age,
+5. Rebuild disposable OpenSearch indexes from PostgreSQL. Revoke or rotate
+   PostgreSQL-backed sessions when the incident warrants it; rebuild or discard
+   Redis derived state if necessary. Restart workers after fencing/lease review. Check queue age,
    reconciliation/deduplication, live listing visibility and ready probes.
 6. Run smoke, login/role, public search/detail and media checks on the isolated
    target. Compare measured data loss/recovery duration to accepted RPO/RTO.

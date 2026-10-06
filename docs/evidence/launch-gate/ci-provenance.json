@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sourceSha": "9d2ec36614a6b4de60f9c8f23a1a99f21bcc73b7",
+  "ciRunId": 37439594041,
+  "ciWorkflow": ".github/workflows/ci.yml",
+  "ciConclusion": "success",
+  "artifactId": 11400294335,
+  "artifactName": "raui-readiness-9d2ec36614a6b4de60f9c8f23a1a99f21bcc73b7",
+  "artifactExpired": false,
+  "dryRuns": [
+    {
+      "mode": "staging-dry-run",
+      "runId": 37440359787,
+      "conclusion": "success"
+    },
+    {
+      "mode": "rollback-dry-run",
+      "runId": 37440365242,
+      "conclusion": "success"
+    }
+  ],
+  "verification": [
+    "workflow path",
+    "completed successful CI",
+    "exact source SHA",
+    "manifest runId",
+    "artifact hashes"
+  ],
+  "productionDeployment": false,
+  "deployedStagingAcceptance": false
+}
