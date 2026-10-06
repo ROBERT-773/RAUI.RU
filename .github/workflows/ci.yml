@@ -29,6 +29,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm observability:check
       - run: pnpm security:check
       - run: pnpm build
       - run: cp .env.example .env && pnpm infra:up

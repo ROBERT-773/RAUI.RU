@@ -1,4 +1,5 @@
 import { hash } from './common/security';
+import { randomUUID } from 'node:crypto';
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -520,6 +521,49 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           response.headers.get('traceparent') ?? '',
           /^00-[a-f0-9]{32}-[a-f0-9]{16}-00$/,
         );
+      },
+    );
+    await t.test(
+      'Search backlog metrics reflect owned tombstones and recover after cleanup',
+      async () => {
+        const metric = async () => {
+          const response = await call(
+            '/admin/operations/metrics',
+            'GET',
+            undefined,
+            admin,
+          );
+          assert.equal(response.status, 200);
+          return String(response.data);
+        };
+        const value = (text: string, name: string) => {
+          const line = text
+            .split('\n')
+            .find((line) =>
+              line.startsWith(name + '{queue="search",state="pending"} '),
+            );
+          assert.ok(line);
+          return Number(line.slice(line.lastIndexOf(' ') + 1));
+        };
+        const before = await metric(),
+          count = value(before, 'raui_queue_jobs');
+        const id = randomUUID();
+        try {
+          await pool.query(
+            "INSERT INTO search_jobs(listing_id,enqueued_at,updated_at) VALUES($1,now()-interval '10 minutes',now())",
+            [id],
+          );
+          const pending = await metric();
+          assert.equal(value(pending, 'raui_queue_jobs'), count + 1);
+          assert.ok(value(pending, 'raui_queue_oldest_seconds') >= 600);
+          assert.ok(!pending.includes(id));
+        } finally {
+          await pool.query('DELETE FROM search_jobs WHERE listing_id=$1', [id]);
+        }
+        const recovered = await metric();
+        assert.equal(value(recovered, 'raui_queue_jobs'), count);
+        if (count === 0)
+          assert.equal(value(recovered, 'raui_queue_oldest_seconds'), 0);
       },
     );
     await t.test('buyer role and global rate limits are enforced', async () => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { ArgumentsHost } from '@nestjs/common';
 import { ApiErrors } from './common/http';
 import { envSchema } from './config';
+import { ConfiguredMediaDelivery } from './modules/media/storage';
 const production = {
   NODE_ENV: 'production',
   PROXY_IDENTITY_SECRET: 'synthetic-forwarding-key-'.repeat(2),
@@ -129,4 +130,66 @@ test('HTTP failures tolerate null errors and never log unknown private error cod
         value === JSON.stringify({ event: 'request_error', code: 'internal' }),
     ),
   );
+});
+
+test('CDN media bases reject query, fragment and credentials while preserving path prefixes', () => {
+  const development = {
+    NODE_ENV: 'test',
+    WEB_ORIGIN: 'http://localhost:3000',
+    DATABASE_URL: 'postgresql://localhost/raui',
+    REDIS_URL: 'redis://localhost:6379',
+  };
+  for (const config of [production, development]) {
+    for (const base of [
+      'https://cdn.raui.ru?x=1',
+      'https://cdn.raui.ru#fragment',
+      'https://user:password@cdn.raui.ru',
+      'data:text/plain,fixture',
+    ])
+      assert.equal(
+        envSchema.safeParse({ ...config, CDN_BASE_URL: base }).success,
+        false,
+      );
+    for (const base of [
+      'https://cdn.raui.ru',
+      'https://cdn.raui.ru/',
+      'https://cdn.raui.ru/prefix/',
+    ])
+      assert.equal(
+        envSchema.safeParse({ ...config, CDN_BASE_URL: base }).success,
+        true,
+      );
+  }
+  const fields = [
+    'NODE_ENV',
+    'WEB_ORIGIN',
+    'DATABASE_URL',
+    'REDIS_URL',
+    'CDN_BASE_URL',
+  ] as const;
+  const before = Object.fromEntries(
+    fields.map((field) => [field, process.env[field]]),
+  );
+  try {
+    Object.assign(process.env, development);
+    const delivery = new ConfiguredMediaDelivery();
+    for (const [base, expected] of [
+      [undefined, '/v1/media/fixture/thumb'],
+      ['https://cdn.raui.ru', 'https://cdn.raui.ru/v1/media/fixture/thumb'],
+      ['https://cdn.raui.ru/', 'https://cdn.raui.ru/v1/media/fixture/thumb'],
+      [
+        'https://cdn.raui.ru/prefix/',
+        'https://cdn.raui.ru/prefix/v1/media/fixture/thumb',
+      ],
+    ] as const) {
+      if (base === undefined) delete process.env.CDN_BASE_URL;
+      else process.env.CDN_BASE_URL = base;
+      assert.equal(delivery.url('fixture', 'thumb'), expected);
+    }
+  } finally {
+    for (const field of fields) {
+      if (before[field] === undefined) delete process.env[field];
+      else process.env[field] = before[field];
+    }
+  }
 });

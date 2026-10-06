@@ -1,4 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
+import {
+  test,
+  expect,
+  type Page,
+  type Locator,
+  type Response as PlaywrightResponse,
+} from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import AxeBuilder from '@axe-core/playwright';
 test.beforeEach(() => {
@@ -18,6 +24,81 @@ async function login(page: Page) {
     page.getByText('Тестовый пользователь', { exact: true }),
   ).toBeVisible();
 }
+
+type Bounds = [number, number, number, number];
+type SavedRow = { id: string; name: string; definition: unknown };
+const centerX = (b: Bounds) => (b[0] + b[2]) / 2;
+const width = (b: Bounds) => b[2] - b[0];
+function currentBounds(page: Page): Bounds {
+  return JSON.parse(new URL(page.url()).searchParams.get('definition')!).bounds;
+}
+function endpoint(response: PlaywrightResponse, method: string, path: string) {
+  return (
+    response.request().method() === method &&
+    new URL(response.url()).pathname === path
+  );
+}
+async function moveMap(
+  page: Page,
+  action: () => Promise<void>,
+  accept: (bounds: Bounds) => boolean,
+) {
+  const pending = page.waitForResponse((response) => {
+    if (!endpoint(response, 'POST', '/api/v1/search/map')) return false;
+    const candidate = response.request().postDataJSON()?.bounds;
+    return (
+      Array.isArray(candidate) &&
+      candidate.length === 4 &&
+      accept(candidate as Bounds)
+    );
+  });
+  await action();
+  expect((await pending).status()).toBe(201);
+  await expect.poll(() => accept(currentBounds(page))).toBe(true);
+  await expect(
+    page.getByRole('button', { name: 'Сохранить поиск', exact: true }),
+  ).toBeEnabled();
+}
+function savedResponse(response: PlaywrightResponse, after?: string) {
+  return (
+    endpoint(response, 'GET', '/api/v1/account/saved-searches') &&
+    new URL(response.url()).searchParams.get('after') === (after ?? null)
+  );
+}
+async function savedArticle(page: Page, id: string): Promise<Locator | null> {
+  await page.goto('/account');
+  await expect(
+    page.getByRole('heading', { name: 'Мой аккаунт' }),
+  ).toBeVisible();
+  let pending = page.waitForResponse((response) => savedResponse(response));
+  await page
+    .getByRole('button', { name: 'Сохранённые поиски', exact: true })
+    .click();
+  const entries: SavedRow[] = [];
+  for (let count = 0; count < 100; count++) {
+    const response = await pending;
+    expect(response.status()).toBe(200);
+    const data = (await response.json()) as {
+      items: SavedRow[];
+      cursor: string | null;
+    };
+    entries.push(...data.items);
+    const articles = page.locator('article.panel');
+    await expect(articles).toHaveCount(entries.length);
+    const index = entries.findIndex((entry) => entry.id === id);
+    if (index >= 0) return articles.nth(index);
+    if (!data.cursor) return null;
+    const after = data.cursor;
+    pending = page.waitForResponse((response) =>
+      savedResponse(response, after),
+    );
+    await page
+      .getByRole('button', { name: 'Показать ещё', exact: true })
+      .click();
+  }
+  throw new Error('Saved-search fixture pagination did not terminate');
+}
+
 test('search → filter → detail → favorite and comparison', async ({ page }) => {
   await login(page);
   await page.goto('/');
@@ -60,15 +141,19 @@ test('search → filter → detail → favorite and comparison', async ({ page }
     page.getByRole('table', { name: 'Сравнение объектов' }),
   ).toBeVisible();
 });
-test('map/list viewport synchronization and keyboard markers', async ({
+test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Карта', exact: true }).click();
-  await expect(page.locator('.leaflet-map')).toBeVisible();
-  await expect(page.locator('.price-marker').first()).toBeVisible();
+  const map = page.locator('.leaflet-map'),
+    marker = page.locator('.price-marker').first(),
+    save = page.getByRole('button', { name: 'Сохранить поиск', exact: true });
+  await expect(map).toBeVisible();
+  await expect(marker).toBeVisible();
+  await expect(save).toBeEnabled();
   await expect
-    .poll(async () =>
+    .poll(() =>
       page
         .locator('.price-marker span')
         .evaluateAll((nodes) =>
@@ -79,53 +164,150 @@ test('map/list viewport synchronization and keyboard markers', async ({
         ),
     )
     .toBe(2);
-  await expect(page.locator('.price-marker').first()).toHaveAttribute(
-    'tabindex',
-    '0',
+  const pending = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/search/selection'),
+  );
+  await marker.focus();
+  await expect(marker).toBeFocused();
+  await marker.press('Enter');
+  const selection = await pending;
+  expect(selection.status()).toBe(201);
+  const requested = selection.request().postDataJSON() as { ids: string[] };
+  expect(requested.ids.length).toBeGreaterThan(0);
+  const selected = (await selection.json()) as { items: { id: string }[] };
+  const ids = selected.items.map((item) => item.id).sort();
+  expect(ids).toEqual([...requested.ids].sort());
+  await expect
+    .poll(() =>
+      page
+        .locator('.cards h2 a')
+        .evaluateAll((nodes) =>
+          nodes
+            .map((node) =>
+              new URL((node as HTMLAnchorElement).href).pathname.slice(
+                '/listings/'.length,
+              ),
+            )
+            .sort(),
+        ),
+    )
+    .toEqual(ids);
+  await page
+    .getByRole('button', { name: 'Показать все в области', exact: true })
+    .click();
+  await expect(save).toBeEnabled();
+  const original = currentBounds(page);
+  await moveMap(
+    page,
+    async () => {
+      await map.focus();
+      await map.press('ArrowRight');
+    },
+    (bounds) => centerX(bounds) > centerX(original) + 0.000001,
+  );
+  const panned = currentBounds(page);
+  await moveMap(
+    page,
+    async () => {
+      await map.focus();
+      await map.press('ArrowLeft');
+    },
+    (bounds) => centerX(bounds) < centerX(panned) - 0.000001,
+  );
+  const beforeZoom = currentBounds(page);
+  await moveMap(
+    page,
+    () => page.getByRole('button', { name: 'Приблизить', exact: true }).click(),
+    (bounds) => width(bounds) < width(beforeZoom) * 0.9,
+  );
+  const zoomed = currentBounds(page);
+  await moveMap(
+    page,
+    () => page.getByRole('button', { name: 'Отдалить', exact: true }).click(),
+    (bounds) => width(bounds) > width(zoomed) * 1.5,
   );
   await page.screenshot({
     path: '../../.cache/map-' + test.info().project.name + '.png',
   });
   await page.getByRole('button', { name: 'Список', exact: true }).click();
-  await expect(
-    page.getByRole('link', { name: 'Квартира 2 комнаты', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('link', { name: 'Квартира 3 комнаты', exact: true }),
-  ).toBeVisible();
+  for (const name of ['Квартира 2 комнаты', 'Квартира 3 комнаты'])
+    await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
 });
-test('saved search CRUD and reopening filters', async ({ page }) => {
+test('saved search create, rename, reopen and delete persist', async ({
+  page,
+}, info) => {
   await login(page);
   await page.goto('/');
   await page.getByLabel('Цена до', { exact: true }).fill('15000000');
   await page.getByRole('button', { name: 'Найти', exact: true }).click();
-  await expect(page).toHaveURL(/\/search\?definition=/);
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
   ).toHaveCount(0);
+  const pending = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/account/saved-searches'),
+  );
   await page
     .getByRole('button', { name: 'Сохранить поиск', exact: true })
     .click();
+  const create = await pending;
+  expect(create.status()).toBe(201);
+  const created = (await create.json()) as SavedRow;
+  const article = await savedArticle(page, created.id);
+  expect(article).not.toBeNull();
+  const name = `RC ${info.project.name} ${created.id}`;
+  await article!.getByLabel('Название', { exact: true }).fill(name);
+  const path = '/api/v1/account/saved-searches/' + created.id;
+  const renamePending = page.waitForResponse((response) =>
+    endpoint(response, 'PATCH', path),
+  );
+  const refresh = page.waitForResponse((response) => savedResponse(response));
+  await article!
+    .getByRole('button', { name: 'Переименовать', exact: true })
+    .click();
+  const rename = await renamePending;
+  expect(rename.status()).toBe(200);
+  expect(await rename.json()).toMatchObject({
+    id: created.id,
+    name,
+    definition: created.definition,
+  });
+  expect((await refresh).status()).toBe(200);
+  const persisted = await savedArticle(page, created.id);
+  expect(persisted).not.toBeNull();
   await expect(
-    page.getByRole('status').filter({ hasText: 'Поиск сохранён' }),
+    persisted!.getByRole('heading', { name, exact: true }),
   ).toBeVisible();
-  await page.goto('/account');
-  await page
-    .getByRole('button', { name: 'Сохранённые поиски', exact: true })
-    .click();
-  await page
+  await persisted!
     .getByRole('link', { name: 'Открыть поиск', exact: true })
-    .first()
     .click();
+  await expect(page.getByLabel('Цена до', { exact: true })).toHaveValue(
+    '15000000',
+  );
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
   ).toHaveCount(0);
+  const deleting = await savedArticle(page, created.id);
+  expect(deleting).not.toBeNull();
+  const removePending = page.waitForResponse((response) =>
+    endpoint(response, 'DELETE', path),
+  );
+  const removeRefresh = page.waitForResponse((response) =>
+    savedResponse(response),
+  );
+  await deleting!
+    .getByRole('button', { name: 'Удалить поиск', exact: true })
+    .click();
+  const removed = await removePending;
+  expect(removed.status()).toBe(200);
+  expect(await removed.json()).toEqual({ ok: true });
+  expect((await removeRefresh).status()).toBe(200);
+  expect(await savedArticle(page, created.id)).toBeNull();
 });
 test('inquiry and account messages', async ({ page }, testInfo) => {
   const text = 'Можно посмотреть квартиру? ' + testInfo.project.name;

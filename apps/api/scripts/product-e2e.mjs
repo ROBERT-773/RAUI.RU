@@ -1,5 +1,6 @@
-import { measureLoad } from './load.mjs';
+import { measureLoad, readLoadJson } from './load.mjs';
 import { Pool } from 'pg';
+import { createLoopbackLoadClients } from './load-transport.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
@@ -182,13 +183,56 @@ async function run() {
       await monitor.run(() => waitService(url, children));
     }
     stage = 'load';
-    await monitor.run(() =>
-      measureLoad(
-        'http://127.0.0.1:3101',
-        rows[0].id,
-        resolve(directory, 'phase4d-load.json'),
-      ),
-    );
+    const authentication = await monitor.run(async () => {
+      const response = await fetch('http://127.0.0.1:3101/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'buyer@e2e.test',
+          password: 'E2E-only-password-42!',
+          transport: 'bearer',
+        }),
+        signal: AbortSignal.timeout(5000),
+        redirect: 'error',
+      });
+      if (response.status !== 201) throw new Error('Load fixture login failed');
+      const login = await readLoadJson(response);
+      if (login.user?.id !== buyer || typeof login.sessionToken !== 'string')
+        throw new Error('Load fixture identity failed');
+      const sessionsResponse = await fetch(
+        'http://127.0.0.1:3101/v1/auth/sessions',
+        {
+          headers: { Authorization: 'Bearer ' + login.sessionToken },
+          signal: AbortSignal.timeout(5000),
+          redirect: 'error',
+        },
+      );
+      if (sessionsResponse.status !== 200)
+        throw new Error('Load fixture session failed');
+      const sessions = await readLoadJson(sessionsResponse);
+      if (!Array.isArray(sessions) || sessions.length !== 1)
+        throw new Error('Load fixture session inventory failed');
+      return {
+        token: login.sessionToken,
+        buyerId: buyer,
+        sessionId: sessions[0].id,
+        listingIds: rows.map((row) => row.id),
+      };
+    });
+    const clients = createLoopbackLoadClients();
+    try {
+      await monitor.run(() =>
+        measureLoad(
+          'http://127.0.0.1:3101',
+          rows[0].id,
+          resolve(directory, 'phase4d-load.json'),
+          authentication,
+          { fetch: clients.fetch },
+        ),
+      );
+    } finally {
+      clients.close();
+    }
     stage = 'browser-regression';
     const child = spawn(
       process.execPath,

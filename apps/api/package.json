@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file=../../.env dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js .cache/test/professional.test.js .cache/test/ai-trust.test.js .cache/test/ai-provider.test.js .cache/test/readiness.test.js .cache/test/ingress.test.js .cache/test/operations.test.js && node --test scripts/readiness.test.mjs scripts/e2e-runtime.test.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test .cache/test/health.test.js .cache/test/core.test.js .cache/test/search.test.js .cache/test/commerce.test.js .cache/test/commerce-signatures.test.js .cache/test/professional.test.js .cache/test/ai-trust.test.js .cache/test/ai-provider.test.js .cache/test/readiness.test.js .cache/test/ingress.test.js .cache/test/operations.test.js && node --test scripts/readiness.test.mjs scripts/e2e-runtime.test.mjs scripts/load.test.mjs scripts/load-transport.test.mjs",
     "test:integration": "tsc -p tsconfig.test.json && node --env-file=../../.env scripts/integration.mjs",
     "db:migrate": "node --env-file=../../.env dist/modules/database/migrate.js",
     "worker": "node --env-file=../../.env dist/worker.js",
@@ -18,7 +18,7 @@
     "worker:commerce": "node --env-file=../../.env dist/commerce-worker.js",
     "worker:professional": "node --env-file=../../.env dist/professional-worker.js",
     "worker:trust": "node --env-file=../../.env dist/trust-worker.js",
-    "recovery:drill": "node --env-file=../../.env scripts/recovery-drill.mjs"
+    "recovery:drill": "node --env-file=../../.env scripts/recovery-fixture.mjs"
   },
   "dependencies": {
     "@raui/config": "workspace:*",

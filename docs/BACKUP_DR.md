@@ -4,17 +4,36 @@
 
 Run `pnpm infra:up`, `pnpm build`, `pnpm db:migrate`, then `pnpm recovery:drill`.
 The drill requires an explicit loopback development DATABASE_URL and the local
-Compose PostgreSQL service. It holds a read-only repeatable-read exported snapshot,
+Compose PostgreSQL service. The wrapper creates a fresh `raui_test_*` source,
+loads all migrations and seeds linked user/property/listing/history, geometry and
+audit facts. It closes the source's sole writer before backup; no API or workers
+use this generated database. The configured development database is not seeded,
+restored or dropped. Sequence state is not frozen by an exported MVCC snapshot,
+so writer quiescence is a required condition. The drill holds a read-only
+repeatable-read exported snapshot,
 uses `pg_dump --snapshot` and streams the custom dump into AES-256-GCM encryption.
 A generated 256-bit key stays in memory; nonce/tag and ciphertext checksum identify
 the envelope. Private temporary files/directories use 0600/0700 permissions.
 
 Authentication completes before pg_restore sees plaintext. The script creates a
-fresh random `raui_restore_test_*` database; it never drops or restores the source.
+fresh random `raui_restore_test_*` database; the child never drops or restores its source. The wrapper removes its owned disposable source after verification; the configured development database is never restored or dropped.
 It compares every public table's count and content digest, migration checksums,
-sequence positions and PostGIS version, then checks an encrypted private-object
+full sequence configuration, `last_value`/`is_called` and PostGIS version. It
+then verifies the next value of every sequence only in the disposable restore DB,
+including pristine and previously used identity sequences, then checks an encrypted private-object
 fixture. Scratch DB, plaintext/ciphertext fixtures and in-memory key are removed
-in cleanup. The persisted `.cache/phase4d-recovery.json` contains only verification
+in cleanup. The parent owns the private workspace and removes it after child
+termination, including forced termination; pool-close waits have deadlines so
+cleanup still attempts key wipe and file removal. A failed or forcibly terminated
+drill is not restore evidence. The parent publishes the verified JSON atomically
+only after child verification and parent cleanup both complete, and invalidates
+previous evidence before starting. Interrupting the parent itself (especially
+SIGKILL or machine failure) can skip cleanup: inspect the task-owned exact
+`.cache/recovery/drill-*` workspace and generated source/restore database names.
+After confirming ownership, remove that exact private workspace as well as the
+owned disposable databases; never remove workspaces or DBs by a broad prefix. If an owned scratch DB survives a failure, inspect
+the exact generated name and remove only that disposable DB after confirming
+ownership; never delete databases by a broad prefix. The persisted `.cache/phase4d-recovery.json` contains only verification
 metadata and timing. Tests reject remote/original names, traversal paths, wrong
 keys and corrupted ciphertext. The drill is verification, not a retained backup.
 

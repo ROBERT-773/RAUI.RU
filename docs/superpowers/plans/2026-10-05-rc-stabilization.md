@@ -24,11 +24,11 @@ not new product features. Apply TDD: observe meaningful red, minimal fix, suites
 - [x] DB: populated current-master migration repeat/upgrade, immutable checksums,
       domain/audit/PostGIS/sequence identity; bounded advisory-lock regression.
       Existing migration SQL is immutable; scratch databases only.
-- [ ] Operations: payment-failure and stalled-index alert evidence; staging forward
+- [x] Operations: payment-failure and stalled-index alert evidence; staging forward
       migration/API/web/worker/ingress order, compatible rollback/forward-fix.
-- [ ] QA: real viewport/keyboard/saved-search assertions, bounded E2E harness,
+- [x] QA: real viewport/keyboard/saved-search assertions, bounded E2E harness,
       safe failure diagnostics, meaningful visual comparison where portable.
-- [ ] Evidence: expand existing critical-flow performance measurements, restore
+- [x] Evidence: expand existing critical-flow performance measurements, restore
       identity including sequence state, external production prerequisites.
 - [ ] Final: lint/typecheck/unit/integration/build, full cross-browser E2E, migration,
       smoke/workers, security audit, load/restore and readiness artifact verification.

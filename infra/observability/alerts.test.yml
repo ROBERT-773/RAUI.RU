@@ -1,0 +1,257 @@
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+tests:
+  - name: exact-boundaries-do-not-fire
+    interval: 1m
+    input_series:
+      - series: raui_queue_oldest_seconds{queue="search",state="pending"}
+        values: 300+0x20
+      - series: raui_queue_jobs{queue="media",state="dead"}
+        values: 0+0x20
+      - series: raui_provider_failures_hour{provider="payment"}
+        values: 5+0x20
+      - series: raui_dependency_up{dependency="postgres_redis"}
+        values: 1+0x20
+      - series: up{job="raui-api",instance="local"}
+        values: 1+0x20
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="5xx"}
+        values: 0+144x20
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="2xx"}
+        values: 0+9856x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="0.3"}
+        values: 0+950x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="0.5"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="+Inf"}
+        values: 0+1000x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiApiLatency
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiQueueStale
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiDeadJobs
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiProviderFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiScrapeUnavailable
+        exp_alerts: []
+  - name: thresholds-duration-firing-and-recovery
+    interval: 1m
+    input_series:
+      - series: raui_queue_oldest_seconds{queue="search",state="pending"}
+        values: 300 301+0x11 300+0x10
+      - series: raui_queue_jobs{queue="media",state="dead"}
+        values: 0 1+0x11 0+0x10
+      - series: raui_provider_failures_hour{provider="payment"}
+        values: 5 6+0x11 5+0x10
+      - series: raui_dependency_up{dependency="postgres_redis"}
+        values: 1 0+0x1 1+0x20
+      - series: up{job="raui-api",instance="local"}
+        values: 1 0+0x1 1+0x20
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="5xx"}
+        values: 0+145x12 1740+0x10
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="2xx"}
+        values: 0+9855x12 128260+10000x10
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="0.3"}
+        values: 0+0x12 10000+10000x10
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="0.5"}
+        values: 0+10000x23
+      - series: raui_http_duration_seconds_bucket{route="/v1/categories",method="GET",status="2xx",le="+Inf"}
+        values: 0+10000x23
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: RauiDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: RauiDependencyUnavailable
+        exp_alerts:
+          - exp_labels:
+              dependency: postgres_redis
+              severity: critical
+            exp_annotations:
+              summary: PostgreSQL/Redis or OpenSearch probe unavailable
+      - eval_time: 3m
+        alertname: RauiDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: RauiScrapeUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: RauiScrapeUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: raui-api
+              instance: local
+              severity: critical
+            exp_annotations:
+              summary: Metrics scraper authentication or service unavailable
+      - eval_time: 3m
+        alertname: RauiScrapeUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RauiQueueStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RauiQueueStale
+        exp_alerts:
+          - exp_labels:
+              queue: search
+              state: pending
+              severity: warning
+            exp_annotations:
+              summary: Queue age exceeds five minutes; check worker leases and retries
+      - eval_time: 13m
+        alertname: RauiQueueStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RauiDeadJobs
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RauiDeadJobs
+        exp_alerts:
+          - exp_labels:
+              queue: media
+              state: dead
+              severity: warning
+            exp_annotations:
+              summary: Dead jobs require audited inspection and retry
+      - eval_time: 13m
+        alertname: RauiDeadJobs
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RauiProviderFailures
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RauiProviderFailures
+        exp_alerts:
+          - exp_labels:
+              provider: payment
+              severity: warning
+            exp_annotations:
+              summary: Provider failures or uncertain AI attempts require investigation
+      - eval_time: 13m
+        alertname: RauiProviderFailures
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary:
+                API burns more than 14.4 times the proposed 99.9% availability error
+                budget
+      - eval_time: 17m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RauiApiLatency
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: RauiApiLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary:
+                Ordinary API p95 exceeds 300 ms; inspect route breakdown and dependency
+                saturation
+      - eval_time: 17m
+        alertname: RauiApiLatency
+        exp_alerts: []
+  - name: excluded-routes-completed-jobs-and-planned-fallback
+    interval: 1m
+    input_series:
+      - series: raui_queue_oldest_seconds{queue="media",state="ready"}
+        values: 999+0x20
+      - series: raui_ai_fallbacks_hour
+        values: 999+0x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/ai/search",method="GET",status="2xx",le="0.3"}
+        values: 0+0x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/ai/search",method="GET",status="2xx",le="0.5"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/ai/search",method="GET",status="2xx",le="+Inf"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/admin/operations/metrics",method="GET",status="2xx",le="0.3"}
+        values: 0+0x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/admin/operations/metrics",method="GET",status="2xx",le="0.5"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/admin/operations/metrics",method="GET",status="2xx",le="+Inf"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/organizations/:id/feeds/:feedId",method="GET",status="2xx",le="0.3"}
+        values: 0+0x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/organizations/:id/feeds/:feedId",method="GET",status="2xx",le="0.5"}
+        values: 0+1000x20
+      - series: raui_http_duration_seconds_bucket{route="/v1/organizations/:id/feeds/:feedId",method="GET",status="2xx",le="+Inf"}
+        values: 0+1000x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RauiApiLatency
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiQueueStale
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiProviderFailures
+        exp_alerts: []
+  - name: zero-traffic-and-absent-series
+    interval: 1m
+    input_series:
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="5xx"}
+        values: 0+0x20
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="2xx"}
+        values: 0+0x20
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiApiLatency
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiQueueStale
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiDeadJobs
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiProviderFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiScrapeUnavailable
+        exp_alerts: []
+  - name: counter-reset-with-healthy-ratio
+    interval: 1m
+    input_series:
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="5xx"}
+        values: 0+1x8 0+1x12
+      - series: raui_http_duration_seconds_count{route="/v1/categories",method="GET",status="2xx"}
+        values: 0+999x8 0+999x12
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: RauiApiErrorBudgetBurn
+        exp_alerts: []

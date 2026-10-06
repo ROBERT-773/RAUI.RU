@@ -21,6 +21,7 @@ const gates = [
   'load',
   'security',
   'restore',
+  'observability',
 ];
 function releasePath(path) {
   return (
@@ -130,10 +131,28 @@ export async function verifyFiles(manifest, root) {
   if (
     load.version !== 1 ||
     !Array.isArray(load.results) ||
-    load.results.length !== 3 ||
+    load.results.length !== 6 ||
     load.results.some(
       (result) =>
-        !['catalog', 'search', 'public-detail'].includes(result.scenario) ||
+        ![
+          'catalog',
+          'search',
+          'public-detail',
+          'map',
+          'auth-me',
+          'auth-sessions',
+        ].includes(result.scenario) ||
+        !Number.isFinite(result.p50Ms) ||
+        !Number.isFinite(result.p99Ms) ||
+        result.p50Ms < 0 ||
+        result.p50Ms > result.p95Ms ||
+        result.p95Ms > result.p99Ms ||
+        !Number.isFinite(result.requestsPerSecond) ||
+        result.requestsPerSecond <= 0 ||
+        result.successes !== 40 ||
+        result.warmup !== 5 ||
+        result.warmupErrors !== 0 ||
+        result.targetP95Ms !== 300 ||
         !Number.isFinite(result.p95Ms) ||
         result.p95Ms < 0 ||
         result.p95Ms > 300 ||
@@ -141,7 +160,7 @@ export async function verifyFiles(manifest, root) {
         result.requests !== 40 ||
         result.concurrency !== 4,
     ) ||
-    new Set(load.results.map((result) => result.scenario)).size !== 3
+    new Set(load.results.map((result) => result.scenario)).size !== 6
   )
     throw new Error('Invalid measured load evidence');
   if (
@@ -152,7 +171,18 @@ export async function verifyFiles(manifest, root) {
     recovery.migrationsVerified !== 12 ||
     !Number.isInteger(recovery.tablesVerified) ||
     recovery.tablesVerified < 1 ||
-    recovery.cipher !== 'AES-256-GCM'
+    recovery.cipher !== 'AES-256-GCM' ||
+    recovery.sourceWritersQuiesced !== true ||
+    recovery.sequenceStateAndConfig !== 'verified' ||
+    !Number.isSafeInteger(recovery.sequencesVerified) ||
+    recovery.sequencesVerified < 1 ||
+    recovery.sequenceNextValuesVerified !== recovery.sequencesVerified ||
+    !Number.isSafeInteger(recovery.pristineSequencesVerified) ||
+    recovery.pristineSequencesVerified < 1 ||
+    !Number.isSafeInteger(recovery.calledSequencesVerified) ||
+    recovery.calledSequencesVerified < 1 ||
+    recovery.pristineSequencesVerified + recovery.calledSequencesVerified !==
+      recovery.sequencesVerified
   )
     throw new Error('Invalid restore evidence');
 }

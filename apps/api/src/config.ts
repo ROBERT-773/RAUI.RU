@@ -90,7 +90,20 @@ export const envSchema = z
     S3_ENDPOINT: z.url().optional(),
     S3_REGION: z.string().default('eu-central-1'),
     S3_BUCKET: z.string().optional(),
-    CDN_BASE_URL: z.url().optional(),
+    CDN_BASE_URL: z
+      .url()
+      .refine((value) => {
+        const url = safeUrl(value);
+        return (
+          !!url &&
+          ['http:', 'https:'].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, 'CDN base requires clean credential-free HTTP(S) URL')
+      .optional(),
     VERIFICATION_GATEWAY_URL: z
       .url()
       .refine((v) => safeUrl(v)?.protocol === 'https:')

@@ -105,8 +105,9 @@ image merely because its DB reader is compatible.
    enable approved flags. This sequence does not authorize production traffic.
 
 For code rollback: flags off, stop claims/drain leases, validate the previous
-compatible API/web/config and verified image, smoke behind private ingress,
-restart compatible workers, then switch ingress and observe. Keep 012 and its
+compatible API/web/config and verified image, run worker-independent smoke
+behind private ingress, restart compatible workers, then run full core/search
+smoke before switching ingress and observing. Keep 012 and its
 queued facts; old explicit-column producers/readers remain compatible. Preserve
 RC security patches in any rollback artifact. If that cannot be achieved, use a
 reviewed forward-fix rather than restoring an older unsafe artifact.
