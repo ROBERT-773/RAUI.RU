@@ -13,17 +13,17 @@ Purpose: track non-production provider readiness for RAU-13 and the production l
 
 ## Acceptance matrix
 
-| Capability | Required binding | Current source behavior | Sandbox acceptance | Failure-path acceptance | Launch state |
-| --- | --- | --- | --- | --- | --- |
-| Verification email/SMS | `VERIFICATION_GATEWAY_URL` + secure token | Local delivery/storage prohibited in production | [ ] provider send/verify | [ ] timeout/invalid/retry | BLOCKED |
-| Notifications | HTTPS gateway + bearer token | HTTPS-only, DNS/public-IP validation, pinned address, SNI preserved, stable Idempotency-Key, 5s timeout, bounded retry/DLQ; unconfigured => defer | [ ] delivered event | [ ] timeout/retry/DLQ/replay | BLOCKED |
-| Feed imports | allowlisted HTTPS hosts | Empty allowlist denies fetch | [ ] allowed feed fetch | [ ] blocked host / SSRF / redirect | BLOCKED |
-| Private object storage | S3-compatible private bucket + SDK credential chain | Local driver non-production only | [ ] upload/read/delete | [ ] permission/network/version restore | BLOCKED |
-| CDN/media delivery | private origin + intended CDN policy | adapter-based | [ ] public delivery path | [ ] origin bypass denied | BLOCKED |
-| Maps tiles | tile URL + legal attribution | Optional frontend binding | [ ] render + attribution | [ ] unavailable provider fallback | BLOCKED |
-| Geocoding | HTTPS endpoint + token | Optional; manual coordinates fallback | [ ] resolve address | [ ] timeout/invalid/manual fallback | BLOCKED |
-| AI gateway | gateway URL/token if enabled | `AI_ENABLED=false` by default, per-capability flags, budgets/fallbacks | [ ] sandbox capability test | [ ] timeout/budget/fallback/non-authoritative | DISABLED/BLOCKED |
-| Payments | selected provider adapter + sandbox credentials | Unconfigured provider fails closed | [ ] create/refund/reconcile | [ ] signature/replay/idempotency/failure | DISABLED/BLOCKED |
+Current launch-scope matrix:
+
+- Verification email/SMS — binding: `VERIFICATION_GATEWAY_URL` plus secure token; source behavior: local delivery/storage is prohibited in production; required acceptance: provider send/verify plus timeout/invalid/retry; state: BLOCKED.
+- Notifications — binding: HTTPS gateway plus bearer token; source behavior: HTTPS-only, DNS/public-IP validation, pinned address, SNI preserved, stable Idempotency-Key, 5s timeout, bounded retry/DLQ, and unconfigured means defer; required acceptance: delivered event plus timeout/retry/DLQ/replay; state: BLOCKED.
+- Feed imports — binding: allowlisted HTTPS hosts; source behavior: empty allowlist denies fetch; required acceptance: allowed feed fetch plus blocked-host/SSRF/redirect tests; state: BLOCKED.
+- Private object storage — binding: S3-compatible private bucket plus SDK credential chain; source behavior: local driver is non-production only; required acceptance: upload/read/delete plus permission/network/version-restore tests; state: BLOCKED.
+- CDN/media delivery — binding: private origin plus intended CDN policy; source behavior: adapter-based; required acceptance: public delivery plus origin-bypass denial; state: BLOCKED.
+- Maps tiles — binding: tile URL plus legal attribution; source behavior: optional frontend binding; required acceptance: render/attribution plus provider-unavailable fallback; state: BLOCKED.
+- Geocoding — binding: HTTPS endpoint plus token; source behavior: optional with manual-coordinate fallback; required acceptance: address resolution plus timeout/invalid/manual fallback; state: BLOCKED.
+- AI gateway — binding: gateway URL/token if enabled; source behavior: `AI_ENABLED=false` by default with per-capability flags and budgets/fallbacks; required acceptance: sandbox capability plus timeout/budget/fallback/non-authoritative behavior; state: DISABLED/BLOCKED.
+- Payments — binding: selected provider adapter plus sandbox credentials; source behavior: unconfigured provider fails closed; required acceptance: create/refund/reconcile plus signature/replay/idempotency/failure; state: DISABLED/BLOCKED.
 
 ## 1. Verification provider
 
@@ -36,6 +36,7 @@ Purpose: track non-production provider readiness for RAU-13 and the production l
 - Evidence:
 
 Acceptance:
+
 - [ ] Endpoint is HTTPS.
 - [ ] Token/credential exists only in protected staging settings.
 - [ ] Send + verification flow succeeds.
@@ -51,6 +52,7 @@ Acceptance:
 - Evidence:
 
 Acceptance:
+
 - [ ] Endpoint is HTTPS/443 and hostname-based.
 - [ ] DNS resolves to public permitted destinations only.
 - [ ] TLS verification/SNI remains correct while transport is pinned.
@@ -66,6 +68,7 @@ Acceptance:
 - Evidence:
 
 Acceptance:
+
 - [ ] Only explicit allowlisted hosts are fetchable.
 - [ ] Redirects cannot escape the allowlist/public-IP policy.
 - [ ] Private/link-local/loopback/reserved destinations are rejected.
@@ -83,6 +86,7 @@ Acceptance:
 - Evidence:
 
 Acceptance:
+
 - [ ] Bucket is private.
 - [ ] Workload uses SDK/IAM chain or equivalent protected injection.
 - [ ] Upload/read/delete through application adapter works.
@@ -104,6 +108,7 @@ Acceptance:
 - Evidence:
 
 Acceptance:
+
 - [ ] Legal attribution is displayed.
 - [ ] Geocoder uses HTTPS.
 - [ ] Normal address lookup succeeds.
@@ -119,6 +124,7 @@ Acceptance:
 - Evidence:
 
 Acceptance:
+
 - [ ] Global and per-capability flags remain off until accepted.
 - [ ] Timeouts/retries/fallbacks verified.
 - [ ] Per-call/daily budgets enforced.
@@ -129,10 +135,12 @@ Acceptance:
 ## 7. Payments
 
 Launch decision:
+
 - [ ] Payments excluded from initial launch.
 - [ ] Payments included; provider below is fully accepted.
 
 If included:
+
 - Provider:
 - Sandbox merchant/account reference:
 - Adapter implementation reference:
@@ -141,6 +149,7 @@ If included:
 - Evidence:
 
 Acceptance:
+
 - [ ] Create/payment intent is idempotent.
 - [ ] Webhook signature validation passes/fails correctly.
 - [ ] Replay protection works.
