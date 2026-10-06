@@ -222,8 +222,19 @@ export async function measureLoad(
         result.p95Ms === null ||
         result.p95Ms > 300,
     )
-  )
+  ) {
+    for (const result of results.filter(
+      (r) => r.errors || r.warmupErrors || r.p95Ms === null || r.p95Ms > 300,
+    )) {
+      const timing = Number.isFinite(result.p95Ms)
+        ? result.p95Ms.toFixed(2)
+        : 'unavailable';
+      (runtime.reportFailure ?? console.error)(
+        `::error title=Load scenario::${result.scenario} errors=${result.errors} warmupErrors=${result.warmupErrors} p95Ms=${timing} transport=${result.errorKinds.transport} status=${result.errorKinds.status} body=${result.errorKinds.body} contract=${result.errorKinds.contract}`,
+      );
+    }
     throw new Error('Measured load failed; inspect bounded load evidence');
+  }
   console.log(
     'Local load: six critical read scenarios,240 measured requests,concurrency4,p95<=300ms',
   );

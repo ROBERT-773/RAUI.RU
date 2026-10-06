@@ -221,3 +221,249 @@ for (const mutation of ['favorite-delete', 'saved-rename', 'saved-delete']) {
     expect(screen.queryByRole('link', { name: 'Favorite listing' })).toBeNull();
   });
 }
+
+for (const delayed of ['open', 'page', 'send']) {
+  test(`Late thread A ${delayed} preserves thread B messages, cursor and draft`, async () => {
+    let release: (() => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: { method?: string }) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/account/threads'))
+          value = {
+            items: [
+              { id: 'thread-a', listing_id: 'a' },
+              { id: 'thread-b', listing_id: 'b' },
+            ],
+            cursor: null,
+          };
+        else if (url.includes('/thread-a/messages')) {
+          value = {
+            items: [
+              {
+                id: url.includes('?') ? 'older-a' : 'message-a',
+                body: url.includes('?') ? 'Older A' : 'Thread A message',
+                created_at: '2026-10-06T00:00:00Z',
+              },
+            ],
+            cursor: 'page-a',
+          };
+          if (
+            delayed === 'open' ||
+            (delayed === 'page' && url.includes('?')) ||
+            (delayed === 'send' && options?.method === 'POST')
+          )
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        } else if (url.includes('/thread-b/messages'))
+          value = {
+            items: [
+              {
+                id: 'message-b',
+                body: 'Thread B message',
+                created_at: '2026-10-06T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщения' }));
+    const buttons = await screen.findAllByRole('button', {
+      name: 'Открыть переписку',
+    });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]!);
+    if (delayed !== 'open') {
+      await screen.findByText('Thread A message', { exact: false });
+      if (delayed === 'page')
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Предыдущие сообщения' }),
+        );
+      else {
+        fireEvent.change(screen.getByLabelText('Ответ'), {
+          target: { value: 'A reply' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+      }
+    }
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    fireEvent.click(buttons[1]!);
+    await screen.findByText('Thread B message', { exact: false });
+    expect((screen.getByLabelText('Ответ') as HTMLTextAreaElement).value).toBe(
+      '',
+    );
+    fireEvent.change(screen.getByLabelText('Ответ'), {
+      target: { value: 'B unsent draft' },
+    });
+    await act(async () => {
+      release!();
+    });
+    expect(screen.getByText('Thread B message', { exact: false })).toBeTruthy();
+    expect(screen.queryByText('Older A', { exact: false })).toBeNull();
+    expect(screen.queryByText('Thread A message', { exact: false })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Предыдущие сообщения' }),
+    ).toBeNull();
+    expect((screen.getByLabelText('Ответ') as HTMLTextAreaElement).value).toBe(
+      'B unsent draft',
+    );
+  });
+}
+
+for (const delay of ['read', 'threads', 'none']) {
+  test(`Notification ${delay} completion respects current navigation`, async () => {
+    let release: (() => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/notifications'))
+          value = {
+            items: [{ id: 'n-one', thread_id: 'thread-a', read_at: null }],
+            cursor: null,
+          };
+        else if (url.endsWith('/preferences')) value = { in_app: true };
+        else if (url.endsWith('/n-one/read') && delay === 'read')
+          await new Promise<void>((done) => {
+            release = done;
+          });
+        else if (url.endsWith('/account/threads')) {
+          value = {
+            items: [{ id: 'thread-a', listing_id: 'a' }],
+            cursor: null,
+          };
+          if (delay === 'threads' && !release)
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        } else if (url.endsWith('/thread-a/messages'))
+          value = {
+            items: [
+              {
+                id: 'message-a',
+                body: 'Notification thread message',
+                created_at: '2026-10-06T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Прочитать' }));
+    if (delay === 'none') {
+      await screen.findByText('Notification thread message', { exact: false });
+      expect(
+        screen
+          .getByRole('button', { name: 'Сообщения' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    } else {
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      fireEvent.click(screen.getByRole('button', { name: 'Сравнение' }));
+      await act(async () => {
+        release!();
+      });
+      expect(
+        screen
+          .getByRole('button', { name: 'Сравнение' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+      expect(screen.queryByRole('region', { name: 'Переписка' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Сообщения' }));
+      await screen.findByRole('button', { name: 'Открыть переписку' });
+      expect(
+        screen.queryByText('Notification thread message', { exact: false }),
+      ).toBeNull();
+    }
+  });
+}
+
+test('Successful send refreshes the selected thread and clears its submitted draft', async () => {
+  let sent = false;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, options?: { method?: string }) => {
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/account/threads'))
+        value = { items: [{ id: 'thread-a', listing_id: 'a' }], cursor: null };
+      else if (url.endsWith('/thread-a/messages')) {
+        if (options?.method === 'POST') sent = true;
+        value = {
+          items: [
+            {
+              id: 'message-a',
+              body: sent ? 'Updated message' : 'Initial message',
+              created_at: '2026-10-06T00:00:00Z',
+            },
+          ],
+          cursor: null,
+        };
+      }
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Сообщения' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Открыть переписку' }),
+  );
+  await screen.findByText('Initial message', { exact: false });
+  fireEvent.change(screen.getByLabelText('Ответ'), {
+    target: { value: 'A reply' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+  await screen.findByText('Updated message', { exact: false });
+  expect((screen.getByLabelText('Ответ') as HTMLTextAreaElement).value).toBe(
+    '',
+  );
+});
+
+test('Selected thread pagination appends older messages and consumes its cursor', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/account/threads'))
+        value = { items: [{ id: 'thread-a', listing_id: 'a' }], cursor: null };
+      else if (url.includes('/thread-a/messages'))
+        value = {
+          items: [
+            {
+              id: url.includes('?') ? 'older-a' : 'current-a',
+              body: url.includes('?') ? 'Older message' : 'Current message',
+              created_at: '2026-10-06T00:00:00Z',
+            },
+          ],
+          cursor: url.includes('?') ? null : 'page-a',
+        };
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Сообщения' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Открыть переписку' }),
+  );
+  await screen.findByText('Current message', { exact: false });
+  fireEvent.click(screen.getByRole('button', { name: 'Предыдущие сообщения' }));
+  await screen.findByText('Older message', { exact: false });
+  expect(screen.getByText('Current message', { exact: false })).toBeTruthy();
+  expect(
+    screen.queryByRole('button', { name: 'Предыдущие сообщения' }),
+  ).toBeNull();
+});

@@ -182,7 +182,7 @@ async function run() {
     ]) {
       await monitor.run(() => waitService(url, children));
     }
-    stage = 'load';
+    stage = 'load-authentication';
     const authentication = await monitor.run(async () => {
       const response = await fetch('http://127.0.0.1:3101/v1/auth/login', {
         method: 'POST',
@@ -219,6 +219,7 @@ async function run() {
         listingIds: rows.map((row) => row.id),
       };
     });
+    stage = 'load';
     const clients = createLoopbackLoadClients();
     try {
       await monitor.run(() =>

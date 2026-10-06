@@ -44,6 +44,19 @@ export default function Account() {
     [notificationEnabled, setNotificationEnabled] = useState(true);
   const identityEpoch = useRef(0);
   const collectionRequest = useRef(0);
+  const navigationEpoch = useRef(0);
+  const threadRequest = useRef(0);
+  function selectTab(next: Tab) {
+    const navigation = ++navigationEpoch.current;
+    threadRequest.current++;
+    setTab(next);
+    setItems([]);
+    setCursor(null);
+    setActiveThread('');
+    setMessages([]);
+    setMessageCursor(null);
+    return navigation;
+  }
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab('favorite');
@@ -146,6 +159,13 @@ export default function Account() {
   }
   async function openThread(id: string, after?: string) {
     const epoch = identityEpoch.current;
+    const navigation = navigationEpoch.current;
+    const request = ++threadRequest.current;
+    if (!after) {
+      setActiveThread(id);
+      setMessages([]);
+      setMessageCursor(null);
+    }
     try {
       const r = await api<{ items: Message[]; cursor: string | null }>(
         'v1/account/threads/' +
@@ -153,13 +173,25 @@ export default function Account() {
           '/messages' +
           (after ? '?cursor=' + after : ''),
       );
-      if (epoch !== identityEpoch.current) return;
+      if (
+        epoch !== identityEpoch.current ||
+        navigation !== navigationEpoch.current ||
+        request !== threadRequest.current
+      )
+        return false;
       setActiveThread(id);
       setMessages((previous) => (after ? [...previous, ...r.items] : r.items));
       setMessageCursor(r.cursor);
+      return true;
     } catch (e) {
-      if (epoch !== identityEpoch.current) return;
+      if (
+        epoch !== identityEpoch.current ||
+        navigation !== navigationEpoch.current ||
+        request !== threadRequest.current
+      )
+        return false;
       setNotice((e as Error).message);
+      return false;
     }
   }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
@@ -267,10 +299,8 @@ export default function Account() {
             key={key}
             aria-pressed={tab === key}
             onClick={() => {
-              setTab(key);
-              setItems([]);
+              selectTab(key);
               void load(key);
-              setCursor(null);
             }}
           >
             {label}
@@ -452,7 +482,11 @@ export default function Account() {
             </div>
           ))}
           {activeThread && (
-            <section className="panel" aria-label="Переписка">
+            <section
+              key={activeThread}
+              className="panel"
+              aria-label="Переписка"
+            >
               {[...messages].reverse().map((m) => (
                 <p key={m.id}>
                   {m.body}{' '}
@@ -471,18 +505,29 @@ export default function Account() {
                   e.preventDefault();
                   const epoch = identityEpoch.current;
                   const form = e.currentTarget;
+                  const navigation = navigationEpoch.current;
+                  const request = threadRequest.current;
+                  const submittedThread = activeThread;
                   try {
                     await api(
-                      'v1/account/threads/' + activeThread + '/messages',
+                      'v1/account/threads/' + submittedThread + '/messages',
                       'POST',
                       { body: new FormData(form).get('body') },
                     );
-                    if (epoch !== identityEpoch.current) return;
-                    await openThread(activeThread);
-                    if (epoch !== identityEpoch.current) return;
-                    form.reset();
+                    if (
+                      epoch !== identityEpoch.current ||
+                      navigation !== navigationEpoch.current ||
+                      request !== threadRequest.current
+                    )
+                      return;
+                    if (await openThread(submittedThread)) form.reset();
                   } catch (error) {
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      navigation !== navigationEpoch.current ||
+                      request !== threadRequest.current
+                    )
+                      return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -537,18 +582,37 @@ export default function Account() {
               <Button
                 onClick={async () => {
                   const epoch = identityEpoch.current;
+                  const navigation = navigationEpoch.current;
+                  let selectedNavigation = navigation;
+                  let selectedThread = threadRequest.current;
                   try {
                     await api(
                       'v1/account/notifications/' + n.id + '/read',
                       'POST',
                     );
-                    if (epoch !== identityEpoch.current) return;
-                    setTab('messages');
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
+                    selectedNavigation = selectTab('messages');
+                    selectedThread = threadRequest.current;
                     await load('messages');
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
                     await openThread(n.thread_id);
                   } catch (e) {
-                    if (epoch !== identityEpoch.current) return;
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
                     setNotice((e as Error).message);
                   }
                 }}

@@ -47,6 +47,7 @@ function runtime(transform = (data) => data, step = 1) {
       return evidence;
     },
     options: {
+      reportFailure: () => {},
       now: () => (clock += step),
       fetch: async (url, options) => {
         const path = new URL(url).pathname;
@@ -274,4 +275,28 @@ test('A warmup-only failure cannot pass a successful measured workload', async (
   assert.equal(result.warmupErrors, 1);
   assert.equal(result.errors, 0);
   assert.equal(result.successes, 40);
+});
+
+test('Failed load reports only bounded scenario counters and timings for CI diagnosis', async () => {
+  const run = runtime((_data, path) =>
+    path === '/v1/auth/me' ? { id: 'wrong', role: 'buyer' } : payload(path),
+  );
+  const reports = [];
+  await assert.rejects(
+    measureLoad('http://127.0.0.1:3101', ids[0], 'fixture.json', context, {
+      ...run.options,
+      reportFailure: (line) => reports.push(line),
+    }),
+  );
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /auth-me.*errors=40.*warmupErrors=5/);
+  for (const value of [
+    context.token,
+    context.buyerId,
+    context.sessionId,
+    ...ids,
+    'http:',
+    'wrong',
+  ])
+    assert.ok(!reports.join('').includes(value));
 });
