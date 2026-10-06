@@ -96,12 +96,14 @@ Acceptance:
 ## 5. Maps and geocoding
 
 ### Maps
+
 - Provider:
 - Tile URL class:
 - Attribution:
 - Evidence:
 
 ### Geocoding
+
 - Provider:
 - Endpoint hostname:
 - Credential mechanism:
