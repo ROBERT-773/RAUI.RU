@@ -18,7 +18,10 @@ export function createLoopbackLoadClients() {
   return {
     async fetch(value, options) {
       const url = localLoadTarget(value);
-      const agent = agents[next++ % agents.length];
+      const slot = options.loadClient ?? next++ % agents.length;
+      if (!Number.isInteger(slot) || slot < 0 || slot >= agents.length)
+        throw new Error('Invalid local load client slot');
+      const agent = agents[slot];
       return new Promise((resolve, reject) => {
         const outgoing = request(
           url,

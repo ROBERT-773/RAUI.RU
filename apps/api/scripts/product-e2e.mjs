@@ -268,10 +268,20 @@ async function run() {
       try {
         const logPath = resolve(directory, 'e2e-api.log');
         if ((await stat(logPath)).size <= 1024 * 1024) {
-          const timing = summarizeLoadSpans(await readFile(logPath, 'utf8'));
-          console.error(
-            `::notice title=Load server spans::public-detail count=${timing.count} p95Ms=${timing.p95Ms ?? 'unavailable'} maxMs=${timing.maxMs ?? 'unavailable'}`,
-          );
+          const log = await readFile(logPath, 'utf8');
+          for (const [scenario, route] of [
+            ['catalog', '/v1/categories'],
+            ['search', '/v1/search'],
+            ['public-detail', '/v1/listings/:id/public'],
+            ['map', '/v1/search/map'],
+            ['auth-me', '/v1/auth/me'],
+            ['auth-sessions', '/v1/auth/sessions'],
+          ]) {
+            const timing = summarizeLoadSpans(log, route);
+            console.error(
+              `::notice title=Load server spans::${scenario} count=${timing.count} p95Ms=${timing.p95Ms ?? 'unavailable'} maxMs=${timing.maxMs ?? 'unavailable'}`,
+            );
+          }
         }
       } catch {
         /* Diagnostics cannot replace the original failed gate. */

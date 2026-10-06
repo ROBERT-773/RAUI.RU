@@ -89,6 +89,16 @@ test('Critical-read load measures six exact scenarios and keeps credentials out 
     assert.equal(result.errors, 0);
     assert.equal(result.warmupErrors, 0);
   }
+  for (const path of new Set(run.requests.map((r) => r.path)))
+    assert.deepEqual(
+      [0, 1, 2, 3].map(
+        (slot) =>
+          run.requests.filter(
+            (r) => r.path === path && r.options.loadClient === slot,
+          ).length,
+      ),
+      [12, 11, 11, 11],
+    );
   for (const { path, options } of run.requests) {
     assert.equal(options.redirect, 'error');
     assert.equal(

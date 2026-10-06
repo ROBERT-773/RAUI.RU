@@ -134,7 +134,7 @@ export async function measureLoad(
   const results = [];
   for (const scenario of cases) {
     const url = localLoadTarget(base + scenario.path);
-    const request = async () => {
+    const request = async (loadClient) => {
       const started = now();
       let kind = 'transport';
       try {
@@ -149,6 +149,7 @@ export async function measureLoad(
           ...(scenario.body ? { body: JSON.stringify(scenario.body) } : {}),
           signal: AbortSignal.timeout(5000),
           redirect: 'error',
+          loadClient,
         });
         kind = 'status';
         if (response.status !== (scenario.body ? 201 : 200)) {
@@ -165,15 +166,15 @@ export async function measureLoad(
       }
     };
     let warmupErrors = 0;
-    for (let n = 0; n < 5; n++) if (!(await request()).ok) warmupErrors++;
+    for (let n = 0; n < 5; n++) if (!(await request(n % 4)).ok) warmupErrors++;
     const timings = [],
       errorKinds = { transport: 0, status: 0, body: 0, contract: 0 };
     let errors = 0;
     const started = now();
     await Promise.all(
-      Array.from({ length: 4 }, async () => {
+      Array.from({ length: 4 }, async (_, slot) => {
         for (let n = 0; n < 10; n++) {
-          const result = await request();
+          const result = await request(slot);
           if (result.ok) timings.push(result.durationMs);
           else {
             errors++;

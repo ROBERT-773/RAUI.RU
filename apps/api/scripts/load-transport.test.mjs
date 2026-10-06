@@ -121,3 +121,49 @@ test('Unexpected no-content responses are measured statuses instead of uncaught 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('A fixed load worker reuses its healthy peer without queuing behind a slow peer', async () => {
+  let releaseSlow;
+  let nextPeer;
+  let seeNext;
+  const nextSeen = new Promise((resolve) => {
+    seeNext = resolve;
+  });
+  const server = createServer((req, res) => {
+    const reply = () => res.end('{"ok":true}');
+    if (req.headers['x-fixture-step'] === 'second') {
+      nextPeer = req.socket.remoteAddress;
+      seeNext();
+      reply();
+    } else if (req.socket.remoteAddress === '127.0.0.2') releaseSlow = reply;
+    else reply();
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const clients = createLoopbackLoadClients();
+  const pending = [];
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/v1/categories`;
+    const request = (slot, second = false) =>
+      clients
+        .fetch(url, {
+          method: 'GET',
+          headers: second ? { 'x-fixture-step': 'second' } : {},
+          signal: AbortSignal.timeout(1500),
+          loadClient: slot,
+        })
+        .then(readLoadJson);
+    pending.push(request(0));
+    await Promise.all([1, 2, 3].map((slot) => request(slot)));
+    pending.push(request(1, true));
+    const { boundedOperation } = await import('./e2e-runtime.mjs');
+    await boundedOperation(() => nextSeen, 500);
+    assert.equal(nextPeer, '127.0.0.3');
+  } finally {
+    releaseSlow?.();
+    await Promise.allSettled(pending);
+    clients.close();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

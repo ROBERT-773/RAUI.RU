@@ -131,18 +131,30 @@ export function watchPoolErrors(pools, onFailure) {
   };
 }
 
-export function summarizeLoadSpans(log) {
+export function summarizeLoadSpans(log, route = '/v1/listings/:id/public') {
   const timings = [];
-  if (typeof log === 'string' && log.length <= 1024 * 1024) {
+  const routes = {
+    '/v1/categories': 'GET',
+    '/v1/search': 'POST',
+    '/v1/listings/:id/public': 'GET',
+    '/v1/search/map': 'POST',
+    '/v1/auth/me': 'GET',
+    '/v1/auth/sessions': 'GET',
+  };
+  if (
+    Object.hasOwn(routes, route) &&
+    typeof log === 'string' &&
+    log.length <= 1024 * 1024
+  ) {
     for (const line of log.split('\n').slice(0, 5000)) {
       if (line.length > 1024) continue;
       try {
         const span = JSON.parse(line);
         if (
           span.event === 'http_span' &&
-          span.route === '/v1/listings/:id/public' &&
-          span.method === 'GET' &&
-          span.status === 200 &&
+          span.route === route &&
+          span.method === routes[route] &&
+          span.status === (routes[route] === 'POST' ? 201 : 200) &&
           Number.isSafeInteger(span.durationMs) &&
           span.durationMs >= 0 &&
           span.durationMs <= 30000

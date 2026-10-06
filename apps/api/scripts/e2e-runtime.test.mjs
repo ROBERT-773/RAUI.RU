@@ -247,3 +247,20 @@ test('Load server-span diagnostics expose only bounded public route timings', as
     maxMs: null,
   });
 });
+
+test('Map server-span diagnostics count successful POST 201 responses', async () => {
+  const { summarizeLoadSpans } = await import('./e2e-runtime.mjs');
+  assert.deepEqual(
+    summarizeLoadSpans(
+      JSON.stringify({
+        event: 'http_span',
+        route: '/v1/search/map',
+        method: 'POST',
+        status: 201,
+        durationMs: 42,
+      }),
+      '/v1/search/map',
+    ),
+    { count: 1, p95Ms: 42, maxMs: 42 },
+  );
+});
