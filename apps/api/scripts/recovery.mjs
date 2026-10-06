@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { mkdir, mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 export function localDatabase(value) {
   const url = new URL(value);
@@ -80,4 +81,41 @@ export async function cleanupRecovery(actions) {
     throw new Error(
       'Recovery cleanup incomplete; inspect local scratch DB without restoring source',
     );
+}
+
+export function sequenceNextValue(sequence) {
+  const last = BigInt(sequence.last_value);
+  const increment = BigInt(sequence.increment_by);
+  const min = BigInt(sequence.min_value);
+  const max = BigInt(sequence.max_value);
+  let next = sequence.is_called ? last + increment : last;
+  if (next < min || next > max) {
+    if (!sequence.cycle) throw new Error('Scratch sequence exhausted');
+    next = increment > 0n ? min : max;
+  }
+  return next.toString();
+}
+
+export async function createRecoveryWorkspace(root) {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(root + '/drill-');
+  return {
+    directory,
+    remove: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
+export async function publishRecoveryEvidence(output, action) {
+  await rm(output, { force: true });
+  const evidence = await action();
+  const temporary = output + '.' + randomBytes(8).toString('hex') + '.tmp';
+  try {
+    await writeFile(temporary, JSON.stringify(evidence, null, 2) + '\n', {
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await rename(temporary, output);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }

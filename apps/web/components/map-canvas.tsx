@@ -105,6 +105,13 @@ export default function MapCanvas({
         alt: text,
       }).addTo(group);
       item.on('click', () => selected(marker.listingIds));
+      item.on('keydown', (event: L.LeafletKeyboardEvent) => {
+        const key = event.originalEvent;
+        if (key.key === 'Enter' || key.key === ' ') {
+          L.DomEvent.stop(key);
+          if (!key.repeat) selected(marker.listingIds);
+        }
+      });
     }
   }, [markers]);
   return (

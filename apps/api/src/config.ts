@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeIp } from '@raui/config/ingress';
 export function isProduction(value: {
   NODE_ENV: string;
   DEPLOYMENT_ENV?: string;
@@ -20,6 +21,15 @@ export const envSchema = z
       .enum(['development', 'test', 'production'])
       .default('development'),
     DEPLOYMENT_ENV: z.enum(['local', 'staging', 'production']).default('local'),
+    PROXY_IDENTITY_SECRET: z
+      .string()
+      .regex(/^[\x21-\x7e]{32,256}$/)
+      .optional(),
+    TRUSTED_PROXY_PEERS: z.string().default(''),
+    TRUSTED_INGRESS_IP_HEADER: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,63}$/)
+      .optional(),
     SITE_URL: z.url().optional(),
     API_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
     WEB_ORIGIN: z.url(),
@@ -80,7 +90,20 @@ export const envSchema = z
     S3_ENDPOINT: z.url().optional(),
     S3_REGION: z.string().default('eu-central-1'),
     S3_BUCKET: z.string().optional(),
-    CDN_BASE_URL: z.url().optional(),
+    CDN_BASE_URL: z
+      .url()
+      .refine((value) => {
+        const url = safeUrl(value);
+        return (
+          !!url &&
+          ['http:', 'https:'].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, 'CDN base requires clean credential-free HTTP(S) URL')
+      .optional(),
     VERIFICATION_GATEWAY_URL: z
       .url()
       .refine((v) => safeUrl(v)?.protocol === 'https:')
@@ -96,7 +119,32 @@ export const envSchema = z
     const production = isProduction(value);
     const reject = (field: string, message: string) =>
       context.addIssue({ code: 'custom', path: [field], message });
+    if (
+      value.TRUSTED_PROXY_PEERS &&
+      value.TRUSTED_PROXY_PEERS.split(',').some(
+        (peer) => !normalizeIp(peer.trim()),
+      )
+    )
+      reject(
+        'TRUSTED_PROXY_PEERS',
+        'Exact trusted proxy IP addresses required',
+      );
     if (production) {
+      if (!value.PROXY_IDENTITY_SECRET)
+        reject(
+          'PROXY_IDENTITY_SECRET',
+          'Production proxy authentication required',
+        );
+      if (!value.TRUSTED_PROXY_PEERS)
+        reject(
+          'TRUSTED_PROXY_PEERS',
+          'Production trusted proxy peers required',
+        );
+      if (!value.TRUSTED_INGRESS_IP_HEADER)
+        reject(
+          'TRUSTED_INGRESS_IP_HEADER',
+          'Production trusted ingress header required',
+        );
       const origin = (raw: string | undefined) => {
         if (!raw) return false;
         const url = safeUrl(raw);

@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "exports": {
+    "./ingress": {
+      "types": "./ingress.d.mts",
+      "default": "./ingress.mjs"
+    },
     "./tsconfig": "./tsconfig.base.json"
   }
 }

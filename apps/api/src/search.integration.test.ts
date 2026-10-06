@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Operations } from './modules/operations/operations';
 import { randomUUID } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
@@ -566,6 +567,103 @@ test('Phase 3 real PostgreSQL/PostGIS/OpenSearch HTTP acceptance', async (t) => 
           (await call('search', 'POST', { attributes: { password: 'secret' } }))
             .status,
           400,
+        );
+      },
+    );
+    await t.test(
+      'Search queue age survives repeated listing writes and reconciliation',
+      async () => {
+        await pool.query(
+          "UPDATE listings SET title=title||' first change' WHERE id=$1",
+          [first],
+        );
+        await pool.query(
+          "UPDATE search_jobs SET updated_at=now()-interval '10 minutes' WHERE listing_id=$1",
+          [first],
+        );
+        // Compatible backfill is tested separately; here initialize first-enqueue
+        // age only if the new column exists, so old code fails on the metric itself.
+        const column = await pool.query(
+          "SELECT 1 FROM information_schema.columns WHERE table_name='search_jobs' AND column_name='enqueued_at'",
+        );
+        if (column.rowCount)
+          await pool.query(
+            'UPDATE search_jobs SET enqueued_at=updated_at WHERE listing_id=$1',
+            [first],
+          );
+        await pool.query(
+          "UPDATE listings SET title=title||' later change' WHERE id=$1",
+          [first],
+        );
+        const before = await app.get(Operations).snapshot();
+        const queue = before.queues.find((q) => q.queue === 'search');
+        assert.ok(Number(queue!.oldest_seconds) >= 599);
+        await search.reconcile();
+        const after = await app.get(Operations).snapshot();
+        assert.ok(
+          Number(
+            after.queues.find((q) => q.queue === 'search')!.oldest_seconds,
+          ) >= 599,
+        );
+      },
+    );
+    await t.test(
+      'Sitemap shards cover more than fifty thousand eligible listings without truncation',
+      async () => {
+        await pool.query(
+          `INSERT INTO listings(property_id,source_id,seller_id,deal_type,price,title,status,published_at)
+         SELECT l.property_id,l.source_id,l.seller_id,'sale',10000000,'RC sitemap fixture','published',now()
+         FROM listings l CROSS JOIN generate_series(1,50000) WHERE l.id=$1`,
+          [first],
+        );
+        const firstResponse = await fetch(base + '/v1/search/sitemap');
+        assert.equal(firstResponse.status, 200);
+        const initial = (await firstResponse.json()) as { id: string }[];
+        assert.equal(initial.length, 49999, 'Reserve one URL for the homepage');
+        const response = await fetch(base + '/v1/search/sitemap/partitions');
+        assert.equal(response.status, 200);
+        const partitions = (await response.json()) as {
+          pageSize: number;
+          cursors: (string | null)[];
+        };
+        assert.equal(partitions.pageSize, 49999);
+        assert.equal(partitions.cursors.length, 2);
+        const ids: string[] = [];
+        for (const cursor of partitions.cursors) {
+          const page = await fetch(
+            base + '/v1/search/sitemap' + (cursor ? '?after=' + cursor : ''),
+          );
+          assert.equal(page.status, 200);
+          const rows = (await page.json()) as { id: string }[];
+          assert.ok(rows.length <= 49999);
+          ids.push(...rows.map((row) => row.id));
+        }
+        const eligible = (
+          await pool.query('SELECT id FROM public_search_listings ORDER BY id')
+        ).rows.map((row) => row.id);
+        assert.equal(eligible.length, 50001);
+        assert.equal(new Set(ids).size, ids.length);
+        assert.deepEqual(ids, eligible);
+        assert.equal(
+          (await fetch(base + '/v1/search/sitemap?after=invalid')).status,
+          400,
+        );
+        assert.equal(
+          (await fetch(base + '/v1/search/sitemap?unexpected=true')).status,
+          400,
+        );
+        await pool.query('UPDATE users SET active=false WHERE id=$1', [seller]);
+        assert.deepEqual(
+          await (await fetch(base + '/v1/search/sitemap')).json(),
+          [],
+        );
+        assert.deepEqual(
+          (
+            (await (
+              await fetch(base + '/v1/search/sitemap/partitions')
+            ).json()) as { cursors: unknown[] }
+          ).cursors,
+          [null],
         );
       },
     );

@@ -16,6 +16,9 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { Database, Sql } from '../modules/database/database';
 import { loadConfig } from '../config';
+import { headerNames, normalizeIp, verifyIdentity } from '@raui/config/ingress';
+import { isProduction } from '../config';
+import { ServiceUnavailableException } from '@nestjs/common';
 export type Role = UserRole;
 export interface Actor {
   id: string;
@@ -143,21 +146,57 @@ export class RateGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<Request>();
     if (!req.url.startsWith('/v1/')) return true;
     const sensitive = req.url.startsWith('/v1/auth/');
-    const limit = sensitive ? 30 : 300;
-    const [row] = await this.db.rows<{ count: number }>(
-      `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '1 minute') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END,reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '1 minute' ELSE rate_limits.reset_at END RETURNING count`,
-      [`${sensitive ? 'auth' : 'api'}:${req.ip}`],
+    const cfg = loadConfig();
+    const peer = normalizeIp(req.socket?.remoteAddress ?? req.ip);
+    const trusted = cfg.TRUSTED_PROXY_PEERS.split(',')
+      .map((value) => normalizeIp(value.trim()))
+      .filter(Boolean)
+      .includes(peer);
+    const forwarded = headerNames.some(
+      (name) => req.headers[name] !== undefined,
     );
-    if (row!.count > limit) {
-      const { HttpException } = await import('@nestjs/common');
-      throw new HttpException('Rate limit exceeded', 429);
+    let client = normalizeIp(req.ip) ?? peer ?? 'unknown';
+    if (forwarded) {
+      const identity =
+        trusted && cfg.PROXY_IDENTITY_SECRET
+          ? verifyIdentity(
+              req.headers,
+              req.method,
+              req.originalUrl ?? req.url,
+              cfg.PROXY_IDENTITY_SECRET,
+            )
+          : null;
+      if (!identity)
+        throw new ForbiddenException('Forwarded identity rejected');
+      client = identity;
+    } else if (trusted && isProduction(cfg)) {
+      throw new ServiceUnavailableException(
+        'Trusted ingress identity required',
+      );
     }
+    const limit = sensitive ? 30 : 300;
+    const consume = async (key: string, maximum: number) => {
+      const [row] = await this.db.rows<{ count: number }>(
+        `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '1 minute') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END,reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '1 minute' ELSE rate_limits.reset_at END RETURNING count`,
+        [key],
+      );
+      if (row!.count > maximum) {
+        const { HttpException } = await import('@nestjs/common');
+        throw new HttpException('Rate limit exceeded', 429);
+      }
+    };
+    if (forwarded)
+      await consume(
+        `proxy:${sensitive ? 'auth' : 'api'}:${peer}`,
+        sensitive ? 300 : 3000,
+      );
+    await consume(`${sensitive ? 'auth' : 'api'}:${client}`, limit);
     // Public credential endpoints reject cross-origin browser submissions too.
     if (
       sensitive &&
       !['GET', 'HEAD'].includes(req.method) &&
       req.headers.origin &&
-      req.headers.origin !== loadConfig().WEB_ORIGIN
+      req.headers.origin !== cfg.WEB_ORIGIN
     )
       throw new ForbiddenException('Origin rejected');
     return true;

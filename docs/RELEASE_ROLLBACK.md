@@ -20,7 +20,8 @@ After this workflow is accepted into master, the manual `RAUI staging and rollba
 dry-run` workflow takes a successful RAUI CI run ID, full source SHA and either
 staging-dry-run or rollback-dry-run. It verifies GitHub run provenance and every
 manifest hash from the retained artifact using the trusted checked-out verifier.
-It has read-only permissions and no deploy command or production credential.
+The selected run must be completed/successful for the exact `.github/workflows/ci.yml` path and source SHA; the downloaded manifest must carry the same run ID. It has read-only permissions and no deploy command or production credential.
+The current RC verifier requires all 12 migrations and RC evidence, so historical pre-RC artifacts cannot pass it. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
 Locally, from an extracted artifact root, use the trusted repository verifier:
 `node /path/to/RAUI.RU/scripts/release-contract.mjs verify .cache/phase4d-release.json <full-sha>`.
 Do not create a fake CI manifest or use a mutable branch/tag as release identity.
@@ -76,3 +77,52 @@ A Phase 4C schema-compatible rollback does not certify the older dependency
 security baseline. Retain csv-parse >=7.0.2 and all necessary security fixes in a
 new verified artifact, or choose a forward-fix; never promote a known-vulnerable
 image merely because its DB reader is compatible.
+
+## RC staging sequence (execution requires a deployment task)
+
+1. Select an exact successful CI SHA and verified image/config. Confirm provider
+   sandbox bindings, ingress trust from TRUSTED_INGRESS.md, feature kill switches,
+   database compatibility and a recent verified restore checkpoint. Record abort
+   thresholds for latency, errors, queue age and unexpected external effects.
+2. Stop new worker claims and, where the migration needs a write window, pause
+   producers. Observe persisted active leases until work completes or leases
+   expire; do not clear lease rows or retry non-idempotent external effects blindly.
+   Drain AI writers before crossing the older 011 cost-accounting semantics.
+3. Run one migration runner. Verify immutable checksums and the complete ledger.
+   RC migration 012 adds search enqueue age and replaces the dirty trigger without
+   deleting jobs or facts. Its backfill holds the table lock until commit: measure
+   queue size and duration in staging and fit the existing 5s lock/60s statement
+   limits. Existing age is approximated from last update; do not claim historical
+   first-enqueue reconstruction. A timeout rolls the migration back for a later
+   window; do not increase limits without measurements.
+4. Start the compatible API/web behind private ingress, before public traffic.
+   Check readiness, auth/CSRF, signed proxy and SSR, sitemap index/shards and
+   worker-independent smoke. The new queue metric requires 012; do not start that reader before the
+   migration succeeds.
+5. Start compatible media/search/commerce/professional/trust workers. Run bounded
+   reconciliation and full core/search smoke, observe actual queue progress, lease recovery and
+   deduplicated effects. Keep feature flags off while confirming fallback paths.
+6. Switch staging ingress, observe the recorded thresholds, then separately
+   enable approved flags. This sequence does not authorize production traffic.
+
+For code rollback: flags off, stop claims/drain leases, validate the previous
+compatible API/web/config and verified image, run worker-independent smoke
+behind private ingress, restart compatible workers, then run full core/search
+smoke before switching ingress and observing. Keep 012 and its
+queued facts; old explicit-column producers/readers remain compatible. Preserve
+RC security patches in any rollback artifact. If that cannot be achieved, use a
+reviewed forward-fix rather than restoring an older unsafe artifact.
+
+Portfolio idempotency is now scoped to organization and target portfolio. A
+pre-RC cached request can execute once again under the corrected scope; unique
+portfolio membership prevents duplicate links, but an additional audit record
+can appear. Preserve the old ledger, and let clients keep their original keys.
+Sitemap pages are live eligible reads, without a multi-request snapshot guarantee;
+concurrent publication changes can alter boundaries until the next index fetch.
+
+Use a bounded isolated staging workload and an explicit operator time limit for
+reconciliation: the current `--once` worker can drain until the queue is empty.
+The repository core/search smoke scripts write development fixtures and require
+local adapters; do not run them unchanged against real provider bindings or a
+production-shaped signed ingress. Adapt sandbox fixture authentication and
+identity explicitly before executing corresponding staging acceptance checks.

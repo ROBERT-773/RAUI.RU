@@ -21,6 +21,7 @@ const gates = [
   'load',
   'security',
   'restore',
+  'observability',
 ];
 function releasePath(path) {
   return (
@@ -34,13 +35,28 @@ function releasePath(path) {
     !path.endsWith('.env')
   );
 }
-export function validateRelease(manifest, expectedSha) {
+export function validateCiRun(run, expectedSha, expectedRunId) {
+  if (
+    !/^[1-9][0-9]*$/.test(expectedRunId ?? '') ||
+    !/^[a-f0-9]{40}$/.test(expectedSha ?? '') ||
+    String(run?.id) !== expectedRunId ||
+    run.head_sha !== expectedSha ||
+    run.conclusion !== 'success' ||
+    run.status !== 'completed' ||
+    run.path !== '.github/workflows/ci.yml'
+  )
+    throw new Error('Invalid successful CI workflow provenance');
+}
+export function validateRelease(manifest, expectedSha, expectedRunId) {
   if (
     !manifest ||
     manifest.version !== 1 ||
+    typeof manifest.runId !== 'string' ||
+    !/^[1-9][0-9]*$/.test(manifest.runId) ||
+    (expectedRunId !== undefined && manifest.runId !== expectedRunId) ||
     !/^[a-f0-9]{40}$/.test(expectedSha) ||
     manifest.sha !== expectedSha ||
-    manifest.migrations !== 11 ||
+    manifest.migrations !== 12 ||
     manifest.riskyDefaults !== 'off' ||
     !Array.isArray(manifest.gates) ||
     gates.some((gate) => !manifest.gates.includes(gate)) ||
@@ -75,6 +91,7 @@ export function validateRelease(manifest, expectedSha) {
     'apps/api/migrations/009_ai_trust_analytics.sql',
     'apps/api/migrations/010_analytics_identity_and_trust_geo.sql',
     'apps/api/migrations/011_ai_reported_cost.sql',
+    'apps/api/migrations/012_search_queue_observability.sql',
     'pnpm-lock.yaml',
     'package.json',
     'infra/observability/alerts.yml',
@@ -129,18 +146,47 @@ export async function verifyFiles(manifest, root) {
   if (
     load.version !== 1 ||
     !Array.isArray(load.results) ||
-    load.results.length !== 3 ||
+    load.results.length !== 6 ||
     load.results.some(
       (result) =>
-        !['catalog', 'search', 'public-detail'].includes(result.scenario) ||
+        ![
+          'catalog',
+          'search',
+          'public-detail',
+          'map',
+          'auth-me',
+          'auth-sessions',
+        ].includes(result.scenario) ||
+        !Number.isFinite(result.p50Ms) ||
+        !Number.isFinite(result.p99Ms) ||
+        result.p50Ms < 0 ||
+        result.p50Ms > result.p95Ms ||
+        result.p95Ms > result.p99Ms ||
+        !Number.isFinite(result.requestsPerSecond) ||
+        result.requestsPerSecond <= 0 ||
+        result.successes !== 40 ||
+        result.warmup !== 5 ||
+        result.warmupErrors !== 0 ||
+        result.targetP95Ms !== 300 ||
         !Number.isFinite(result.p95Ms) ||
         result.p95Ms < 0 ||
         result.p95Ms > 300 ||
         result.errors !== 0 ||
+        !result.errorKinds ||
+        Object.keys(result.errorKinds).length !== 4 ||
+        ['transport', 'status', 'body', 'contract'].some(
+          (kind) =>
+            !Number.isSafeInteger(result.errorKinds[kind]) ||
+            result.errorKinds[kind] < 0,
+        ) ||
+        Object.values(result.errorKinds).reduce(
+          (sum, count) => sum + count,
+          0,
+        ) !== result.errors ||
         result.requests !== 40 ||
         result.concurrency !== 4,
     ) ||
-    new Set(load.results.map((result) => result.scenario)).size !== 3
+    new Set(load.results.map((result) => result.scenario)).size !== 6
   )
     throw new Error('Invalid measured load evidence');
   if (
@@ -148,15 +194,36 @@ export async function verifyFiles(manifest, root) {
     recovery.sourceUntouched !== true ||
     recovery.databaseRestore !== 'verified' ||
     recovery.objectFixtureRestore !== 'verified' ||
-    recovery.migrationsVerified !== 11 ||
+    recovery.migrationsVerified !== 12 ||
     !Number.isInteger(recovery.tablesVerified) ||
     recovery.tablesVerified < 1 ||
-    recovery.cipher !== 'AES-256-GCM'
+    recovery.cipher !== 'AES-256-GCM' ||
+    recovery.sourceWritersQuiesced !== true ||
+    recovery.sequenceStateAndConfig !== 'verified' ||
+    !Number.isSafeInteger(recovery.sequencesVerified) ||
+    recovery.sequencesVerified < 1 ||
+    recovery.sequenceNextValuesVerified !== recovery.sequencesVerified ||
+    !Number.isSafeInteger(recovery.pristineSequencesVerified) ||
+    recovery.pristineSequencesVerified < 1 ||
+    !Number.isSafeInteger(recovery.calledSequencesVerified) ||
+    recovery.calledSequencesVerified < 1 ||
+    recovery.pristineSequencesVerified + recovery.calledSequencesVerified !==
+      recovery.sequencesVerified
   )
     throw new Error('Invalid restore evidence');
 }
 async function main() {
-  const [mode, manifestPath, expectedSha] = process.argv.slice(2);
+  const [mode, manifestPath, expectedSha, expectedRunId] =
+    process.argv.slice(2);
+  if (mode === 'provenance') {
+    validateCiRun(
+      JSON.parse(await readFile(manifestPath, 'utf8')),
+      expectedSha,
+      expectedRunId,
+    );
+    console.log('Successful CI workflow identity, commit and run verified');
+    return;
+  }
   if (
     !['create', 'verify'].includes(mode) ||
     !manifestPath ||
@@ -189,7 +256,7 @@ async function main() {
     const manifest = {
       version: 1,
       sha: expectedSha,
-      migrations: 11,
+      migrations: 12,
       riskyDefaults: 'off',
       gates,
       runId: process.env.GITHUB_RUN_ID,
@@ -199,7 +266,7 @@ async function main() {
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   } else {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    validateRelease(manifest, expectedSha);
+    validateRelease(manifest, expectedSha, expectedRunId);
     await verifyFiles(manifest, process.cwd());
     console.log(
       'Release/rollback artifact identity, hashes, gates and migration/flag contract verified; no deployment',

@@ -69,6 +69,10 @@ export class HttpsFeedFetcher extends FeedFetcher {
         url,
         {
           method: 'GET',
+          family: 4,
+          agent: false,
+          servername: url.hostname,
+          rejectUnauthorized: true,
           headers: {
             Accept: 'application/json,text/csv,application/xml,text/xml',
           },

@@ -24,11 +24,16 @@ export default ts.config(
     languageOptions: {
       globals: {
         AbortSignal: 'readonly',
+        AbortController: 'readonly',
+        Response: 'readonly',
+        ReadableStream: 'readonly',
         URL: 'readonly',
         process: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
         setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        queueMicrotask: 'readonly',
       },
     },
   },

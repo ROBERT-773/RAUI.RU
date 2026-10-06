@@ -1,6 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { ListingCard, SearchDefinition } from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
@@ -42,40 +42,106 @@ export default function Account() {
     [cursor, setCursor] = useState<string | null>(null),
     [messageCursor, setMessageCursor] = useState<string | null>(null),
     [notificationEnabled, setNotificationEnabled] = useState(true);
+  const identityEpoch = useRef(0);
+  const collectionRequest = useRef(0);
+  const navigationEpoch = useRef(0);
+  const threadRequest = useRef(0);
+  function selectTab(next: Tab) {
+    const navigation = ++navigationEpoch.current;
+    threadRequest.current++;
+    setTab(next);
+    setItems([]);
+    setCursor(null);
+    setActiveThread('');
+    setMessages([]);
+    setMessageCursor(null);
+    return navigation;
+  }
+  function clearPrivateState() {
+    const epoch = ++identityEpoch.current;
+    setTab('favorite');
+    setNotice('');
+    setRegister(false);
+    setItems([]);
+    setSaved([]);
+    setThreads([]);
+    setNotifications([]);
+    setActiveThread('');
+    setMessages([]);
+    setCursor(null);
+    setMessageCursor(null);
+    setNotificationEnabled(true);
+    return epoch;
+  }
   useEffect(() => {
+    const epochRef = identityEpoch;
+    const epoch = identityEpoch.current;
     api<{ display_name: string }>('v1/auth/me')
       .then((u) => {
+        if (epoch !== identityEpoch.current) return;
         setUser(u);
         void load('favorite');
       })
       .catch(() => {})
-      .finally(() => setChecking(false));
+      .finally(() => {
+        if (epoch === identityEpoch.current) setChecking(false);
+      });
+    return () => {
+      epochRef.current++;
+    };
   }, []);
   async function load(t: Tab, after?: string) {
+    const epoch = identityEpoch.current;
+    const request = ++collectionRequest.current;
     try {
       if (['favorite', 'compare', 'recent'].includes(t)) {
         const r = await api<{ items: ListingCard[]; cursor: string | null }>(
           'v1/account/collections/' + t + (after ? '?after=' + after : ''),
         );
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setItems((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'saved') {
         const r = await api<{ items: Saved[]; cursor: string | null }>(
           'v1/account/saved-searches' + (after ? '?after=' + after : ''),
         );
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setSaved((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else if (t === 'messages') {
         const r = await api<{ items: Thread[]; cursor: string | null }>(
           'v1/account/threads' + (after ? '?after=' + after : ''),
         );
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setThreads((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else {
         const r = await api<{ items: Notification[]; cursor: string | null }>(
           'v1/account/notifications' + (after ? '?cursor=' + after : ''),
         );
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         const prefs = await api<{ in_app: boolean }>('v1/account/preferences');
+        if (
+          epoch !== identityEpoch.current ||
+          request !== collectionRequest.current
+        )
+          return;
         setNotificationEnabled(prefs.in_app);
         setNotifications((previous) =>
           after ? [...previous, ...r.items] : r.items,
@@ -83,10 +149,23 @@ export default function Account() {
         setCursor(r.cursor);
       }
     } catch (e) {
+      if (
+        epoch !== identityEpoch.current ||
+        request !== collectionRequest.current
+      )
+        return;
       setNotice((e as Error).message);
     }
   }
   async function openThread(id: string, after?: string) {
+    const epoch = identityEpoch.current;
+    const navigation = navigationEpoch.current;
+    const request = ++threadRequest.current;
+    if (!after) {
+      setActiveThread(id);
+      setMessages([]);
+      setMessageCursor(null);
+    }
     try {
       const r = await api<{ items: Message[]; cursor: string | null }>(
         'v1/account/threads/' +
@@ -94,11 +173,25 @@ export default function Account() {
           '/messages' +
           (after ? '?cursor=' + after : ''),
       );
+      if (
+        epoch !== identityEpoch.current ||
+        navigation !== navigationEpoch.current ||
+        request !== threadRequest.current
+      )
+        return false;
       setActiveThread(id);
       setMessages((previous) => (after ? [...previous, ...r.items] : r.items));
       setMessageCursor(r.cursor);
+      return true;
     } catch (e) {
+      if (
+        epoch !== identityEpoch.current ||
+        navigation !== navigationEpoch.current ||
+        request !== threadRequest.current
+      )
+        return false;
       setNotice((e as Error).message);
+      return false;
     }
   }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
@@ -110,6 +203,7 @@ export default function Account() {
           className="account-form panel"
           onSubmit={async (e) => {
             e.preventDefault();
+            const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
               if (register)
@@ -119,6 +213,7 @@ export default function Account() {
                   displayName: d.get('name'),
                   role: 'buyer',
                 });
+              if (epoch !== identityEpoch.current) return;
               const result = await api<{
                 csrfToken: string;
                 user: { display_name: string };
@@ -127,10 +222,13 @@ export default function Account() {
                 password: d.get('password'),
                 transport: 'cookie',
               });
+              if (epoch !== identityEpoch.current) return;
+              clearPrivateState();
               setCsrf(result.csrfToken);
               setUser(result.user);
               void load('favorite');
             } catch (error) {
+              if (epoch !== identityEpoch.current) return;
               setNotice((error as Error).message);
             }
           }}
@@ -171,11 +269,15 @@ export default function Account() {
       <p>{user.display_name}</p>
       <Button
         onClick={async () => {
+          const epoch = clearPrivateState();
           try {
             await api('v1/auth/logout', 'POST');
+            if (epoch !== identityEpoch.current) return;
+            clearPrivateState();
             setCsrf('');
             setUser(null);
           } catch (e) {
+            if (epoch !== identityEpoch.current) return;
             setNotice((e as Error).message);
           }
         }}
@@ -197,9 +299,8 @@ export default function Account() {
             key={key}
             aria-pressed={tab === key}
             onClick={() => {
-              setTab(key);
+              selectTab(key);
               void load(key);
-              setCursor(null);
             }}
           >
             {label}
@@ -220,18 +321,32 @@ export default function Account() {
                   actions={
                     <Button
                       onClick={async () => {
+                        const epoch = identityEpoch.current;
+                        const request = collectionRequest.current;
                         try {
                           await api(
                             'v1/account/collections/' + tab + '/' + item.id,
                             'DELETE',
                           );
-                          setItems(items.filter((v) => v.id !== item.id));
+                          if (
+                            epoch !== identityEpoch.current ||
+                            request !== collectionRequest.current
+                          )
+                            return;
+                          setItems((previous) =>
+                            previous.filter((v) => v.id !== item.id),
+                          );
                           if (tab === 'favorite')
                             track({
                               type: 'favorite_removed',
                               listingId: item.id,
                             });
                         } catch (e) {
+                          if (
+                            epoch !== identityEpoch.current ||
+                            request !== collectionRequest.current
+                          )
+                            return;
                           setNotice((e as Error).message);
                         }
                       }}
@@ -291,13 +406,25 @@ export default function Account() {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  const epoch = identityEpoch.current;
+                  const request = collectionRequest.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'PATCH', {
                       name: new FormData(e.currentTarget).get('name'),
                       definition: s.definition,
                     });
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     await load('saved');
                   } catch (error) {
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -315,10 +442,22 @@ export default function Account() {
               </form>
               <Button
                 onClick={async () => {
+                  const epoch = identityEpoch.current;
+                  const request = collectionRequest.current;
                   try {
                     await api('v1/account/saved-searches/' + s.id, 'DELETE');
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     await load('saved');
                   } catch (e) {
+                    if (
+                      epoch !== identityEpoch.current ||
+                      request !== collectionRequest.current
+                    )
+                      return;
                     setNotice((e as Error).message);
                   }
                 }}
@@ -343,7 +482,11 @@ export default function Account() {
             </div>
           ))}
           {activeThread && (
-            <section className="panel" aria-label="Переписка">
+            <section
+              key={activeThread}
+              className="panel"
+              aria-label="Переписка"
+            >
               {[...messages].reverse().map((m) => (
                 <p key={m.id}>
                   {m.body}{' '}
@@ -360,16 +503,31 @@ export default function Account() {
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  const epoch = identityEpoch.current;
                   const form = e.currentTarget;
+                  const navigation = navigationEpoch.current;
+                  const request = threadRequest.current;
+                  const submittedThread = activeThread;
                   try {
                     await api(
-                      'v1/account/threads/' + activeThread + '/messages',
+                      'v1/account/threads/' + submittedThread + '/messages',
                       'POST',
                       { body: new FormData(form).get('body') },
                     );
-                    await openThread(activeThread);
-                    form.reset();
+                    if (
+                      epoch !== identityEpoch.current ||
+                      navigation !== navigationEpoch.current ||
+                      request !== threadRequest.current
+                    )
+                      return;
+                    if (await openThread(submittedThread)) form.reset();
                   } catch (error) {
+                    if (
+                      epoch !== identityEpoch.current ||
+                      navigation !== navigationEpoch.current ||
+                      request !== threadRequest.current
+                    )
+                      return;
                     setNotice((error as Error).message);
                   }
                 }}
@@ -391,6 +549,7 @@ export default function Account() {
               type="checkbox"
               checked={notificationEnabled}
               onChange={async (e) => {
+                const epoch = identityEpoch.current;
                 const value = e.target.checked;
                 try {
                   const prefs = await api<{
@@ -399,12 +558,15 @@ export default function Account() {
                     sms: boolean;
                     push: boolean;
                   }>('v1/account/preferences');
+                  if (epoch !== identityEpoch.current) return;
                   await api('v1/account/preferences', 'PATCH', {
                     ...prefs,
                     in_app: value,
                   });
+                  if (epoch !== identityEpoch.current) return;
                   setNotificationEnabled(value);
                 } catch (error) {
+                  if (epoch !== identityEpoch.current) return;
                   setNotice((error as Error).message);
                 }
               }}
@@ -419,15 +581,38 @@ export default function Account() {
               </p>
               <Button
                 onClick={async () => {
+                  const epoch = identityEpoch.current;
+                  const navigation = navigationEpoch.current;
+                  let selectedNavigation = navigation;
+                  let selectedThread = threadRequest.current;
                   try {
                     await api(
                       'v1/account/notifications/' + n.id + '/read',
                       'POST',
                     );
-                    setTab('messages');
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
+                    selectedNavigation = selectTab('messages');
+                    selectedThread = threadRequest.current;
                     await load('messages');
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
                     await openThread(n.thread_id);
                   } catch (e) {
+                    if (
+                      epoch !== identityEpoch.current ||
+                      selectedNavigation !== navigationEpoch.current ||
+                      selectedThread !== threadRequest.current
+                    )
+                      return;
                     setNotice((e as Error).message);
                   }
                 }}

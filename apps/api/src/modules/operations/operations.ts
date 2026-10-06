@@ -67,7 +67,7 @@ export class Operations {
       UNION ALL SELECT 'professional',state,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE state IN ('pending','running')),0)::float FROM professional_import_jobs GROUP BY state
       UNION ALL SELECT 'notifications',status,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE status IN ('pending','running')),0)::float FROM notification_deliveries GROUP BY status
       UNION ALL SELECT 'trust',state,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE state IN ('pending','running')),0)::float FROM trust_jobs GROUP BY state
-      UNION ALL SELECT 'search','pending',count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-updated_at)),0)::float FROM search_jobs
+      UNION ALL SELECT 'search','pending',count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-enqueued_at)),0)::float FROM search_jobs
       UNION ALL SELECT 'commerce',CASE WHEN dead_at IS NULL THEN 'pending' ELSE 'dead' END,count(*)::integer,COALESCE(max(EXTRACT(EPOCH FROM now()-available_at)) FILTER (WHERE dead_at IS NULL),0)::float FROM commerce_reconciliation_jobs GROUP BY dead_at IS NULL
     `);
     const flags = await this.db.rows(
@@ -81,7 +81,7 @@ export class Operations {
       "SELECT count(*) FILTER (WHERE mode='fallback')::integer AS ai_fallbacks,count(*) FILTER (WHERE attempts>0 AND reason='provider_unavailable')::integer AS ai_failures,count(*) FILTER (WHERE unknown_cost_attempts>0)::integer AS ai_uncertain FROM ai_usage WHERE created_at>now()-interval '1 hour'",
     );
     const payments = await this.db.rows<{ failed: number }>(
-      "SELECT count(*) FILTER (WHERE state='failed')::integer AS failed FROM commerce_payment_orders WHERE created_at>now()-interval '1 hour'",
+      "SELECT count(DISTINCT payment_order_id)::integer AS failed FROM commerce_payment_events WHERE to_state='failed' AND from_state IS DISTINCT FROM 'failed' AND created_at>now()-interval '1 hour'",
     );
     return {
       dependencies,

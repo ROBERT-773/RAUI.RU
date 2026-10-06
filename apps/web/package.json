@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@raui/config": "workspace:*",
     "@raui/types": "workspace:*",
     "@raui/ui": "workspace:*",
     "leaflet": "1.9.4",

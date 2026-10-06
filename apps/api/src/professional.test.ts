@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import https from 'node:https';
 import dns from 'node:dns/promises';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
 import * as config from './config';
 import { BadRequestException } from '@nestjs/common';
 import { ProfessionalImports } from './modules/professional/imports';
+import { ConfiguredDelivery } from './modules/auth/delivery';
 import {
   publicIPv4,
   validateFeedUrl,
   resolveFeedHost,
+  HttpsFeedFetcher,
 } from './modules/professional/feed-fetch';
 import { parseFeed } from './modules/professional/feed-parser';
 import {
@@ -168,6 +171,134 @@ test('Feed DNS deadline and mixed private/public DNS answers fail closed', async
     { address: '8.8.8.8', family: 4 },
   ]);
   assert.equal(addresses[0]!.address, '8.8.8.8');
+});
+
+test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects redirects', async (t) => {
+  const previous = process.env.FEED_ALLOWED_HOSTS;
+  process.env.FEED_ALLOWED_HOSTS = 'feeds.example';
+  t.after(() => {
+    if (previous === undefined) delete process.env.FEED_ALLOWED_HOSTS;
+    else process.env.FEED_ALLOWED_HOSTS = previous;
+  });
+  let dnsCalls = 0,
+    requests = 0,
+    statusCode = 200;
+  t.mock.method(dns, 'lookup', async () => {
+    dnsCalls++;
+    return [{ address: dnsCalls === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 }];
+  });
+  let captured: https.RequestOptions | undefined;
+  t.mock.method(https, 'request', ((
+    url: URL,
+    options: https.RequestOptions,
+    callback: (response: unknown) => void,
+  ) => {
+    requests++;
+    captured = options;
+    assert.equal(url.hostname, 'feeds.example');
+    const req = new EventEmitter();
+    return Object.assign(req, {
+      destroy() {},
+      end() {
+        // Node24 autoSelectFamily requests all:true unless the adapter pins IPv4.
+        options.lookup!(
+          'feeds.example',
+          { all: options.family !== 4 },
+          (_error, address) => {
+            if (options.family !== 4 && !Array.isArray(address)) {
+              req.emit(
+                'error',
+                new Error('Node24 lookup expected address objects'),
+              );
+              return;
+            }
+            assert.equal(address, '8.8.8.8');
+            const res = Object.assign(new EventEmitter(), {
+              statusCode,
+              headers: { 'content-type': 'application/json' },
+            });
+            callback(res);
+            if (statusCode === 200) {
+              res.emit('data', Buffer.from('[]'));
+              res.emit('end');
+            }
+          },
+        );
+      },
+    });
+  }) as never);
+  const fetcher = new HttpsFeedFetcher();
+  assert.equal(await fetcher.fetch('https://feeds.example/listings'), '[]');
+  assert.equal(captured?.family, 4);
+  assert.equal(captured?.servername, 'feeds.example');
+  assert.equal(captured?.rejectUnauthorized, true);
+  assert.equal(captured?.agent, false);
+  assert.equal(dnsCalls, 1);
+  await assert.rejects(
+    fetcher.fetch('https://feeds.example/listings'),
+    /Feed address rejected/,
+  );
+  assert.equal(requests, 1);
+  dnsCalls = 0;
+  statusCode = 302;
+  await assert.rejects(
+    fetcher.fetch('https://feeds.example/listings'),
+    /Feed response rejected/,
+  );
+  assert.equal(requests, 2);
+});
+
+test('Verification challenge delivery refuses redirects and sanitizes transport failures', async (t) => {
+  t.mock.method(config, 'loadConfig', () =>
+    config.envSchema.parse({
+      WEB_ORIGIN: 'http://localhost:3000',
+      DATABASE_URL: 'postgresql://localhost/test',
+      REDIS_URL: 'redis://localhost',
+      VERIFICATION_GATEWAY_URL: 'https://verify.example/send',
+      VERIFICATION_GATEWAY_TOKEN: 'test-only-provider-token',
+    }),
+  );
+  const message = {
+    destination: 'fixture@example.test',
+    purpose: 'reset' as const,
+    token: 'synthetic-private-challenge',
+  };
+  let forwarded = 0,
+    status = 307;
+  const server = createServer((request, response) => {
+    request.resume();
+    if (request.url === '/send') {
+      response.writeHead(status, { Location: '/unapproved-destination' });
+      response.end();
+    } else {
+      forwarded++;
+      response.writeHead(204);
+      response.end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const port = (server.address() as { port: number }).port;
+  const nativeFetch = globalThis.fetch;
+  // Only the configured HTTPS transport destination is mapped to a controlled
+  // loopback fixture; native fetch still executes the actual redirect policy.
+  t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) => {
+    assert.equal(url, 'https://verify.example/send');
+    return nativeFetch(`http://127.0.0.1:${port}/send`, init);
+  });
+  const delivery = new ConfiguredDelivery();
+  for (status of [307, 308]) {
+    await assert.rejects(
+      delivery.send(message),
+      /Verification delivery unavailable/,
+    );
+    assert.equal(forwarded, 0);
+  }
 });
 
 test('Notification gateway rejects unsafe destinations and DNS rebinding answers', async () => {
