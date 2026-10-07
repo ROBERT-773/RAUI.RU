@@ -19,18 +19,33 @@ export default function SearchProduct({
   initialDefinition?: SearchDefinition;
   initialMode?: 'list' | 'map';
 }) {
+  // Next preserves client components during same-route navigation. Reset drafts
+  // and result state when the URL-provided definition or mode changes.
+  return (
+    <SearchView
+      key={JSON.stringify([initialDefinition, initialMode])}
+      definition={initialDefinition}
+      mode={initialMode}
+    />
+  );
+}
+function SearchView({
+  definition,
+  mode,
+}: {
+  definition: SearchDefinition;
+  mode: 'list' | 'map';
+}) {
   const router = useRouter();
   const [navigationPending, startNavigation] = useTransition();
-  const [definition, setDefinition] =
-      useState<SearchDefinition>(initialDefinition),
-    [page, setPage] = useState<SearchPage | null>(null),
+  const [requestRevision, setRequestRevision] = useState(0);
+  const [page, setPage] = useState<SearchPage | null>(null),
     [error, setError] = useState(''),
     [loading, setLoading] = useState(true),
-    [mode, setMode] = useState<'list' | 'map'>(initialMode),
     [selected, setSelected] = useState<string[] | null>(null),
     [notice, setNotice] = useState(''),
     [filterCategory, setFilterCategory] = useState(
-      initialDefinition.category ?? 'apartment',
+      definition.category ?? 'apartment',
     );
   useEffect(() => {
     let active = true;
@@ -51,7 +66,7 @@ export default function SearchProduct({
     return () => {
       active = false;
     };
-  }, [definition]);
+  }, [definition, requestRevision]);
   function update(d: SearchDefinition, nextMode = mode) {
     const next = { ...d, cursor: undefined };
     const query = new URLSearchParams({
@@ -61,9 +76,14 @@ export default function SearchProduct({
     const target = '/search?' + query.toString();
     if (window.location.pathname + window.location.search !== target)
       startNavigation(() => router.replace(target, { scroll: false }));
+    // A retry or selection reset can reuse the current URL definition.
+    if (
+      JSON.stringify(next) === JSON.stringify(definition) &&
+      nextMode === mode
+    )
+      setRequestRevision((revision) => revision + 1);
     setLoading(true);
     setSelected(null);
-    setDefinition({ ...d, cursor: undefined });
     track({ type: 'filter_changed', fields: Object.keys(d) });
   }
   async function save() {
@@ -99,17 +119,23 @@ export default function SearchProduct({
             locality: String(data.get('locality') || '') || undefined,
             attributes: {
               ...advancedDefinition(data).attributes,
-              ...(data.get('rooms')
-                ? {
-                    rooms: {
-                      min: Number(data.get('rooms')),
-                      max: Number(data.get('rooms')),
-                    },
-                  }
-                : {}),
-              ...(data.get('area')
-                ? { area: { min: Number(data.get('area')) } }
-                : {}),
+              ...Object.fromEntries(
+                ['rooms', 'area'].flatMap((attribute) => {
+                  const min = data.get(attribute + 'Min');
+                  const max = data.get(attribute + 'Max');
+                  return min || max
+                    ? [
+                        [
+                          attribute,
+                          {
+                            ...(min ? { min: Number(min) } : {}),
+                            ...(max ? { max: Number(max) } : {}),
+                          },
+                        ],
+                      ]
+                    : [];
+                }),
+              ),
             },
             sort: String(data.get('sort')) as NonNullable<
               SearchDefinition['sort']
@@ -130,7 +156,7 @@ export default function SearchProduct({
           Объект
           <select
             name="category"
-            defaultValue={initialDefinition.category ?? ''}
+            defaultValue={definition.category ?? ''}
             onChange={(e) => setFilterCategory(e.target.value || 'apartment')}
           >
             <option value="">Все объекты</option>
@@ -148,10 +174,7 @@ export default function SearchProduct({
         </label>
         <label>
           Сделка
-          <select
-            name="dealType"
-            defaultValue={initialDefinition.dealType ?? ''}
-          >
+          <select name="dealType" defaultValue={definition.dealType ?? ''}>
             <option value="">Все сделки</option>
             <option value="sale">Купить</option>
             <option value="long_rent">Снять надолго</option>
@@ -178,15 +201,29 @@ export default function SearchProduct({
         </label>
         <label>
           Город
-          <input name="locality" defaultValue={initialDefinition.locality} />
+          <input name="locality" defaultValue={definition.locality} />
         </label>
         <label>
-          Комнат
+          Комнат от
           <input
-            name="rooms"
+            name="roomsMin"
             defaultValue={
-              typeof initialDefinition.attributes?.rooms === 'object'
-                ? initialDefinition.attributes.rooms.min
+              typeof definition.attributes?.rooms === 'object'
+                ? definition.attributes.rooms.min
+                : undefined
+            }
+            type="number"
+            min="0"
+            max="50"
+          />
+        </label>
+        <label>
+          Комнат до
+          <input
+            name="roomsMax"
+            defaultValue={
+              typeof definition.attributes?.rooms === 'object'
+                ? definition.attributes.rooms.max
                 : undefined
             }
             type="number"
@@ -197,29 +234,41 @@ export default function SearchProduct({
         <label>
           Площадь от, м²
           <input
-            name="area"
+            name="areaMin"
             defaultValue={
-              typeof initialDefinition.attributes?.area === 'object'
-                ? initialDefinition.attributes.area.min
+              typeof definition.attributes?.area === 'object'
+                ? definition.attributes.area.min
                 : undefined
             }
             type="number"
+            step="any"
+            min="0"
+          />
+        </label>
+        <label>
+          Площадь до, м²
+          <input
+            name="areaMax"
+            defaultValue={
+              typeof definition.attributes?.area === 'object'
+                ? definition.attributes.area.max
+                : undefined
+            }
+            type="number"
+            step="any"
             min="0"
           />
         </label>
         <label>
           Сортировка
-          <select name="sort" defaultValue={initialDefinition.sort ?? 'newest'}>
+          <select name="sort" defaultValue={definition.sort ?? 'newest'}>
             <option value="newest">Сначала новые</option>
             <option value="price_asc">Дешевле</option>
             <option value="price_desc">Дороже</option>
             <option value="area_desc">Площадь</option>
           </select>
         </label>
-        <AdvancedFilters
-          category={filterCategory}
-          definition={initialDefinition}
-        />
+        <AdvancedFilters category={filterCategory} definition={definition} />
         <Button className="primary" type="submit">
           Найти
         </Button>
@@ -228,7 +277,6 @@ export default function SearchProduct({
         <Button
           aria-pressed={mode === 'list'}
           onClick={() => {
-            setMode('list');
             update({ ...definition }, 'list');
             track({ type: 'mode_changed', mode: 'list' });
           }}
@@ -238,7 +286,6 @@ export default function SearchProduct({
         <Button
           aria-pressed={mode === 'map'}
           onClick={() => {
-            setMode('map');
             update(
               {
                 ...definition,
