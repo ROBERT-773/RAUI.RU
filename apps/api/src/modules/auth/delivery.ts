@@ -2,6 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { isProduction, loadConfig } from '../../config';
+import { sendResetSmtp } from './reset-smtp';
 export interface VerificationMessage {
   destination: string;
   purpose: 'email' | 'phone' | 'reset';
@@ -33,6 +34,13 @@ export class ConfiguredDelivery extends VerificationDelivery {
           'Verification delivery unavailable',
         );
       }
+      return;
+    }
+    if (message.purpose === 'reset' && config.RESET_SMTP_ENABLED === 'true') {
+      await sendResetSmtp(message, {
+        WEB_ORIGIN: config.WEB_ORIGIN,
+        RESET_SMTP_PASSWORD: config.RESET_SMTP_PASSWORD!,
+      });
       return;
     }
     if (isProduction(config))
