@@ -10,6 +10,12 @@ import { z } from 'zod';
 import { parse } from '../../common/security';
 import { Database, Sql } from '../database/database';
 import { loadConfig } from '../../config';
+import { join } from 'node:path';
+import {
+  RegionCatalogue,
+  RegionsController,
+  loadRegionDocuments,
+} from './regions';
 export const addressSchema = z
   .object({
     formatted: z.string().trim().min(3).max(500),
@@ -80,8 +86,18 @@ export class GeoController {
   }
 }
 @Module({
-  controllers: [GeoController],
-  providers: [Geo, { provide: Geocoder, useClass: HttpGeocoder }],
+  controllers: [GeoController, RegionsController],
+  providers: [
+    Geo,
+    { provide: Geocoder, useClass: HttpGeocoder },
+    {
+      provide: RegionCatalogue,
+      useFactory: () =>
+        new RegionCatalogue(
+          loadRegionDocuments(join(__dirname, '../../config/regions')),
+        ),
+    },
+  ],
   exports: [Geo],
 })
 export class GeoModule {}
