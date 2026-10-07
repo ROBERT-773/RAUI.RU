@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { ListingCard, SearchDefinition } from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
 import { attributeLabels } from '../lib/labels';
+import { savedSearchSummary } from '../lib/saved-search-summary';
 import { Card } from './card';
 type Tab =
   'favorite' | 'compare' | 'recent' | 'saved' | 'messages' | 'notifications';
@@ -395,6 +396,9 @@ export default function Account() {
           {saved.map((s) => (
             <article className="panel" key={s.id}>
               <h2>{s.name}</h2>
+              <p style={{ overflowWrap: 'anywhere' }}>
+                {savedSearchSummary(s.definition)}
+              </p>
               <Link
                 href={
                   '/search?definition=' +
