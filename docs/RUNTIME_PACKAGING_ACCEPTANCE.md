@@ -36,6 +36,12 @@ See `scripts/release-contract.mjs`, `.github/workflows/ci.yml` and
       assets. That directory is absent at the reviewed baseline; record absence
       explicitly rather than claiming files were copied. Current Next config has
       no `output: 'standalone'`; do not assume a standalone server exists.
+- [ ] Include Python 3.12+ and `apps/ai/raui_ai` source modules for the trust
+      worker. It launches `python3 -m raui_ai.worker` with working directory
+      `apps/ai` resolved from `apps/api`; preserve that sibling layout and verify
+      Python/module availability inside the image. Node dependencies alone are
+      insufficient (see `apps/api/src/modules/trust/worker.ts` and
+      `apps/ai/pyproject.toml`).
 - [ ] Record native runtime dependencies and target platform compatibility
       (including sharp), filesystem ownership, required mounts, restart/resource
       policy and trusted ingress bindings. `infra/compose.yaml` is local only.
