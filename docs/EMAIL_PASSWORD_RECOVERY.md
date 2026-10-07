@@ -52,6 +52,12 @@ Before enabling recovery on staging:
    Accept only after a delivered link changes the password, reuse/expiry are
    rejected, and previous sessions are revoked.
 
+Independent testing also reproduced an inherited API disclosure during delivery
+failures: known accounts can receive a 503 while unknown accounts receive a 201.
+Issue #52 tracks equal public responses and sanitized failure observability;
+resolve it before enabling recovery. The conditional UI message alone does not
+fix this API behavior.
+
 Provider setup remains tracked by issue #41. This change is code preparation;
 it does not deploy the UI, configure DNS/mail, or certify external delivery.
 

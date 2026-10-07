@@ -75,7 +75,12 @@ export default function PasswordRecovery({
                   token,
                   password,
                 });
-                setCsrf('');
+                try {
+                  setCsrf('');
+                } catch {
+                  // Storage can be unavailable; the API already changed the password.
+                  // setCsrf clears its in-memory value before attempting persistence.
+                }
                 setToken(null);
                 capturedToken.current = '';
               } else {
