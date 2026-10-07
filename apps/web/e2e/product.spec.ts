@@ -7,6 +7,7 @@ import {
 } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import AxeBuilder from '@axe-core/playwright';
+import type { SearchDefinition } from '@raui/types/product';
 test.beforeEach(() => {
   execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
 });
@@ -38,6 +39,144 @@ function endpoint(response: PlaywrightResponse, method: string, path: string) {
     new URL(response.url()).pathname === path
   );
 }
+test('same-route navigation and history restore a saved search URL without reloading the document', async ({
+  page,
+}) => {
+  const definition: SearchDefinition = {
+    category: 'apartment',
+    dealType: 'sale',
+    locality: 'Москва',
+    price: { max: 15000000 },
+    attributes: { rooms: { min: 2, max: 2 }, area: { min: 40, max: 90 } },
+    sort: 'price_asc',
+    limit: 20,
+  };
+  const savedUrl =
+    '/search?' +
+    new URLSearchParams({
+      definition: JSON.stringify(definition),
+      mode: 'list',
+    });
+  await page.goto(savedUrl);
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { raui48Document: string }).raui48Document =
+      'same-document';
+  });
+  // A real Next Link keeps the /search route mounted while its parameters change.
+  const clear = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      JSON.stringify(response.request().postDataJSON()) ===
+        JSON.stringify({ limit: 20 }),
+  );
+  await page.getByRole('link', { name: 'Недвижимость', exact: true }).click();
+  expect((await clear).status()).toBe(201);
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.getByLabel('Цена до', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Комнат от', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Площадь до, м²', { exact: true })).toHaveValue(
+    '',
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toBeVisible();
+  const restored = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      JSON.stringify(response.request().postDataJSON()) ===
+        JSON.stringify(definition),
+  );
+  await page.goBack();
+  expect((await restored).status()).toBe(201);
+  await expect(page.getByLabel('Комнат от', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Площадь от, м²', { exact: true })).toHaveValue(
+    '40',
+  );
+  await expect(page.getByLabel('Площадь до, м²', { exact: true })).toHaveValue(
+    '90',
+  );
+  await expect(
+    page.getByRole('combobox', { name: 'Сортировка', exact: true }),
+  ).toHaveValue('price_asc');
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { raui48Document: string }).raui48Document,
+    ),
+  ).toBe('same-document');
+  await page.goForward();
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue('');
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toBeVisible();
+});
+test('bounded and maximum-only room/area ranges survive submit and intentional edits in URL and API', async ({
+  page,
+}) => {
+  for (const attributes of [
+    { rooms: { min: 2, max: 3 }, area: { min: 40, max: 60 } },
+    { rooms: { max: 3 }, area: { max: 60 } },
+  ]) {
+    await page.goto(
+      '/search?' +
+        new URLSearchParams({
+          definition: JSON.stringify({ attributes, limit: 20 }),
+        }),
+    );
+    await expect(
+      page.getByRole('button', { name: 'Сохранить поиск', exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue(
+      '3',
+    );
+    await expect(
+      page.getByLabel('Площадь до, м²', { exact: true }),
+    ).toHaveValue('60');
+    const submitted = page.waitForResponse(
+      (response) =>
+        endpoint(response, 'POST', '/api/v1/search') &&
+        response.request().postDataJSON().sort === 'newest',
+    );
+    await page.getByRole('button', { name: 'Найти', exact: true }).click();
+    const response = await submitted;
+    expect(response.status()).toBe(201);
+    expect(response.request().postDataJSON().attributes).toEqual(attributes);
+    await expect
+      .poll(
+        () =>
+          JSON.parse(new URL(page.url()).searchParams.get('definition')!)
+            .attributes,
+      )
+      .toEqual(attributes);
+  }
+  await page.getByLabel('Комнат от', { exact: true }).fill('0');
+  await page.getByLabel('Площадь до, м²', { exact: true }).fill('');
+  const changed = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      response.request().postDataJSON().attributes?.rooms?.min === 0,
+  );
+  await page.getByRole('button', { name: 'Найти', exact: true }).click();
+  const response = await changed;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON().attributes).toEqual({
+    rooms: { min: 0, max: 3 },
+  });
+  await expect
+    .poll(
+      () =>
+        JSON.parse(new URL(page.url()).searchParams.get('definition')!)
+          .attributes,
+    )
+    .toEqual({ rooms: { min: 0, max: 3 } });
+});
 async function moveMap(
   page: Page,
   action: () => Promise<void>,
