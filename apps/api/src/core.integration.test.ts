@@ -22,8 +22,14 @@ import { signIdentity } from '@raui/config/ingress';
 
 class CaptureDelivery extends VerificationDelivery {
   readonly messages: VerificationMessage[] = [];
+  resetUnavailable = false;
   async send(message: VerificationMessage) {
     this.messages.push(message);
+    if (this.resetUnavailable && message.purpose === 'reset') {
+      // Exercise the real gateway's timeout duration without external services.
+      await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+      throw new Error('fixture delivery outage');
+    }
   }
   latest(destination: string, purpose: VerificationMessage['purpose']) {
     return [...this.messages]
@@ -1235,6 +1241,58 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           admin,
         );
         assert.ok(rows.some((row) => row.action === 'admin.user.changed'));
+      },
+    );
+    await t.test(
+      'reset outage has identical acceptance and masks the provider timeout for known and unknown accounts',
+      async () => {
+        delivery.resetUnavailable = true;
+        try {
+          const results = await Promise.all(
+            ['owner@example.test', 'unknown-outage@example.test'].map(
+              async (email) => {
+                const started = performance.now();
+                const result = await call('/auth/password-reset', 'POST', {
+                  email,
+                });
+                return {
+                  result: { status: result.status, data: result.data },
+                  elapsed: performance.now() - started,
+                };
+              },
+            ),
+          );
+          assert.deepEqual(results[0]!.result, results[1]!.result);
+          assert.deepEqual(results[0]!.result, {
+            status: 201,
+            data: { accepted: true },
+          });
+          for (const result of results)
+            assert.ok(
+              result.elapsed >= 5000,
+              `response returned early: ${result.elapsed}ms`,
+            );
+          assert.ok(
+            Math.abs(results[0]!.elapsed - results[1]!.elapsed) < 1000,
+            'timeout creates a multi-second timing distinction',
+          );
+          const failedToken = delivery.latest('owner@example.test', 'reset');
+          await pool.query(
+            "UPDATE auth_challenges SET expires_at=now()-interval '1 second' WHERE token_hash=$1",
+            [hash(failedToken)],
+          );
+          assert.equal(
+            (
+              await call('/auth/password-reset/confirm', 'POST', {
+                token: failedToken,
+                password: 'expired-reset-password',
+              })
+            ).status,
+            400,
+          );
+        } finally {
+          delivery.resetUnavailable = false;
+        }
       },
     );
     await t.test(
