@@ -14,6 +14,126 @@ import type { Pool } from 'pg';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AuthController, AuthService } from './modules/auth/auth';
+import { VerificationDelivery } from './modules/auth/delivery';
+import { Database } from './modules/database/database';
+import { Audit } from './modules/audit/audit';
+import { Test } from '@nestjs/testing';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
+
+test('password reset HTTP acceptance is identical for known and unknown accounts during delivery outage', async () => {
+  const knownEmail = 'known-reset@example.test';
+  const db = {
+    rows: async (_sql: string, values: string[]) =>
+      values[0] === knownEmail
+        ? [{ id: 'fixture-user', email: knownEmail }]
+        : [],
+    transaction: async (work: (sql: unknown) => Promise<void>) =>
+      work({ query: async () => ({ rows: [] }) }),
+  };
+  const module = await Test.createTestingModule({
+    controllers: [AuthController],
+    providers: [
+      AuthService,
+      { provide: Database, useValue: db },
+      { provide: Audit, useValue: { record: async () => {} } },
+      {
+        provide: VerificationDelivery,
+        useValue: {
+          send: async () => {
+            throw new ServiceUnavailableException('private provider detail');
+          },
+        },
+      },
+    ],
+  }).compile();
+  const app = module.createNestApplication({ logger: false });
+  await app.listen(0, '127.0.0.1');
+  try {
+    const base = await app.getUrl();
+    const responses = await Promise.all(
+      [knownEmail, 'unknown-reset@example.test'].map(async (email) => {
+        const response = await fetch(`${base}/v1/auth/password-reset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        return { status: response.status, body: await response.json() };
+      }),
+    );
+    assert.deepEqual(responses[0], responses[1]);
+    assert.deepEqual(responses[0], { status: 201, body: { accepted: true } });
+  } finally {
+    await app.close();
+  }
+});
+
+test('reset failures emit only a fixed sanitized event and successful or unknown requests retain acceptance', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const events: unknown[][] = [];
+  t.mock.method(Logger.prototype, 'warn', (...args: unknown[]) => {
+    events.push(args);
+  });
+  const messages: { destination: string; purpose: string; token: string }[] =
+    [];
+  let fails = true;
+  const email = 'sensitive-reset@example.test';
+  const auth = new AuthService(
+    {
+      rows: async (_sql: string, values: string[]) =>
+        values[0] === email ? [{ id: 'private-user', email }] : [],
+      transaction: async (work: (sql: unknown) => Promise<void>) =>
+        work({ query: async () => ({ rows: [] }) }),
+    } as unknown as Database,
+    { record: async () => {} } as unknown as Audit,
+    {
+      send: async (message) => {
+        messages.push(message);
+        if (fails) throw new Error(`${email} ${message.token} gateway-secret`);
+      },
+    },
+  );
+  for (const destination of [email, 'unknown@example.test', email]) {
+    const pending = auth.request({ email: destination }, 'reset');
+    // Drain challenge transaction microtasks before advancing the response timer.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5100);
+    assert.deepEqual(await pending, { accepted: true });
+    fails = false;
+  }
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1]!.destination, email);
+  assert.equal(messages[1]!.purpose, 'reset');
+  assert.match(messages[1]!.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(events, [['auth.password_reset.delivery_failed']]);
+});
+
+test('valid unknown reset requests wait for the gateway timeout envelope but invalid requests fail immediately', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const auth = new AuthService(
+    { rows: async () => [] } as unknown as Database,
+    {} as Audit,
+    { send: async () => {} },
+  );
+  await assert.rejects(
+    auth.request({ email: 'invalid' }, 'reset'),
+    BadRequestException,
+  );
+  let completed = false;
+  const pending = auth
+    .request({ email: 'unknown@example.test' }, 'reset')
+    .then((value) => {
+      completed = true;
+      return value;
+    });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(completed, false);
+  t.mock.timers.tick(5000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(completed, false);
+  t.mock.timers.tick(100);
+  assert.deepEqual(await pending, { accepted: true });
+});
 test('Migration cleanup preserves primary failures and discards unsafe pooled connections', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'raui-migrate-unit-'));
   try {
