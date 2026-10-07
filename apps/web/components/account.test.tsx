@@ -467,3 +467,56 @@ test('Selected thread pagination appends older messages and consumes its cursor'
     screen.queryByRole('button', { name: 'Предыдущие сообщения' }),
   ).toBeNull();
 });
+
+test('saved searches show distinct escaped summaries while retaining original reopen and rename definitions', async () => {
+  const definitions = [
+    { q: '<img src=x onerror=alert(1)> & #', price: { min: 0, max: 100 } },
+    { locality: 'Москва', attributes: { rooms: { max: 2 } } },
+  ];
+  const fetcher = vi.fn(async (url: string, options?: { method?: string }) => {
+    let value: unknown = { items: [], cursor: null };
+    if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+    if (url.endsWith('/saved-searches') && options?.method === 'GET')
+      value = {
+        items: definitions.map((definition, i) => ({
+          id: String(i),
+          name: 'Одинаковое имя',
+          definition,
+        })),
+        cursor: null,
+      };
+    return { ok: true, json: async () => value };
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { container } = render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранённые поиски' }));
+  await screen.findByText(
+    'Поиск: <img src=x onerror=alert(1)> & # · Цена: от 0 до 100 ₽',
+  );
+  expect(screen.getByText('Город: Москва · Комнаты: до 2')).toBeTruthy();
+  expect(container.querySelector('img')).toBeNull();
+  const links = screen.getAllByRole('link', { name: 'Открыть поиск' });
+  links.forEach((link, i) =>
+    expect(link.getAttribute('href')).toBe(
+      '/search?definition=' +
+        encodeURIComponent(JSON.stringify(definitions[i])),
+    ),
+  );
+  fireEvent.click(screen.getAllByRole('button', { name: 'Переименовать' })[0]!);
+  await vi.waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url, options]) =>
+          url.endsWith('/saved-searches/0') && options?.method === 'PATCH',
+      ),
+    ).toBe(true),
+  );
+  const call = fetcher.mock.calls.find(
+    ([url, options]) =>
+      url.endsWith('/saved-searches/0') && options?.method === 'PATCH',
+  )!;
+  expect(JSON.parse((call[1] as { body: string }).body).definition).toEqual(
+    definitions[0],
+  );
+});
