@@ -95,10 +95,132 @@ test('Phase 3 real PostgreSQL/PostGIS/OpenSearch HTTP acceptance', async (t) => 
         [id, property, source, seller, price],
       );
     }
+    // Exercise upgrading a pre-region strict index, not only clean index creation.
+    const legacyMapping = structuredClone(
+      (await import('./modules/search/index.js')).listingMapping,
+    );
+    delete (legacyMapping.mappings.properties as Record<string, unknown>)
+      .region_code;
+    const legacyName = index.alias + '-legacy';
+    await index.request('/' + legacyName, 'PUT', legacyMapping);
+    await index.request('/_aliases', 'POST', {
+      actions: [
+        {
+          add: { index: legacyName, alias: index.alias, is_write_index: true },
+        },
+      ],
+    });
     await index.initialize();
+    await pool.query(
+      `UPDATE addresses a SET region_code=CASE WHEN l.id=$1 THEN 'moscow' ELSE 'moscow_oblast' END
+       FROM properties p JOIN listings l ON l.property_id=p.id
+       WHERE a.id=p.address_id AND l.id=ANY($2::uuid[])`,
+      [first, [first, second]],
+    );
     while (await search.sync()) {
       /* Drain durable batch. */
     }
+    await t.test(
+      'region filters isolate list, map and selection; stale index cannot bypass live assignment',
+      async () => {
+        assert.equal(
+          (
+            await call(
+              'account/saved-searches',
+              'POST',
+              { name: 'Unknown', definition: { regionCode: 'unknown' } },
+              buyer,
+            )
+          ).status,
+          400,
+        );
+        const savedRegion = await call(
+          'account/saved-searches',
+          'POST',
+          { name: 'Moscow', definition: { regionCode: 'moscow' } },
+          buyer,
+        );
+        assert.equal(savedRegion.status, 201);
+        assert.equal(
+          (savedRegion.data.definition as { regionCode: string }).regionCode,
+          'moscow',
+        );
+        const ids = (r: { data: Record<string, unknown> }) =>
+          (r.data.items as { id: string }[]).map((x) => x.id).sort();
+        assert.deepEqual(
+          ids(await call('search', 'POST', {})),
+          [first, second, third].sort(),
+        );
+        assert.deepEqual(
+          ids(await call('search', 'POST', { regionCode: 'moscow' })),
+          [first],
+        );
+        assert.deepEqual(
+          ids(await call('search', 'POST', { regionCode: 'moscow_oblast' })),
+          [second],
+        );
+        const map = await call('search/map', 'POST', {
+          regionCode: 'moscow_oblast',
+          bounds: [37, 55, 39, 57],
+        });
+        assert.deepEqual(
+          (map.data.markers as { listingIds: string[] }[]).flatMap(
+            (x) => x.listingIds,
+          ),
+          [second],
+        );
+        assert.deepEqual(
+          ids(
+            await call('search/selection', 'POST', {
+              ids: [first, second, third],
+              definition: { regionCode: 'moscow' },
+            }),
+          ),
+          [first],
+        );
+        for (const regionCode of ['unknown', '../secret'])
+          assert.equal(
+            (await call('search', 'POST', { regionCode })).status,
+            400,
+          );
+        const paged = await call('search', 'POST', {
+          regionCode: 'moscow',
+          limit: 1,
+        });
+        assert.equal(
+          (
+            await call('search', 'POST', {
+              regionCode: 'moscow_oblast',
+              limit: 1,
+              cursor: paged.data.cursor,
+            })
+          ).status,
+          400,
+        );
+        await pool.query(
+          `UPDATE addresses a SET region_code='moscow_oblast' FROM properties p JOIN listings l ON l.property_id=p.id WHERE a.id=p.address_id AND l.id=$1`,
+          [first],
+        );
+        assert.deepEqual(
+          ids(await call('search', 'POST', { regionCode: 'moscow' })),
+          [],
+        );
+        while (await search.sync()) {
+          /* replay changed address */
+        }
+        assert.deepEqual(
+          ids(await call('search', 'POST', { regionCode: 'moscow_oblast' })),
+          [first, second].sort(),
+        );
+        await pool.query(
+          `UPDATE addresses a SET region_code='moscow' FROM properties p JOIN listings l ON l.property_id=p.id WHERE a.id=p.address_id AND l.id=$1`,
+          [first],
+        );
+        while (await search.sync()) {
+          /* restore fixture */
+        }
+      },
+    );
     await t.test(
       'search text, typo, nested filters, price per m², sort and bound cursors',
       async () => {

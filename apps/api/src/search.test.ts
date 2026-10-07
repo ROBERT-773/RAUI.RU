@@ -76,3 +76,15 @@ test('unconfigured notification adapter defers without acknowledging a send', as
     'deferred',
   );
 });
+
+test('regional search uses an exact region term and leaves legacy searches unrestricted', () => {
+  const input = searchSchema.parse({ regionCode: 'moscow' });
+  assert.ok(
+    JSON.stringify(indexQuery(input)).includes('"region_code":"moscow"'),
+  );
+  assert.ok(
+    !JSON.stringify(indexQuery(searchSchema.parse({}))).includes('region_code'),
+  );
+  for (const regionCode of ['', 'MOSCOW', '../secret'])
+    assert.equal(searchSchema.safeParse({ regionCode }).success, false);
+});

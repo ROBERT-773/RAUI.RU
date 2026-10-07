@@ -176,7 +176,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '12',
+          '13',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -620,9 +620,74 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           'PATCH',
           {
             version: physical.version,
-            address: { ...address, longitude: 37.6, latitude: 55.7 },
+            address: {
+              ...address,
+              longitude: 37.6,
+              latitude: 55.7,
+              regionCode: 'moscow',
+            },
           },
           owner,
+        );
+        assert.equal(
+          (
+            await ok<{ address: { regionCode: string } }>(
+              `/properties/${physical.id}`,
+              'GET',
+              undefined,
+              owner,
+            )
+          ).address.regionCode,
+          'moscow',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT region_code FROM addresses a JOIN properties p ON p.address_id=a.id WHERE p.id=$1',
+              [physical.id],
+            )
+          ).rows[0].region_code,
+          'moscow',
+        );
+        assert.equal(
+          (
+            await call(
+              '/properties',
+              'POST',
+              {
+                category: 'apartment',
+                address: { ...address, regionCode: 'unknown' },
+              },
+              owner,
+              'unknown-region',
+            )
+          ).status,
+          400,
+        );
+        physical = await ok<Entity>(
+          `/properties/${physical.id}`,
+          'PATCH',
+          {
+            version: physical.version,
+            address: {
+              ...address,
+              longitude: 37.6,
+              latitude: 55.7,
+              regionCode: 'moscow_oblast',
+            },
+          },
+          owner,
+        );
+        assert.equal(
+          (
+            await ok<{ address: { regionCode: string } }>(
+              `/properties/${physical.id}`,
+              'GET',
+              undefined,
+              owner,
+            )
+          ).address.regionCode,
+          'moscow_oblast',
         );
         assert.equal(
           (

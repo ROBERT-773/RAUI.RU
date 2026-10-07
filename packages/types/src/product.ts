@@ -1,4 +1,5 @@
 export interface SearchDefinition {
+  regionCode?: string | undefined;
   q?: string | undefined;
   category?: string | undefined;
   dealType?: 'sale' | 'long_rent' | 'short_rent' | undefined;

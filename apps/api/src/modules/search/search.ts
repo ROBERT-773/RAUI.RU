@@ -13,6 +13,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { z } from 'zod';
+import { GeoModule } from '../geo/geo';
+import { RegionCatalogue } from '../geo/regions';
 import { Public, parse, hash, uuid } from '../../common/security';
 import { Database } from '../database/database';
 import {
@@ -57,6 +59,7 @@ export function documentOf(row: PublicRow) {
     price: row.price,
     price_per_m2: row.price_per_m2,
     area: typeof row.attributes.area === 'number' ? row.attributes.area : null,
+    region_code: row.region_code ?? null,
     locality: row.locality,
     district: row.district,
     published_at: row.published_at,
@@ -81,6 +84,7 @@ export class Search {
     readonly db: Database,
     readonly index: SearchIndex,
     readonly paidPlacements: PaidPlacementService,
+    readonly regions: RegionCatalogue,
   ) {}
   async publicRows(ids?: string[]) {
     return this.db.rows<PublicRow>(
@@ -100,6 +104,7 @@ export class Search {
     for (const [key, value] of Object.entries({
       category: input.category,
       deal_type: input.dealType,
+      region_code: input.regionCode,
       locality: input.locality,
       district: input.district,
       seller_type: input.sellerType,
@@ -185,6 +190,7 @@ export class Search {
     );
   }
   async validatePolygon(input: SearchInput) {
+    if (input.regionCode) this.regions.assertConfigured(input.regionCode);
     if (input.polygon) {
       const [row] = await this.db.rows<{ valid: boolean }>(
         'SELECT ST_IsValid(ST_SetSRID(ST_GeomFromGeoJSON($1),4326)) AS valid',
@@ -322,6 +328,7 @@ export class Search {
         .strict(),
       body,
     );
+    await this.validatePolygon(input.definition);
     return {
       items: await this.cards(
         (await this.eligible(input.ids, input.definition)).slice(0, 50),
@@ -467,7 +474,7 @@ export class SearchController {
   }
 }
 @Module({
-  imports: [PaidPlacementModule],
+  imports: [PaidPlacementModule, GeoModule],
   controllers: [SearchController],
   providers: [Search, SearchIndex],
   exports: [Search, SearchIndex],

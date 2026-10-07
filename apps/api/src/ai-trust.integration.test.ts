@@ -170,7 +170,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '12',
+          '13',
         );
       },
     );

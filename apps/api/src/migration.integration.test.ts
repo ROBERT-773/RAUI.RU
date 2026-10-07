@@ -92,7 +92,9 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
         const data =
           tablename === 'search_jobs'
             ? "to_jsonb(t)-'enqueued_at'"
-            : 'to_jsonb(t)';
+            : tablename === 'addresses'
+              ? "to_jsonb(t)-'region_code'"
+              : 'to_jsonb(t)';
         const rows = (
           await pool.query(
             `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
@@ -135,7 +137,14 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 12);
+    assert.equal(upgradedLedger.length, 13);
+    assert.equal(upgradedLedger[12].name, '013_region_search.sql');
+    assert.equal(
+      upgradedLedger[12].checksum,
+      createHash('sha256')
+        .update(await readFile('migrations/013_region_search.sql'))
+        .digest('hex'),
+    );
     assert.equal(upgradedLedger[11].name, '012_search_queue_observability.sql');
     assert.equal(
       upgradedLedger[11].checksum,
@@ -155,6 +164,21 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       ).rows.slice(0, 11),
       ledger,
     );
+    const legacyRegion = (
+      await pool.query('SELECT region_code FROM addresses WHERE id=$1', [
+        address,
+      ])
+    ).rows[0];
+    assert.equal(legacyRegion.region_code, null);
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT region_code FROM public_search_listings WHERE id=$1',
+          [listing],
+        )
+      ).rows[0].region_code,
+      null,
+    );
     const queue = (
       await pool.query(
         'SELECT enqueued_at=updated_at AS preserved FROM search_jobs WHERE listing_id=$1',
@@ -162,6 +186,38 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       )
     ).rows[0];
     assert.equal(queue.preserved, true);
+    const revisionBefore = (
+      await pool.query(
+        'SELECT revision::text FROM search_jobs WHERE listing_id=$1',
+        [listing],
+      )
+    ).rows[0].revision;
+    await pool.query('UPDATE addresses SET region_code=$2 WHERE id=$1', [
+      address,
+      'moscow',
+    ]);
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT region_code FROM public_search_listings WHERE id=$1',
+          [listing],
+        )
+      ).rows[0].region_code,
+      'moscow',
+    );
+    const revisionAfter = (
+      await pool.query(
+        'SELECT revision::text FROM search_jobs WHERE listing_id=$1',
+        [listing],
+      )
+    ).rows[0].revision;
+    assert.ok(BigInt(revisionAfter) > BigInt(revisionBefore));
+    await assert.rejects(
+      pool.query('UPDATE addresses SET region_code=$2 WHERE id=$1', [
+        address,
+        '../moscow',
+      ]),
+    );
     await assert.rejects(pool.query('UPDATE audit_events SET action=action'));
     await assert.rejects(pool.query('DELETE FROM audit_events'));
     await assert.rejects(

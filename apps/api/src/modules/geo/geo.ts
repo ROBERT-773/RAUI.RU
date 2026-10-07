@@ -13,6 +13,7 @@ import { loadConfig } from '../../config';
 import { join } from 'node:path';
 import {
   RegionCatalogue,
+  regionCodeSchema,
   RegionsController,
   loadRegionDocuments,
 } from './regions';
@@ -20,6 +21,7 @@ export const addressSchema = z
   .object({
     formatted: z.string().trim().min(3).max(500),
     locality: z.string().trim().min(1).max(100),
+    regionCode: regionCodeSchema.optional(),
     district: z.string().max(100).optional(),
     longitude: z.number().min(-180).max(180),
     latitude: z.number().min(-90).max(90),
@@ -52,16 +54,22 @@ export class HttpGeocoder extends Geocoder {
 }
 @Injectable()
 export class Geo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly regions: RegionCatalogue,
+  ) {}
   async create(sql: Sql, address: AddressInput) {
+    if (address.regionCode !== undefined)
+      this.regions.assertConfigured(address.regionCode);
     const [row] = await this.db.rows<{ id: string }>(
-      'INSERT INTO addresses(formatted,locality,district,point) VALUES($1,$2,$3,ST_SetSRID(ST_MakePoint($4,$5),4326)) RETURNING id',
+      'INSERT INTO addresses(formatted,locality,district,point,region_code) VALUES($1,$2,$3,ST_SetSRID(ST_MakePoint($4,$5),4326),$6) RETURNING id',
       [
         address.formatted,
         address.locality,
         address.district ?? null,
         address.longitude,
         address.latitude,
+        address.regionCode ?? null,
       ],
       sql,
     );
@@ -69,7 +77,7 @@ export class Geo {
   }
   async read(id: string, sql: Sql = this.db.pool) {
     const [row] = await this.db.rows(
-      'SELECT id,formatted,locality,district,ST_X(point) AS longitude,ST_Y(point) AS latitude,provider FROM addresses WHERE id=$1',
+      'SELECT id,formatted,locality,district,ST_X(point) AS longitude,ST_Y(point) AS latitude,provider,region_code AS "regionCode" FROM addresses WHERE id=$1',
       [id],
       sql,
     );
@@ -98,6 +106,6 @@ export class GeoController {
         ),
     },
   ],
-  exports: [Geo],
+  exports: [Geo, RegionCatalogue],
 })
 export class GeoModule {}
