@@ -45,7 +45,8 @@ See `scripts/release-contract.mjs`, `.github/workflows/ci.yml` and
 These are existing package-script contracts, not an approved container command.
 API scripts use `--env-file=../../.env`; choose a protected runtime mount/layout
 or a separately reviewed equivalent injection contract. Never bake `.env` into
-an image. Web start binds loopback; private ingress/bind topology must be explicit.
+an image. API and web bind loopback (`127.0.0.1`); private ingress/bind topology
+must be explicit.
 
 | Role                      | Existing command                                              | Working directory |
 | ------------------------- | ------------------------------------------------------------- | ----------------- |
