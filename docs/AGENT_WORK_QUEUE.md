@@ -18,11 +18,11 @@ single writer for overlapping search components.
 
 ## Next executable assignments
 
-1. Search consistency writer: reproduce and fix preserved-component navigation
+1. Search consistency writer ([#48](https://github.com/ROBERT-773/RAUI.RU/issues/48)): reproduce and fix preserved-component navigation
    and room/area range loss with failing regression tests before implementation.
-   Own search component/page/tests. Handle advanced-filter lifecycle sequentially
+   Own search component/page/tests. Handle advanced-filter lifecycle ([#50](https://github.com/ROBERT-773/RAUI.RU/issues/50)) sequentially
    because its form ownership overlaps. See product backlog acceptance criteria.
-2. Saved-search presentation writer: summarize stored filters in account cards,
+2. Saved-search presentation writer ([#49](https://github.com/ROBERT-773/RAUI.RU/issues/49)): summarize stored filters in account cards,
    with account tests. Own account component and a separate summary helper; do not
    edit the search component concurrently with task 1.
 3. Release packaging reviewer (#40): prepare a concrete immutable runtime/deploy
