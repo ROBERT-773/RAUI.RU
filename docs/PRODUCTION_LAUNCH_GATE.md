@@ -88,7 +88,9 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify `PHONE_OTP_ENABLED=false` preserves the existing long-token phone path.
   Numeric OTP capability and captured-adapter tests are not evidence of real SMS
   delivery; record approved provider bindings and controlled-recipient delivery
-  separately before enabling numeric OTP.
+  separately before production enablement of numeric OTP. A controlled staging
+  delivery check may enable it only in an isolated staging scope with explicit
+  operator and recipient authorization; follow `STAGING_PHONE_OTP_DELIVERY_ACCEPTANCE.md`.
 - Verify the selected rollback API/web/config preserves registration approval and
   owner quota guards, disables numeric OTP when required, and retains additive
   migrations and audit history. Use a reviewed forward-fix if a previous artifact
