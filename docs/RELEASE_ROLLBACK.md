@@ -20,7 +20,9 @@ publication limit. Database readability alone does not establish policy compatib
   migrations remain readable.
 - Keep migration017 and its tables. Disable `PHONE_OTP_ENABLED` before withdrawing
   numeric OTP support; retain approval guards and the existing long-token routes.
-  For pepper rotation, disable new phone sends for the full one-hour quota window.
+  For pepper rotation, pause all new numeric and legacy phone sends across every
+  API replica for the full one-hour quota window. Setting `PHONE_OTP_ENABLED=false`
+  alone is insufficient because legacy phone routes remain available.
 - Verify the chosen immutable artifact preserves these policies and security fixes.
   Run staging checks for pending/rejected denial, concurrent sixth/seventh object
   publication and OTP-disabled fallback before traffic cutover.
@@ -51,7 +53,7 @@ dry-run` workflow takes a successful RAUI CI run ID, full source SHA and either
 staging-dry-run or rollback-dry-run. It verifies GitHub run provenance and every
 manifest hash from the retained artifact using the trusted checked-out verifier.
 The selected run must be completed/successful for the exact `.github/workflows/ci.yml` path and source SHA; the downloaded manifest must carry the same run ID. It has read-only permissions and no deploy command or production credential.
-The current RC verifier requires all 12 migrations and RC evidence, so historical pre-RC artifacts cannot pass it. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
+The historical RC baseline required 12 migrations and RC evidence. The current candidate verifier requires all 17 migrations and matching 17-migration recovery evidence; historical artifacts cannot pass that contract. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
 Locally, from an extracted artifact root, use the trusted repository verifier:
 `node /path/to/RAUI.RU/scripts/release-contract.mjs verify .cache/phase4d-release.json <full-sha>`.
 Do not create a fake CI manifest or use a mutable branch/tag as release identity.
