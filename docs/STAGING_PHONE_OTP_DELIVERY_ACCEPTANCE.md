@@ -10,7 +10,8 @@ Implementation evidence and boundaries are in `PHONE_OTP_VERIFICATION.md`.
   authorization for this live send before execution; general development approval
   is not recipient authorization. Never request secret values in chat.
 - Record the isolated staging target and immutable application commit. Confirm
-  migration 017 is applied and registration approval and the six-object publication
+  the complete migration 001–017 ledger/checksums match the release and
+  registration approval and the six-object publication
   limit remain enforced. Do not use an older API that bypasses these policies.
 - Obtain gateway contract, Russian coverage, sender/template and billing/quota
   approvals. Confirm secure bindings for `PHONE_OTP_PEPPER`,
@@ -49,7 +50,8 @@ Implementation evidence and boundaries are in `PHONE_OTP_VERIFICATION.md`.
    from gateway acceptance and handset receipt.
 6. Restore `PHONE_OTP_ENABLED=false` through the staging change procedure and
    verify numeric capability is disabled. Record the rollback result. Retain
-   migration 017, tables and migration ledger, keep legacy long-token routes
+   migration 017 and its tables, verify and retain the complete 001–017 ledger
+   and checksums, keep legacy long-token routes
    available, and preserve approval and publication-limit guards. Do not rotate
    the pepper during this drill.
 
@@ -68,16 +70,25 @@ operator rather than declaring acceptance complete.
 
 Keep actual operational evidence in the approved restricted evidence store. This
 repository template intentionally contains no recipient, credentials or execution
-claims. Use separate verdicts; all remain `not_executed` until observed.
+claims. Use UTC ISO8601 timestamps (for example, the `Z` suffix) only for
+observed events; unobserved timestamps remain null. Record an immutable runtime
+artifact digest only if independently available, never infer it from a source SHA.
+Evidence references must identify sanitized records without credentials, contacts
+or raw message/provider payloads. Use separate verdicts; all remain
+`not_executed` until observed.
 
 ```json
 {
+  "version": 1,
   "status": "not_executed",
   "operator_reference": null,
   "recipient_authorization_reference": null,
   "masked_recipient_reference": null,
   "staging_reference": null,
   "application_commit": null,
+  "runtime_artifact_digest": null,
+  "migration_001_017_ledger_checksums_verified": null,
+  "evidenceReferences": [],
   "prerequisite_approval_references": [],
   "secret_bindings_present": null,
   "selected_wait_seconds": null,
