@@ -19,7 +19,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuthController, AuthService } from './modules/auth/auth';
 import { VerificationDelivery } from './modules/auth/delivery';
-import { Database } from './modules/database/database';
 import { Audit } from './modules/audit/audit';
 import { Test } from '@nestjs/testing';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
