@@ -383,6 +383,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
         },
       };
       if (operationId === 'get /v1/auth/csrf') {
+        operation.security = [{ cookie: [] }];
         operation.responses['200'] = {
           description:
             'Uncached cookie-session CSRF token; not an authentication token',
