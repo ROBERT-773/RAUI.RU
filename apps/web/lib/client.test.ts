@@ -123,3 +123,23 @@ test('malformed recovery token fails closed', async () => {
   await expect(api('v1/account/preferences', 'PATCH')).rejects.toThrow();
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+test('critical mutation forwards the same caller idempotency key with recovered CSRF', async () => {
+  const fetch = vi.fn<TestFetch>(async (url) =>
+    reply(url.endsWith('/csrf') ? { csrfToken: 'current' } : {}),
+  );
+  vi.stubGlobal('fetch', fetch);
+  const { api } = await import('./client');
+  await api(
+    'v1/listings',
+    'POST',
+    { title: 'Объект' },
+    { idempotencyKey: 'stable-request-key' },
+  );
+  expect(fetch.mock.calls[1]?.[1]).toMatchObject({
+    headers: {
+      'X-CSRF-Token': 'current',
+      'Idempotency-Key': 'stable-request-key',
+    },
+  });
+});

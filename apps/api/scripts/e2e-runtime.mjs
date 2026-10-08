@@ -13,7 +13,7 @@ async function bounded(promise, milliseconds) {
   }
 }
 export function trackProcess(child, label) {
-  if (!['api', 'web', 'browser'].includes(label))
+  if (!['api', 'web', 'browser', 'media-worker'].includes(label))
     throw new Error('Invalid service label');
   const record = { child, label, outcome: undefined, logFailed: false };
   record.completion = new Promise((resolve) => {

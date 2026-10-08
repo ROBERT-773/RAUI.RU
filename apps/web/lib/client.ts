@@ -38,6 +38,7 @@ export async function api<T>(
   path: string,
   method = 'GET',
   body?: unknown,
+  options?: { idempotencyKey?: string },
 ): Promise<T> {
   const token =
     !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase()) &&
@@ -48,6 +49,9 @@ export async function api<T>(
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...(options?.idempotencyKey
+        ? { 'Idempotency-Key': options.idempotencyKey }
+        : {}),
       ...(token ? { 'X-CSRF-Token': token } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),

@@ -232,3 +232,80 @@ test('staff permissions proxy forwards only the bounded admin routes', async () 
   expect(wrongMethod.status).toBe(404);
   expect(fetcher).toHaveBeenCalledOnce();
 });
+
+test('owner and moderation proxy exposes only selected methods and preserves idempotency', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, PATCH, POST } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  for (const path of [
+    ['v1', 'properties'],
+    ['v1', 'admin', 'moderation', id, 'decision'],
+  ]) {
+    const response = await POST(
+      new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+        method: 'POST',
+        headers: {
+          origin: 'https://staging.raui.ru',
+          'idempotency-key': 'stable-key',
+        },
+        body: '{}',
+      }),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(response.status).toBe(200);
+  }
+  expect(
+    new Headers((fetcher.mock.calls[0]?.[1] as RequestInit)?.headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('stable-key');
+  for (const path of [
+    ['v1', 'admin', 'moderation'],
+    ['v1', 'admin', 'moderation', id, 'materials'],
+    ['v1', 'admin', 'moderation', id, 'media', id, 'small'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(200);
+  }
+  for (const path of [
+    ['v1', 'properties', 'arbitrary'],
+    ['v1', 'admin', 'moderation', id, 'permissions'],
+    ['v1', 'admin', 'moderation', id, 'media', id, 'original'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(404);
+  }
+  expect(
+    (
+      await PATCH(
+        new NextRequest('https://staging.raui.ru/api/v1/admin/moderation', {
+          method: 'PATCH',
+          headers: { origin: 'https://staging.raui.ru' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path: ['v1', 'admin', 'moderation'] }) },
+      )
+    ).status,
+  ).toBe(404);
+});
