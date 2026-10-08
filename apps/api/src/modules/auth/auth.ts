@@ -14,6 +14,7 @@ import {
   Delete,
   ForbiddenException,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -72,6 +73,8 @@ interface User {
   phone_verified_at: string | null;
   phone: string | null;
   password_hash: string;
+  registration_approval_state: 'pending' | 'approved' | 'rejected';
+  registration_approval_reason?: string | null;
 }
 function publicUser(user: User) {
   return {
@@ -81,6 +84,8 @@ function publicUser(user: User) {
     display_name: user.display_name,
     role: user.role,
     active: user.active,
+    registration_approval_state: user.registration_approval_state,
+    registration_approval_reason: user.registration_approval_reason ?? null,
     email_verified_at: user.email_verified_at,
     phone_verified_at: user.phone_verified_at,
     phone: user.phone,
@@ -133,9 +138,13 @@ export class AuthService {
     const encoded = await passwordHash(input.password);
     const user = await this.db.transaction(async (sql) => {
       const [created] = await this.db.rows<User>(
-        'INSERT INTO users(email,password_hash,display_name,role) VALUES($1,$2,$3,$4) RETURNING *',
+        "INSERT INTO users(email,password_hash,display_name,role,registration_approval_state) VALUES($1,$2,$3,$4,'pending') RETURNING *",
         [input.email, encoded, input.displayName, input.role],
         sql,
+      );
+      await sql.query(
+        'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
+        [created!.id],
       );
       await this.audit.record(
         sql,
@@ -146,8 +155,14 @@ export class AuthService {
       );
       return created!;
     });
-    await this.challenge(user, 'email', user.email);
-    return publicUser(user);
+    let verificationDelivery: 'accepted' | 'unavailable' = 'accepted';
+    try {
+      await this.challenge(user, 'email', user.email);
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) throw error;
+      verificationDelivery = 'unavailable';
+    }
+    return { ...publicUser(user), verificationDelivery };
   }
   async login(body: unknown, res: Response) {
     const input = parse(loginSchema, body);
@@ -165,7 +180,12 @@ export class AuthService {
       input.password,
       user?.password_hash ?? `scrypt$32768$invalid$${'0'.repeat(128)}`,
     );
-    if (!user || !user.active || !valid)
+    if (
+      !user ||
+      !user.active ||
+      !valid ||
+      user.registration_approval_state === 'rejected'
+    )
       throw new UnauthorizedException('Invalid credentials');
     const secret = token(),
       csrf = token();
@@ -181,7 +201,11 @@ export class AuthService {
         [user.id],
         sql,
       );
-      if (!current?.active || current.password_hash !== user.password_hash)
+      if (
+        !current?.active ||
+        current.registration_approval_state === 'rejected' ||
+        current.password_hash !== user.password_hash
+      )
         throw new UnauthorizedException();
       await sql.query(
         "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
@@ -205,9 +229,11 @@ export class AuthService {
     };
   }
   async me(actor: Actor) {
-    const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
-      actor.id,
-    ]);
+    const [user] = await this.db.rows<User>(
+      `SELECT u.*,r.reason AS registration_approval_reason FROM users u
+       LEFT JOIN registration_approval_requests r ON r.user_id=u.id WHERE u.id=$1`,
+      [actor.id],
+    );
     return { ...publicUser(user!), twoFactorEnabled: false };
   }
   async request(body: unknown, purpose: 'email' | 'reset', actor?: Actor) {

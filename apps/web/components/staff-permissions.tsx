@@ -6,10 +6,16 @@ interface StaffUser {
   email: string;
   display_name: string;
 }
-type Permission = 'moderation.read' | 'moderation.decide';
+type Permission =
+  | 'moderation.read'
+  | 'moderation.decide'
+  | 'registration.read'
+  | 'registration.decide';
 const labels: Record<Permission, string> = {
   'moderation.read': 'Просмотр очереди модерации',
   'moderation.decide': 'Одобрение и отклонение публикации',
+  'registration.read': 'Просмотр заявок на регистрацию',
+  'registration.decide': 'Одобрение и отклонение регистрации',
 };
 export default function StaffPermissions() {
   const [users, setUsers] = useState<StaffUser[] | null>(null);

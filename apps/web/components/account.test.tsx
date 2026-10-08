@@ -7,6 +7,21 @@ import {
   screen,
 } from '@testing-library/react';
 import Account from './account';
+const profileCallbacks = vi.hoisted(() => ({
+  expire: undefined as (() => void) | undefined,
+}));
+vi.mock('./account-profile', () => ({
+  default: ({
+    onRefresh,
+    onSessionExpired,
+  }: {
+    onRefresh?: () => void;
+    onSessionExpired?: () => void;
+  }) => {
+    profileCallbacks.expire = onSessionExpired;
+    return <button onClick={onRefresh}>Обновить профиль</button>;
+  },
+}));
 vi.mock('next/link', () => ({
   default: ({
     children,
@@ -32,6 +47,7 @@ function stubFetch(
 }
 afterEach(() => {
   cleanup();
+  profileCallbacks.expire = undefined;
   vi.unstubAllGlobals();
   sessionStorage.clear();
 });
@@ -496,4 +512,257 @@ test('Account displays its permanent ID without rounding large numeric identifie
   );
   render(<Account />);
   expect(await screen.findByText('ID: 9007199254740993')).toBeTruthy();
+});
+
+for (const state of ['pending', 'rejected']) {
+  test(`${state} accounts do not load or expose private collections`, async () => {
+    const requests: string[] = [];
+    stubFetch('fetch', async (url) => {
+      requests.push(url);
+      return {
+        ok: true,
+        json: async () =>
+          url.endsWith('/auth/me')
+            ? {
+                display_name: 'Applicant',
+                public_id: '17',
+                registration_approval_state: state,
+              }
+            : { items: [], cursor: null },
+      };
+    });
+    render(<Account />);
+    await screen.findByText('Applicant');
+    expect(
+      screen.queryByRole('navigation', { name: 'Разделы аккаунта' }),
+    ).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Мои объявления' })).toBeNull();
+    expect(requests.some((url) => url.includes('/account/'))).toBe(false);
+    expect(screen.getByRole('button', { name: 'Выйти' })).toBeTruthy();
+  });
+}
+
+test('Owner registration survives unavailable verification delivery and opens onboarding', async () => {
+  let submitted: Record<string, unknown> | undefined;
+  stubFetch('fetch', async (url, init) => {
+    if (url.endsWith('/auth/me'))
+      return {
+        ok: false,
+        status: 401,
+        json: async () => ({ message: 'Unauthorized' }),
+      };
+    if (url.endsWith('/auth/register')) {
+      submitted = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ verificationDelivery: 'unavailable' }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        csrfToken: 'fixture',
+        user: {
+          display_name: 'Owner',
+          public_id: '18',
+          registration_approval_state: 'pending',
+        },
+      }),
+    };
+  });
+  render(<Account />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Регистрация' }));
+  fireEvent.change(screen.getByLabelText('Тип аккаунта'), {
+    target: { value: 'owner' },
+  });
+  fireEvent.change(screen.getByLabelText('Имя'), {
+    target: { value: 'Owner' },
+  });
+  fireEvent.change(screen.getByLabelText('Email'), {
+    target: { value: 'owner@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'fixture-long-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Создать и войти' }));
+  await screen.findByText('Owner');
+  expect(submitted?.role).toBe('owner');
+  expect(
+    await screen.findByText(
+      /Аккаунт создан. Не удалось подтвердить отправку письма/,
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole('navigation', { name: 'Разделы аккаунта' }),
+  ).toBeNull();
+});
+
+test('Profile refresh unlocks approved collections and ignores a response after logout', async () => {
+  let state = 'pending';
+  let release: (() => void) | undefined;
+  let delay = false;
+  const requests: string[] = [];
+  stubFetch('fetch', async (url) => {
+    requests.push(url);
+    if (url.endsWith('/auth/me')) {
+      const value = {
+        display_name: 'Applicant',
+        public_id: '17',
+        registration_approval_state: state,
+      };
+      if (delay)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      return { ok: true, json: async () => value };
+    }
+    return { ok: true, json: async () => ({ items: [], cursor: null }) };
+  });
+  render(<Account />);
+  await screen.findByText('Applicant');
+  state = 'approved';
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await screen.findByRole('navigation', { name: 'Разделы аккаунта' });
+  expect(
+    requests.filter((url) => url.includes('/account/collections/')),
+  ).toHaveLength(1);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Профиль и подтверждение контактов' }),
+  );
+  delay = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+  await act(async () => {
+    release!();
+  });
+  expect(screen.queryByText('Applicant')).toBeNull();
+  expect(
+    requests.filter((url) => url.includes('/account/collections/')),
+  ).toHaveLength(1);
+});
+
+for (const operation of ['logout', 'refresh']) {
+  for (const status of [401, 403, 503]) {
+    test(`${operation} HTTP ${status} ${status === 401 ? 'clears an expired identity' : 'retains the authenticated identity'}`, async () => {
+      let fail = false;
+      stubFetch('fetch', async (url) => {
+        if (
+          fail &&
+          url.endsWith(operation === 'logout' ? '/auth/logout' : '/auth/me')
+        )
+          return { ok: false, status, json: async () => ({}) };
+        return {
+          ok: true,
+          json: async () =>
+            url.endsWith('/auth/me')
+              ? {
+                  display_name: 'Applicant',
+                  public_id: '21',
+                  registration_approval_state: 'pending',
+                }
+              : { items: [], cursor: null },
+        };
+      });
+      render(<Account />);
+      await screen.findByText('Applicant');
+      sessionStorage.setItem('raui_csrf', 'expired-token');
+      fail = true;
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: operation === 'logout' ? 'Выйти' : 'Обновить профиль',
+        }),
+      );
+      if (status === 401) {
+        await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+        expect(screen.queryByText('Applicant')).toBeNull();
+        expect(sessionStorage.getItem('raui_csrf')).toBe('');
+        expect(screen.getByRole('alert').textContent).toContain('Войдите');
+      } else {
+        await screen.findByText(
+          'Не удалось выполнить запрос. Попробуйте ещё раз.',
+        );
+        expect(screen.getByText('Applicant')).toBeTruthy();
+      }
+    });
+  }
+}
+
+test('Late expired profile refresh cannot sign out a new identity', async () => {
+  let initial = true;
+  let release: (() => void) | undefined;
+  stubFetch('fetch', async (url) => {
+    if (url.endsWith('/auth/me')) {
+      if (initial) {
+        initial = false;
+        return {
+          ok: true,
+          json: async () => ({
+            display_name: 'Identity A',
+            public_id: '21',
+            registration_approval_state: 'pending',
+          }),
+        };
+      }
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    if (url.endsWith('/auth/login'))
+      return {
+        ok: true,
+        json: async () => ({
+          csrfToken: 'new-session',
+          user: { display_name: 'Identity B', public_id: '22' },
+        }),
+      };
+    return { ok: true, json: async () => ({ items: [], cursor: null }) };
+  });
+  render(<Account />);
+  await screen.findByText('Identity A');
+  const expiredOldProfile = profileCallbacks.expire;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+  fireEvent.change(screen.getByLabelText('Email'), {
+    target: { value: 'b@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'fixture-long-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
+  await screen.findByText('Identity B');
+  await act(async () => {
+    release!();
+  });
+  expect(screen.getByText('Identity B')).toBeTruthy();
+  await act(async () => {
+    expiredOldProfile!();
+  });
+  expect(screen.getByText('Identity B')).toBeTruthy();
+  expect(sessionStorage.getItem('raui_csrf')).toBe('new-session');
+});
+
+test('Current profile session-expiry callback clears identity and shows login', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    json: async () =>
+      url.endsWith('/auth/me')
+        ? {
+            display_name: 'Applicant',
+            public_id: '21',
+            registration_approval_state: 'pending',
+          }
+        : { items: [], cursor: null },
+  }));
+  render(<Account />);
+  await screen.findByText('Applicant');
+  await act(async () => {
+    profileCallbacks.expire!();
+  });
+  expect(screen.getByRole('heading', { name: 'Войти в аккаунт' })).toBeTruthy();
+  expect(screen.queryByText('Applicant')).toBeNull();
 });

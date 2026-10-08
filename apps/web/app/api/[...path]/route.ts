@@ -39,9 +39,19 @@ async function proxy(
           path[3] ?? '',
         ) &&
         ['GET', 'PATCH'].includes(request.method)));
+  const registrationRoute =
+    path[1] === 'admin' &&
+    path[2] === 'registration-approvals' &&
+    ((path.length === 3 && request.method === 'GET') ||
+      (path.length === 4 && isUuid(path[3]) && request.method === 'GET') ||
+      (path.length === 5 &&
+        isUuid(path[3]) &&
+        path[4] === 'decision' &&
+        request.method === 'POST'));
   if (
     path[0] !== 'v1' ||
     (!staffPermissionsRoute &&
+      !registrationRoute &&
       !propertyRoute &&
       !moderationRoute &&
       ![

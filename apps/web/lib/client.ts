@@ -3,6 +3,15 @@ import type { AnalyticsAdapter, AnalyticsEvent } from '@raui/types/product';
 export function setCsrf(value: string) {
   sessionStorage.setItem('raui_csrf', value);
 }
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 const publicMutations = new Set([
   'v1/auth/register',
   'v1/auth/login',
@@ -17,7 +26,10 @@ function recoverCsrf(): Promise<string | undefined> {
       const response = await fetch('/api/v1/auth/csrf', { cache: 'no-store' });
       if (response.status === 401) return undefined;
       if (!response.ok)
-        throw new Error('Не удалось выполнить запрос. Попробуйте ещё раз.');
+        throw new ApiError(
+          'Не удалось выполнить запрос. Попробуйте ещё раз.',
+          response.status,
+        );
       const value: unknown = await response.json();
       if (
         !value ||
@@ -58,12 +70,13 @@ export async function api<T>(
     cache: 'no-store',
   });
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       response.status === 401
         ? 'Войдите в аккаунт, чтобы продолжить.'
         : response.status === 404
           ? 'Объект недоступен.'
           : 'Не удалось выполнить запрос. Попробуйте ещё раз.',
+      response.status,
     );
   return (await response.json()) as T;
 }
