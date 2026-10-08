@@ -121,6 +121,30 @@ test('Phase 3 real PostgreSQL/PostGIS/OpenSearch HTTP acceptance', async (t) => 
       /* Drain durable batch. */
     }
     await t.test(
+      'Restored cookie session recovers CSRF for authenticated public search',
+      async () => {
+        const cookie = 'raui_session=' + secrets.get(buyer)!;
+        const recovered = await fetch(base + '/v1/auth/csrf', {
+          headers: { Cookie: cookie },
+        });
+        assert.equal(recovered.status, 200);
+        const { csrfToken } = (await recovered.json()) as { csrfToken: string };
+        const response = await fetch(base + '/v1/search', {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            Origin: process.env.WEB_ORIGIN!,
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken,
+          },
+          body: JSON.stringify({ category: 'apartment' }),
+        });
+        assert.equal(response.status, 201);
+        const result = (await response.json()) as { items: { id: string }[] };
+        assert.equal(result.items.length, 3);
+      },
+    );
+    await t.test(
       'region filters isolate list, map and selection; stale index cannot bypass live assignment',
       async () => {
         assert.equal(

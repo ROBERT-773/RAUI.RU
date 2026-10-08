@@ -165,3 +165,23 @@ test('Regional catalogue is reachable through the public web proxy', async () =>
     items: [{ code: 'moscow', name: 'Москва' }],
   });
 });
+
+test('CSRF recovery proxy rejects cross-origin browser reads before contacting API', async () => {
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const { GET } = await import('../app/api/[...path]/route');
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  for (const headers of [
+    { origin: 'https://attacker.test' },
+    { 'sec-fetch-site': 'cross-site' },
+  ]) {
+    const response = await GET(
+      new NextRequest('https://staging.raui.ru/api/v1/auth/csrf', { headers }),
+      {
+        params: Promise.resolve({ path: ['v1', 'auth', 'csrf'] }),
+      },
+    );
+    expect(response.status).toBe(403);
+  }
+  expect(fetch).not.toHaveBeenCalled();
+});

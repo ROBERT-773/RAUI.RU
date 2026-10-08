@@ -272,3 +272,16 @@ test('Geo validates catalogue membership before writing an address', async () =>
   assert.equal(await geo.create({} as Pool, address), 'fixture');
   assert.equal(writes, 3);
 });
+
+test('CSRF recovery OpenAPI requires cookie authentication and exposes only the token schema', () => {
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: { '/v1/auth/csrf': { get: { responses: {} } } },
+  };
+  enrichOpenApi(document);
+  const operation = document.paths['/v1/auth/csrf']!.get!;
+  assert.deepEqual(operation.security, [{ cookie: [] }]);
+  assert.ok(operation.responses['200']);
+  assert.ok(operation.responses['401']);
+});
