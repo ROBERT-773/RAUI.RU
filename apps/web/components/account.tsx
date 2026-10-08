@@ -276,6 +276,7 @@ export default function Account() {
       <h1>Мой аккаунт</h1>
       <p>{user.display_name}</p>
       <p>ID: {user.public_id}</p>
+      <Link href="/account/listings">Мои объявления</Link>
       <Button
         onClick={async () => {
           const epoch = clearPrivateState();

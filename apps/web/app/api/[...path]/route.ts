@@ -5,6 +5,30 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await context.params;
+  const isUuid = (value: string | undefined) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value ?? '',
+    );
+  const propertyRoute =
+    path[1] === 'properties' &&
+    ((path.length === 2 && request.method === 'POST') ||
+      (path.length === 3 &&
+        isUuid(path[2]) &&
+        ['GET', 'PATCH'].includes(request.method)));
+  const moderationRoute =
+    path[1] === 'admin' &&
+    path[2] === 'moderation' &&
+    ((path.length === 3 && request.method === 'GET') ||
+      (path.length === 5 &&
+        isUuid(path[3]) &&
+        ((path[4] === 'materials' && request.method === 'GET') ||
+          (path[4] === 'decision' && request.method === 'POST'))) ||
+      (path.length === 7 &&
+        isUuid(path[3]) &&
+        path[4] === 'media' &&
+        isUuid(path[5]) &&
+        ['thumb', 'small', 'large', 'avif'].includes(path[6] ?? '') &&
+        request.method === 'GET'));
   const staffPermissionsRoute =
     path[1] === 'admin' &&
     path[2] === 'users' &&
@@ -18,6 +42,8 @@ async function proxy(
   if (
     path[0] !== 'v1' ||
     (!staffPermissionsRoute &&
+      !propertyRoute &&
+      !moderationRoute &&
       ![
         'auth',
         'search',

@@ -96,20 +96,23 @@ async function run() {
     await monitor.run(() => migrate(pool));
     const seller = randomUUID(),
       buyer = randomUUID();
-    for (const [id, email, role] of [
+    for (const [id, email, role, verified = true] of [
       [seller, 'seller@e2e.test', 'owner'],
       [buyer, 'buyer@e2e.test', 'buyer'],
       [randomUUID(), 'outsider@e2e.test', 'buyer'],
+      [randomUUID(), 'admin@e2e.test', 'admin'],
+      [randomUUID(), 'unverified@e2e.test', 'owner', false],
     ])
       await monitor.run(async () =>
         pool.query(
-          'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,now(),now())',
+          'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $6 THEN now() END,CASE WHEN $6 THEN now() END)',
           [
             id,
             email,
             await passwordHash('E2E-only-password-42!'),
             'Тестовый пользователь',
             role,
+            verified,
           ],
         ),
       );
@@ -164,6 +167,7 @@ async function run() {
       index.request('/' + index.alias + '/_refresh', 'POST'),
     );
     start(['dist/main.js'], process.cwd(), 'e2e-api');
+    start(['dist/worker.js'], process.cwd(), 'e2e-media-worker');
     start(
       [
         'node_modules/next/dist/bin/next',
