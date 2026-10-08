@@ -18,7 +18,7 @@ import { parseDocument } from 'yaml';
 import { z } from 'zod';
 import { Public } from '../../common/security';
 
-const codeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,49}$/);
+export const regionCodeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,49}$/);
 const entitySchema = z.enum([
   'okrug',
   'district',
@@ -39,7 +39,7 @@ const boundsSchema = z
   .refine((b) => b.min_lat < b.max_lat && b.min_lon < b.max_lon);
 const regionSchema = z
   .object({
-    code: codeSchema,
+    code: regionCodeSchema,
     name: z.string().trim().min(1).max(100),
     type: z.enum(['city', 'oblast']),
     search_entities: z
@@ -121,8 +121,12 @@ export class RegionCatalogue {
       })),
     );
   }
+  assertConfigured(code: string): void {
+    if (!regionCodeSchema.safeParse(code).success || !this.regions.has(code))
+      throw new BadRequestException('Invalid or unsupported region code');
+  }
   filters(code: string) {
-    if (!codeSchema.safeParse(code).success)
+    if (!regionCodeSchema.safeParse(code).success)
       throw new BadRequestException('Invalid region code');
     const region = this.regions.get(code);
     if (!region) throw new NotFoundException('Region not found');

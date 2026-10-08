@@ -137,3 +137,31 @@ test('Sitemap never exceeds the fifty-thousand URL protocol limit', async () => 
     '&amp;',
   );
 });
+
+test('Regional catalogue is reachable through the public web proxy', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const { GET } = await import('../app/api/[...path]/route');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      expect(url).toBe('http://127.0.0.1:3001/v1/regions');
+      return new Response(
+        JSON.stringify({ items: [{ code: 'moscow', name: 'Москва' }] }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    }),
+  );
+  const response = await GET(
+    new NextRequest('https://staging.raui.ru/api/v1/regions'),
+    {
+      params: Promise.resolve({ path: ['v1', 'regions'] }),
+    },
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    items: [{ code: 'moscow', name: 'Москва' }],
+  });
+});

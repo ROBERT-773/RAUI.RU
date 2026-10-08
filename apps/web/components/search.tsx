@@ -32,6 +32,21 @@ export default function SearchProduct({
     [filterCategory, setFilterCategory] = useState(
       initialDefinition.category ?? 'apartment',
     );
+  const [regions, setRegions] = useState<{ code: string; name: string }[]>([]);
+  const [regionError, setRegionError] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api<{ items: { code: string; name: string }[] }>('v1/regions')
+      .then((result) => {
+        if (active) setRegions(result.items);
+      })
+      .catch(() => {
+        if (active) setRegionError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   useEffect(() => {
     let active = true;
     api<SearchPage>('v1/search', 'POST', definition)
@@ -82,6 +97,7 @@ export default function SearchProduct({
       <h1>Найдите своё место</h1>
       <form
         className="filters"
+        key={definition.regionCode ?? 'all'}
         onSubmit={(e) => {
           e.preventDefault();
           const data = new FormData(e.currentTarget);
@@ -118,6 +134,42 @@ export default function SearchProduct({
         }}
       >
         <label>
+          Регион
+          <select
+            name="regionCode"
+            value={definition.regionCode ?? ''}
+            disabled={regionError || regions.length === 0}
+            onChange={(event) => {
+              const attributes = { ...definition.attributes };
+              for (const code of [
+                'metro',
+                'okrug',
+                'highway',
+                'highway_distance',
+              ])
+                delete attributes[code];
+              const next = { ...definition };
+              delete next.bounds;
+              delete next.polygon;
+              update({
+                ...next,
+                regionCode: event.target.value || undefined,
+                locality: undefined,
+                district: undefined,
+                attributes,
+              });
+            }}
+          >
+            <option value="">Все регионы</option>
+            {regions.map((region) => (
+              <option key={region.code} value={region.code}>
+                {region.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {regionError && <p role="alert">Не удалось загрузить регионы.</p>}
+        <label>
           Поиск
           <input
             name="q"
@@ -130,7 +182,7 @@ export default function SearchProduct({
           Объект
           <select
             name="category"
-            defaultValue={initialDefinition.category ?? ''}
+            defaultValue={definition.category ?? ''}
             onChange={(e) => setFilterCategory(e.target.value || 'apartment')}
           >
             <option value="">Все объекты</option>
@@ -148,10 +200,7 @@ export default function SearchProduct({
         </label>
         <label>
           Сделка
-          <select
-            name="dealType"
-            defaultValue={initialDefinition.dealType ?? ''}
-          >
+          <select name="dealType" defaultValue={definition.dealType ?? ''}>
             <option value="">Все сделки</option>
             <option value="sale">Купить</option>
             <option value="long_rent">Снять надолго</option>
@@ -178,15 +227,15 @@ export default function SearchProduct({
         </label>
         <label>
           Город
-          <input name="locality" defaultValue={initialDefinition.locality} />
+          <input name="locality" defaultValue={definition.locality} />
         </label>
         <label>
           Комнат
           <input
             name="rooms"
             defaultValue={
-              typeof initialDefinition.attributes?.rooms === 'object'
-                ? initialDefinition.attributes.rooms.min
+              typeof definition.attributes?.rooms === 'object'
+                ? definition.attributes.rooms.min
                 : undefined
             }
             type="number"
@@ -199,8 +248,8 @@ export default function SearchProduct({
           <input
             name="area"
             defaultValue={
-              typeof initialDefinition.attributes?.area === 'object'
-                ? initialDefinition.attributes.area.min
+              typeof definition.attributes?.area === 'object'
+                ? definition.attributes.area.min
                 : undefined
             }
             type="number"
@@ -209,17 +258,14 @@ export default function SearchProduct({
         </label>
         <label>
           Сортировка
-          <select name="sort" defaultValue={initialDefinition.sort ?? 'newest'}>
+          <select name="sort" defaultValue={definition.sort ?? 'newest'}>
             <option value="newest">Сначала новые</option>
             <option value="price_asc">Дешевле</option>
             <option value="price_desc">Дороже</option>
             <option value="area_desc">Площадь</option>
           </select>
         </label>
-        <AdvancedFilters
-          category={filterCategory}
-          definition={initialDefinition}
-        />
+        <AdvancedFilters category={filterCategory} definition={definition} />
         <Button className="primary" type="submit">
           Найти
         </Button>

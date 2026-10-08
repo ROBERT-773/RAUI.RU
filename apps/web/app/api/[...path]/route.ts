@@ -14,6 +14,7 @@ async function proxy(
       'account',
       'media',
       'geo',
+      'regions',
       'catalog',
       'categories',
     ].includes(path[1] ?? '') ||

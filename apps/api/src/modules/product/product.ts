@@ -102,6 +102,8 @@ export class Product {
   }
   async save(actor: Actor, body: unknown, id?: string) {
     const input = parse(saved, body);
+    if (input.definition.regionCode)
+      this.search.regions.assertConfigured(input.definition.regionCode);
     if (id) {
       const [row] = await this.db.rows(
         'UPDATE saved_searches SET name=$3,definition=$4,version=version+1 WHERE id=$1 AND user_id=$2 RETURNING *',

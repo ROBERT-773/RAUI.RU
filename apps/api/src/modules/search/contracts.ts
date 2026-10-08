@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { regionCodeSchema } from '../geo/regions';
 const range = z
   .object({
     min: z.number().finite().optional(),
@@ -39,6 +40,7 @@ export const searchSchema = z
     dealType: z.enum(['sale', 'long_rent', 'short_rent']).optional(),
     price: range.optional(),
     pricePerM2: range.optional(),
+    regionCode: regionCodeSchema.optional(),
     locality: z.string().max(150).optional(),
     district: z.string().max(150).optional(),
     sellerType: z
@@ -90,6 +92,7 @@ export function indexQuery(input: SearchInput) {
   for (const [key, value] of Object.entries({
     category: input.category,
     deal_type: input.dealType,
+    region_code: input.regionCode,
     locality: input.locality,
     district: input.district,
     seller_type: input.sellerType,

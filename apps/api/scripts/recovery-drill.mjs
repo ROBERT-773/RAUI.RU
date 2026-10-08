@@ -138,7 +138,7 @@ async function run() {
       await snapshot.query('SELECT pg_export_snapshot() AS snapshot')
     ).rows[0].snapshot;
     const expected = await monitor.run(() => fingerprint(snapshot));
-    assert.equal(expected.migrations.length, 12);
+    assert.equal(expected.migrations.length, 13);
     assert.ok(expected.sequences.some((s) => s.is_called));
     assert.ok(expected.sequences.some((s) => !s.is_called));
     const encrypted = resolve(directory, 'database.gcm');

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { Geo, addressSchema } from './modules/geo/geo';
 import assert from 'node:assert/strict';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { passwordHash, passwordMatches } from './common/security';
@@ -11,6 +12,8 @@ import { enrichOpenApi } from './common/openapi';
 import type { OpenAPIObject } from '@nestjs/swagger';
 import { migrate } from './modules/database/migrate';
 import type { Pool } from 'pg';
+import { Database } from './modules/database/database';
+import { RegionCatalogue, loadRegionDocuments } from './modules/geo/regions';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -218,4 +221,54 @@ test('module boundaries prevent controllers from executing SQL and media from de
         filename,
       );
   }
+});
+
+test('address contract accepts explicit region selection while preserving legacy input', () => {
+  const address = {
+    formatted: 'Москва, Тверская',
+    locality: 'Москва',
+    longitude: 37.6,
+    latitude: 55.7,
+  };
+  assert.equal(addressSchema.parse(address).regionCode, undefined);
+  for (const regionCode of ['moscow', 'moscow_oblast'])
+    assert.equal(
+      addressSchema.parse({ ...address, regionCode }).regionCode,
+      regionCode,
+    );
+  for (const regionCode of ['', '../moscow', 'Moscow', null])
+    assert.equal(
+      addressSchema.safeParse({ ...address, regionCode }).success,
+      false,
+    );
+});
+
+test('Geo validates catalogue membership before writing an address', async () => {
+  const catalogue = new RegionCatalogue(loadRegionDocuments('config/regions'));
+  let writes = 0;
+  const db = {
+    rows: async () => {
+      writes++;
+      return [{ id: 'fixture' }];
+    },
+  } as unknown as Database;
+  const geo = new Geo(db, catalogue);
+  const address = {
+    formatted: 'Fixture address',
+    locality: 'Fixture',
+    longitude: 37.6,
+    latitude: 55.7,
+  };
+  await assert.rejects(
+    geo.create({} as Pool, { ...address, regionCode: 'unknown' }),
+    BadRequestException,
+  );
+  assert.equal(writes, 0);
+  for (const regionCode of ['moscow', 'moscow_oblast'])
+    assert.equal(
+      await geo.create({} as Pool, { ...address, regionCode }),
+      'fixture',
+    );
+  assert.equal(await geo.create({} as Pool, address), 'fixture');
+  assert.equal(writes, 3);
 });
