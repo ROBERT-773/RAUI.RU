@@ -605,3 +605,30 @@ test('Cookie session survives a fresh tab without CSRF storage and permits searc
     await restored.close();
   }
 });
+
+test('Password recovery reaches the API anonymously and removes invalid reset fragments', async ({
+  page,
+}) => {
+  await page.goto('/account');
+  await page.getByRole('link', { name: 'Забыли пароль?' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Восстановить пароль' }),
+  ).toBeVisible();
+  await page.getByLabel('Email', { exact: true }).fill('unknown@e2e.test');
+  const request = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/auth/password-reset'),
+  );
+  await page.getByRole('button', { name: 'Отправить ссылку' }).click();
+  expect((await request).status()).toBe(201);
+  await expect(page.getByRole('status')).toContainText(
+    'Если аккаунт с этим email существует',
+  );
+  await page.goto('/account/reset-password#token=invalid');
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/account\/reset-password$/);
+  await expect(
+    page.getByRole('button', { name: 'Сохранить пароль' }),
+  ).toHaveCount(0);
+});

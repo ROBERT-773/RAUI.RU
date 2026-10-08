@@ -193,3 +193,23 @@ test('CDN media bases reject query, fragment and credentials while preserving pa
     }
   }
 });
+
+test('Reset SMTP opt-in requires credentials and a clean HTTPS origin even outside production', () => {
+  const base = {
+    WEB_ORIGIN: 'https://staging.raui.ru',
+    DATABASE_URL: 'postgresql://localhost/raui',
+    REDIS_URL: 'redis://localhost:6379',
+    RESET_SMTP_ENABLED: 'true',
+    RESET_SMTP_PASSWORD: 'synthetic-test-password',
+  };
+  assert.equal(envSchema.safeParse(base).success, true);
+  for (const fields of [
+    { RESET_SMTP_PASSWORD: undefined },
+    { WEB_ORIGIN: 'http://staging.raui.ru' },
+    { WEB_ORIGIN: 'https://user:secret@staging.raui.ru' },
+    { WEB_ORIGIN: 'https://staging.raui.ru/path' },
+    { WEB_ORIGIN: 'https://staging.raui.ru?token=secret' },
+    { WEB_ORIGIN: 'https://staging.raui.ru#token=secret' },
+  ])
+    assert.equal(envSchema.safeParse({ ...base, ...fields }).success, false);
+});

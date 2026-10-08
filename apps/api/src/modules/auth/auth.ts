@@ -13,6 +13,7 @@ import {
   NotFoundException,
   Delete,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -76,6 +77,7 @@ function publicUser(user: User) {
 }
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly db: Database,
     private readonly audit: Audit,
@@ -105,7 +107,13 @@ export class AuthService {
         user.id,
       );
     });
-    await this.delivery.send({ destination, purpose, token: secret });
+    try {
+      await this.delivery.send({ destination, purpose, token: secret });
+    } catch (error) {
+      if (purpose !== 'reset') throw error;
+      // Never attach provider errors: they may contain destinations or tokens.
+      this.logger.warn('auth.password_reset.delivery_failed');
+    }
   }
   async register(body: unknown) {
     const input = parse(registerSchema, body);
@@ -198,11 +206,22 @@ export class AuthService {
       await this.challenge(user!, purpose, user!.email);
     } else {
       const input = parse(z.object({ email: emailSchema }).strict(), body);
+      const started = performance.now();
       const [user] = await this.db.rows<User>(
         'SELECT * FROM users WHERE email=$1 AND active',
         [input.email],
       );
       if (user) await this.challenge(user, purpose, user.email);
+      if (purpose === 'reset') {
+        // Cover the configured gateway's 5s timeout for both account paths.
+        // This is a latency floor, not a constant-time guarantee under load.
+        await new Promise<void>((resolve) =>
+          setTimeout(
+            resolve,
+            Math.max(0, 5100 - (performance.now() - started)),
+          ),
+        );
+      }
     }
     return { accepted: true };
   }
