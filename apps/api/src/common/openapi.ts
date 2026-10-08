@@ -392,6 +392,76 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/account/publication-quota') {
+        const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
+        operation.description =
+          'Own-account informational capacity. Owners count distinct published Property IDs, across all sources; drafts and nonpublic offers consume no slots. Multiple offers for one Property count once. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
+        operation.responses['200'] = {
+          description:
+            'Current owner capacity, or null quota fields for other roles',
+          content: {
+            'application/json': {
+              schema: {
+                oneOf: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    required,
+                    properties: {
+                      applies: { type: 'boolean', enum: [true] },
+                      limit: { type: 'integer', enum: [6] },
+                      publishedObjects: { type: 'integer', minimum: 0 },
+                      remaining: { type: 'integer', minimum: 0, maximum: 6 },
+                    },
+                  },
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    required,
+                    properties: {
+                      applies: { type: 'boolean', enum: [false] },
+                      limit: { type: 'integer', nullable: true, enum: [null] },
+                      publishedObjects: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                      remaining: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'post /v1/admin/moderation/{id}/decision') {
+        operation.responses['409'] = {
+          description:
+            'Stale case/version or owner publication quota exceeded. A quota denial leaves the current case pending; staff may retry after capacity is released.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['statusCode', 'message'],
+                properties: {
+                  statusCode: { type: 'integer', enum: [409] },
+                  message: { type: 'string' },
+                  code: {
+                    type: 'string',
+                    enum: ['OWNER_PUBLICATION_QUOTA_EXCEEDED'],
+                  },
+                  error: { type: 'string' },
+                },
+              },
+            },
+          },
+        };
+      }
       if (
         [
           'post /v1/auth/register',

@@ -13,6 +13,12 @@ interface Listing {
   version: number;
   deal_type: string;
 }
+interface PublicationQuota {
+  applies: boolean;
+  limit: number | null;
+  publishedObjects: number | null;
+  remaining: number | null;
+}
 interface Media {
   id: string;
   kind: string;
@@ -53,6 +59,12 @@ export default function OwnerListings() {
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(false);
+  const [owner, setOwner] = useState(false);
+  const [quota, setQuota] = useState<PublicationQuota | null>(null);
+  const [quotaError, setQuotaError] = useState(false);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const quotaGeneration = useRef(0);
+  const identityGeneration = useRef(0);
   const [creating, setCreating] = useState(false);
   const [uploadPending, setUploadPending] = useState(false);
   const epoch = useRef(0),
@@ -67,6 +79,7 @@ export default function OwnerListings() {
   } | null>(null);
   useEffect(() => {
     mounted.current = true;
+    const identity = ++identityGeneration.current;
     void (async () => {
       try {
         const user = await api<{
@@ -75,7 +88,7 @@ export default function OwnerListings() {
           phone_verified_at: string | null;
           registration_approval_state?: string;
         }>('v1/auth/me');
-        if (!mounted.current) return;
+        if (!mounted.current || identity !== identityGeneration.current) return;
         const eligible =
           (!user.registration_approval_state ||
             user.registration_approval_state === 'approved') &&
@@ -92,26 +105,69 @@ export default function OwnerListings() {
           );
           return;
         }
+        setOwner(user.role === 'owner');
+        if (user.role === 'owner') void refreshQuota();
         const value = await api<Listing[]>('v1/listings?limit=20');
-        if (mounted.current) {
+        if (mounted.current && identity === identityGeneration.current) {
           setItems(value);
           setMore(value.length === 20);
         }
       } catch (e) {
-        if (mounted.current)
+        if (mounted.current && identity === identityGeneration.current)
           setError(
             e instanceof Error ? e.message : 'Не удалось загрузить объявления.',
           );
       } finally {
-        if (mounted.current) setChecking(false);
+        if (mounted.current && identity === identityGeneration.current)
+          setChecking(false);
       }
     })();
-    const requests = epoch;
+    const requests = epoch,
+      identities = identityGeneration,
+      quotaRequests = quotaGeneration;
     return () => {
       mounted.current = false;
+      identities.current++;
+      quotaRequests.current++;
       requests.current++;
     };
   }, []);
+  async function refreshQuota() {
+    const request = ++quotaGeneration.current;
+    const identity = identityGeneration.current;
+    setQuotaLoading(true);
+    setQuotaError(false);
+    setQuota(null);
+    try {
+      const value = await api<PublicationQuota>('v1/account/publication-quota');
+      if (
+        !mounted.current ||
+        request !== quotaGeneration.current ||
+        identity !== identityGeneration.current
+      )
+        return;
+      setQuota(value);
+    } catch (e) {
+      if (
+        !mounted.current ||
+        request !== quotaGeneration.current ||
+        identity !== identityGeneration.current
+      )
+        return;
+      if (e instanceof Error && 'status' in e && e.status === 401) {
+        setAllowed(false);
+        setOwner(false);
+        setError(e.message);
+      } else setQuotaError(true);
+    } finally {
+      if (
+        mounted.current &&
+        request === quotaGeneration.current &&
+        identity === identityGeneration.current
+      )
+        setQuotaLoading(false);
+    }
+  }
   function assign(value: Listing) {
     if (!mounted.current) return;
     setListing(value);
@@ -200,12 +256,20 @@ export default function OwnerListings() {
     return transitionKeys.current.get(id)!;
   }
   async function transition(value: Listing, status: string) {
-    return api<Listing>(
+    const updated = await api<Listing>(
       `v1/listings/${value.id}/transitions`,
       'POST',
       { version: value.version, status },
       { idempotencyKey: key(value, status) },
     );
+    if (
+      mounted.current &&
+      owner &&
+      value.status === 'published' &&
+      updated.status !== 'published'
+    )
+      await refreshQuota();
+    return updated;
   }
   const editable =
     listing && ['draft', 'paused', 'rejected'].includes(listing.status);
@@ -230,6 +294,51 @@ export default function OwnerListings() {
       {notice && <p role="status">{notice}</p>}
       {allowed && (
         <>
+          {owner && quota?.applies !== false && (
+            <section className="panel" aria-label="Лимит публикации объектов">
+              <h2>Лимит публикации объектов</h2>
+              {quotaLoading && <p role="status">Загружаем лимит публикации…</p>}
+              {quota?.applies && (
+                <p>
+                  Опубликовано объектов: {quota.publishedObjects} из{' '}
+                  {quota.limit}. Свободных мест: {quota.remaining}.
+                </p>
+              )}
+              {quota?.applies && quota.publishedObjects! >= quota.limit! && (
+                <p>
+                  Лимит новых объектов достигнут. Уже опубликованные объявления
+                  сохраняются.
+                </p>
+              )}
+              {quotaError && (
+                <p role="alert">
+                  Не удалось загрузить лимит публикации. Обновите данные.
+                </p>
+              )}
+              <p>
+                Несколько опубликованных объявлений одного объекта занимают одно
+                место. Чтобы освободить место, приостановите все опубликованные
+                объявления одного объекта.
+              </p>
+              <p>
+                Если одобрение не прошло из-за лимита, заявка остаётся на
+                модерации. После освобождения места сотрудник может повторить
+                одобрение той же заявки. Отправлять её заново не нужно.
+              </p>
+              <p>
+                Создавать и редактировать черновики, добавлять фотографии и
+                отправлять объявления на модерацию можно и при достигнутом
+                лимите.
+              </p>
+              <button
+                type="button"
+                disabled={quotaLoading}
+                onClick={() => void refreshQuota()}
+              >
+                Обновить лимит публикации
+              </button>
+            </section>
+          )}
           <NewListing
             onBusyChange={(value) => {
               if (mounted.current) setCreating(value);
@@ -430,6 +539,7 @@ export default function OwnerListings() {
                 onClick={() =>
                   void run(async () => {
                     const result = await refresh(listing.id);
+                    if (owner && mounted.current) await refreshQuota();
                     assign(result.value);
                     if (!mounted.current) return;
                     setMedia(result.photos);

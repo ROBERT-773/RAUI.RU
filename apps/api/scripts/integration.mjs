@@ -18,6 +18,7 @@ for (const testFile of [
   'staff-permissions.integration.test.js',
   'public-id.integration.test.js',
   'registration-approval.integration.test.js',
+  'publication-quota.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',
   'professional.integration.test.js',

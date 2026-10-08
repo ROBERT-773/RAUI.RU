@@ -175,6 +175,42 @@ test('Migration cleanup preserves primary failures and discards unsafe pooled co
     await rm(directory, { recursive: true, force: true });
   }
 });
+test('owner quota OpenAPI distinguishes owner capacity from nonowner null fields', () => {
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: {
+      '/v1/account/publication-quota': { get: { responses: {} } },
+      '/v1/admin/moderation/{id}/decision': { post: { responses: {} } },
+    },
+  };
+  enrichOpenApi(document);
+  const read = document.paths['/v1/account/publication-quota']!.get!;
+  const response = read.responses!['200'];
+  assert.ok(response && 'content' in response);
+  const schema = response.content!['application/json']!.schema;
+  assert.ok(schema && 'oneOf' in schema);
+  assert.equal(schema.oneOf!.length, 2);
+  for (const item of schema.oneOf!) {
+    assert.ok('properties' in item);
+    assert.equal(item.additionalProperties, false);
+    assert.deepEqual(item.required, [
+      'applies',
+      'limit',
+      'publishedObjects',
+      'remaining',
+    ]);
+  }
+  assert.deepEqual(read.security, [{ bearer: [] }, { cookie: [] }]);
+  const decision = document.paths['/v1/admin/moderation/{id}/decision']!.post!;
+  const conflict = decision.responses!['409'];
+  assert.ok(conflict && 'content' in conflict);
+  assert.match(
+    JSON.stringify(conflict.content),
+    /OWNER_PUBLICATION_QUOTA_EXCEEDED/,
+  );
+});
+
 test('OpenAPI enrichment preserves path metadata and query parameters on repeated calls', () => {
   const query = {
     in: 'query' as const,
