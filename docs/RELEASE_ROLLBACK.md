@@ -1,5 +1,35 @@
 # Staging, release and rollback
 
+## Current account-policy compatibility gate
+
+For the candidate stacked through PR79, PR81 and PR83, migrations001–017
+must remain applied. The schema counts and compatibility statements below describe
+historical Phase4D/RC baselines; they do not authorize rollback of this candidate.
+Use the selected exact source SHA and its complete migration ledger/checksums.
+
+Prefer a reviewed forward fix retaining registration approval and the six-object
+publication limit. Database readability alone does not establish policy compatibility.
+
+- Apply migration016 before directing traffic to registration-aware API binaries.
+  Old API binaries ignore pending/rejected approval state and create approved users.
+  Do not mix old and new API versions. Before any separately reviewed old-binary
+  rollback, pause signup, deactivate non-approved accounts and revoke their sessions;
+  define the restoration/reactivation procedure before executing those actions.
+- Keep quota enforcement in all publication API/worker paths. Old binaries lose
+  admission enforcement; do not resume publication through them merely because
+  migrations remain readable.
+- Keep migration017 and its tables. Disable `PHONE_OTP_ENABLED` before withdrawing
+  numeric OTP support; retain approval guards and the existing long-token routes.
+  For pepper rotation, disable new phone sends for the full one-hour quota window.
+- Verify the chosen immutable artifact preserves these policies and security fixes.
+  Run staging checks for pending/rejected denial, concurrent sixth/seventh object
+  publication and OTP-disabled fallback before traffic cutover.
+
+See REGISTRATION_ONBOARDING_VERIFICATION.md,
+OWNER_PUBLICATION_QUOTA_VERIFICATION.md and PHONE_OTP_VERIFICATION.md.
+These instructions do not authorize account changes, messages, merge or deployment.
+Real provider delivery and infrastructure acceptance remain separate gates.
+
 ## Artifact and dry-run pipeline
 
 RAUI CI checks out the exact PR head, runs frozen installation, lint, strict types,
