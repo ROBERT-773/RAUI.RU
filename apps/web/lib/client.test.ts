@@ -194,3 +194,55 @@ test('critical mutation forwards the same caller idempotency key with recovered 
     },
   });
 });
+
+for (const [status, code, message] of [
+  [400, 'phone_otp_invalid', 'Код недействителен или срок его действия истёк.'],
+  [
+    409,
+    'phone_otp_contact_unavailable',
+    'Не удалось подтвердить этот телефон. Обратитесь в поддержку.',
+  ],
+  [
+    503,
+    'phone_otp_unavailable',
+    'SMS сейчас недоступно. Повторите запрос позже.',
+  ],
+  [
+    429,
+    'phone_otp_rate_limited',
+    'Слишком много запросов SMS. Повторите запрос позже.',
+  ],
+] as const)
+  test(`OTP ${code} exposes only bounded safe guidance`, async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        reply(
+          { code, retryAfterSeconds: 12, message: 'private provider response' },
+          status,
+        ),
+      ),
+    );
+    const { api } = await import('./client');
+    await expect(api('v1/auth/verification/phone/otp')).rejects.toMatchObject({
+      status,
+      message,
+      ...(status === 429 ? { retryAfterSeconds: 12 } : {}),
+    });
+  });
+for (const seconds of [0, -1, 1.2, '12', 10000000])
+  test(`OTP retry metadata rejects invalid value ${seconds}`, async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        reply(
+          { code: 'phone_otp_rate_limited', retryAfterSeconds: seconds },
+          429,
+        ),
+      ),
+    );
+    const { api } = await import('./client');
+    await expect(api('v1/auth/verification/phone/otp')).rejects.toMatchObject({
+      retryAfterSeconds: undefined,
+    });
+  });

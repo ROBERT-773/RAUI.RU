@@ -7,6 +7,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -70,12 +71,61 @@ export async function api<T>(
     cache: 'no-store',
   });
   if (!response.ok) {
-    if (response.status === 409) {
+    if ([400, 409, 429, 503].includes(response.status)) {
       const failure: unknown = await response.json().catch(() => null);
+      if (
+        path.startsWith('v1/auth/verification/phone/otp') &&
+        failure &&
+        typeof failure === 'object' &&
+        'code' in failure
+      ) {
+        const safeErrors: Record<string, { status: number; message: string }> =
+          {
+            phone_otp_invalid: {
+              status: 400,
+              message: 'Код недействителен или срок его действия истёк.',
+            },
+            phone_otp_contact_unavailable: {
+              status: 409,
+              message:
+                'Не удалось подтвердить этот телефон. Обратитесь в поддержку.',
+            },
+            phone_otp_unavailable: {
+              status: 503,
+              message: 'SMS сейчас недоступно. Повторите запрос позже.',
+            },
+            phone_otp_rate_limited: {
+              status: 429,
+              message: 'Слишком много запросов SMS. Повторите запрос позже.',
+            },
+          };
+        const safe =
+          typeof failure.code === 'string'
+            ? safeErrors[failure.code]
+            : undefined;
+        if (safe && safe.status === response.status) {
+          const seconds =
+            'retryAfterSeconds' in failure
+              ? failure.retryAfterSeconds
+              : undefined;
+          throw new ApiError(
+            safe.message,
+            response.status,
+            response.status === 429 &&
+              typeof seconds === 'number' &&
+              Number.isInteger(seconds) &&
+              seconds > 0 &&
+              seconds <= 3600
+              ? seconds
+              : undefined,
+          );
+        }
+      }
       if (
         failure &&
         typeof failure === 'object' &&
         'code' in failure &&
+        response.status === 409 &&
         failure.code === 'OWNER_PUBLICATION_QUOTA_EXCEEDED'
       )
         throw new ApiError(

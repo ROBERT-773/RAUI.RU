@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuthController, AuthService } from './modules/auth/auth';
 import { VerificationDelivery } from './modules/auth/delivery';
+import { PhoneOtpService } from './modules/auth/phone-otp';
 import { Audit } from './modules/audit/audit';
 import { Test } from '@nestjs/testing';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
@@ -37,6 +38,7 @@ test('password reset HTTP acceptance is identical for known and unknown accounts
     controllers: [AuthController],
     providers: [
       AuthService,
+      { provide: PhoneOtpService, useValue: {} },
       { provide: Database, useValue: db },
       { provide: Audit, useValue: { record: async () => {} } },
       {
@@ -514,4 +516,65 @@ test('Moderation image OpenAPI describes private binary images and restricts var
     required: true,
     schema: { type: 'string', enum: ['thumb', 'small', 'large', 'avif'] },
   });
+});
+
+test('phone OTP OpenAPI is authenticated, strict and keeps legacy confirmation separate', () => {
+  const base = '/v1/auth/verification/phone';
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'OTP', version: '1' },
+    paths: {
+      [`${base}/capabilities`]: { get: { responses: {} } },
+      [`${base}/otp`]: { post: { responses: {} } },
+      [`${base}/otp/confirm`]: { post: { responses: {} } },
+      [`${base}/confirm`]: { post: { responses: {} } },
+    },
+  };
+  enrichOpenApi(document);
+  for (const [path, method] of [
+    [`${base}/capabilities`, 'get'],
+    [`${base}/otp`, 'post'],
+    [`${base}/otp/confirm`, 'post'],
+  ] as const) {
+    const operation = document.paths[path]![method]!;
+    assert.deepEqual(operation.security, [{ bearer: [] }, { cookie: [] }]);
+    assert.match(operation.description!, /no-store/);
+  }
+  const request = document.paths[`${base}/otp`]!.post!;
+  assert.ok(
+    request.parameters!.some(
+      (p) => 'name' in p && p.name === 'Idempotency-Key' && p.required,
+    ),
+  );
+  assert.ok(request.responses['429']);
+  assert.ok(request.responses['503']);
+  const confirm = document.paths[`${base}/otp/confirm`]!.post!;
+  const body = confirm.requestBody as {
+    content: {
+      'application/json': {
+        schema: {
+          additionalProperties: boolean;
+          properties: Record<string, { pattern?: string }>;
+        };
+      };
+    };
+  };
+  assert.equal(
+    body.content['application/json'].schema.additionalProperties,
+    false,
+  );
+  assert.equal(
+    body.content['application/json'].schema.properties.code!.pattern,
+    '^[0-9]{6}$',
+  );
+  assert.equal(
+    body.content['application/json'].schema.properties.token,
+    undefined,
+  );
+  const legacy = document.paths[`${base}/confirm`]!.post!
+    .requestBody as typeof body;
+  assert.equal(
+    legacy.content['application/json'].schema.properties.token!.pattern,
+    '^[A-Za-z0-9_-]{43}$',
+  );
 });

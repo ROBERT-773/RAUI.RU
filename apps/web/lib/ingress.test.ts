@@ -383,3 +383,54 @@ test('registration approval proxy admits only queue, detail and idempotent decis
   ).toBe(404);
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
+
+test('phone OTP proxy accepts only exact methods and forwards idempotency without caching', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'local');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'public, max-age=3600',
+      },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, POST, PATCH } = await import('../app/api/[...path]/route');
+  const base = ['v1', 'auth', 'verification', 'phone'];
+  for (const [method, suffix, allowed] of [
+    ['GET', ['capabilities'], true],
+    ['POST', ['otp'], true],
+    ['POST', ['otp', 'confirm'], true],
+    ['POST', ['capabilities'], false],
+    ['GET', ['otp'], false],
+    ['GET', ['otp', 'confirm'], false],
+    ['POST', ['otp', 'confirm', 'extra'], false],
+    ['PATCH', ['otp'], false],
+  ] as const) {
+    const path = [...base, ...suffix];
+    const handler = method === 'GET' ? GET : method === 'POST' ? POST : PATCH;
+    const response = await handler(
+      new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+        method,
+        headers: {
+          origin: 'https://staging.raui.ru',
+          'idempotency-key': 'phone-otp-request-key',
+        },
+        ...(method === 'GET' ? {} : { body: '{}' }),
+      }),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(response.status).toBe(allowed ? 200 : 404);
+    if (allowed)
+      expect(response.headers.get('cache-control')).toContain('no-store');
+  }
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(
+    new Headers((fetcher.mock.calls[1]?.[1] as RequestInit).headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('phone-otp-request-key');
+});

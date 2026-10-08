@@ -1,5 +1,7 @@
 import {
   Body,
+  Headers,
+  HttpException,
   Controller,
   Get,
   Post,
@@ -38,6 +40,16 @@ import {
   VerificationDelivery,
   VerificationMessage,
 } from './delivery';
+import {
+  PhoneOtpService,
+  lockPhoneOtpActor,
+  invalidatePhoneChallenges,
+  reservePhoneOtpSend,
+} from './phone-otp';
+import {
+  PhoneOtpDelivery,
+  ConfiguredPhoneOtpDelivery,
+} from './phone-otp-delivery';
 export const passwordSchema = z.string().min(12).max(128);
 const emailSchema = z
   .email()
@@ -105,10 +117,19 @@ export class AuthService {
     user: User,
     purpose: VerificationMessage['purpose'],
     destination: string,
+    actor?: Actor,
   ) {
     const secret = token();
     await this.db.transaction(async (sql) => {
-      await sql.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id]);
+      if (actor) await lockPhoneOtpActor(sql, actor);
+      else
+        await sql.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [
+          user.id,
+        ]);
+      if (purpose === 'phone') {
+        await reservePhoneOtpSend(sql, user.id, destination);
+        await invalidatePhoneChallenges(sql, user.id);
+      }
       await sql.query(
         'UPDATE auth_challenges SET used_at=now() WHERE user_id=$1 AND purpose=$2 AND used_at IS NULL',
         [user.id, purpose],
@@ -272,7 +293,8 @@ export class AuthService {
     const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
       actor.id,
     ]);
-    await this.challenge(user!, 'phone', input.phone);
+    // Fresh session authorization is repeated inside allocation's user lock.
+    await this.challenge(user!, 'phone', input.phone, actor);
     return { accepted: true };
   }
   async confirm(
@@ -294,13 +316,18 @@ export class AuthService {
         ? await passwordHash((input as { password: string }).password)
         : null;
     await this.db.transaction(async (sql) => {
+      if (purpose === 'phone' && actor) await lockPhoneOtpActor(sql, actor);
       const [challenge] = await this.db.rows<{
         id: string;
         user_id: string;
         destination: string;
       }>(
-        `SELECT c.* FROM auth_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose=$2 AND c.used_at IS NULL AND c.expires_at>now() AND u.active FOR UPDATE OF c,u`,
-        [hash(input.token), purpose],
+        purpose === 'phone'
+          ? `SELECT c.* FROM auth_challenges c WHERE c.token_hash=$1 AND c.purpose=$2 AND c.user_id=$3 AND c.used_at IS NULL AND c.expires_at>clock_timestamp() FOR UPDATE OF c`
+          : `SELECT c.* FROM auth_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose=$2 AND c.used_at IS NULL AND c.expires_at>clock_timestamp() AND u.active FOR UPDATE OF c,u`,
+        purpose === 'phone'
+          ? [hash(input.token), purpose, actor!.id]
+          : [hash(input.token), purpose],
         sql,
       );
       if (!challenge || (actor && challenge.user_id !== actor.id))
@@ -313,11 +340,19 @@ export class AuthService {
           'UPDATE users SET email_verified_at=now(),updated_at=now() WHERE id=$1',
           [challenge.user_id],
         );
-      if (purpose === 'phone')
+      if (purpose === 'phone') {
+        const current = await sql.query(
+          'SELECT id FROM auth_challenges WHERE id=$1 AND expires_at>clock_timestamp()',
+          [challenge.id],
+        );
+        if (!current.rowCount)
+          throw new BadRequestException('Invalid or expired verification');
+        await invalidatePhoneChallenges(sql, challenge.user_id);
         await sql.query(
           'UPDATE users SET phone=$2,phone_verified_at=now(),updated_at=now() WHERE id=$1',
           [challenge.user_id, challenge.destination],
         );
+      }
       if (purpose === 'reset') {
         await sql.query(
           'UPDATE users SET password_hash=$2,updated_at=now() WHERE id=$1',
@@ -384,7 +419,10 @@ export class AuthService {
 }
 @Controller('v1/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly otp: PhoneOtpService,
+  ) {}
   @Public() @Post('register') register(@Body() body: unknown) {
     return this.auth.register(body);
   }
@@ -436,11 +474,49 @@ export class AuthController {
   ) {
     return this.auth.confirm(body, 'email');
   }
-  @Post('verification/phone') phone(
+  @Get('verification/phone/capabilities') phoneCapabilities(
+    @CurrentActor() actor: Actor,
+  ) {
+    return this.otp.capabilities(actor);
+  }
+  @Post('verification/phone/otp') async phoneOtp(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    try {
+      return await this.otp.request(actor, body, key);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
+  }
+  @Post('verification/phone/otp/confirm') phoneOtpConfirm(
     @CurrentActor() actor: Actor,
     @Body() body: unknown,
   ) {
-    return this.auth.requestPhone(actor, body);
+    return this.otp.confirm(actor, body);
+  }
+  @Post('verification/phone') async phone(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    try {
+      return await this.auth.requestPhone(actor, body);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
   }
   @Post('verification/phone/confirm') confirmPhone(
     @CurrentActor() actor: Actor,
@@ -461,6 +537,8 @@ export class AuthController {
   controllers: [AuthController],
   providers: [
     AuthService,
+    PhoneOtpService,
+    { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },
     { provide: VerificationDelivery, useClass: ConfiguredDelivery },
   ],
   exports: [AuthService],

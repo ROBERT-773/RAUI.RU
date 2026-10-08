@@ -133,6 +133,13 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/auth/verification/phone': object({
     phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
   }),
+  'post /v1/auth/verification/phone/otp': object({
+    phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
+  }),
+  'post /v1/auth/verification/phone/otp/confirm': object({
+    challengeId: uuid,
+    code: z.string().regex(/^[0-9]{6}$/),
+  }),
   'post /v1/auth/verification/phone/confirm': object({
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   }),
@@ -261,7 +268,8 @@ post /v1/partner/feeds/{id}/apply
 post /v1/partner/listings/bulk-pause`.split('\n'),
 );
 const idempotentOperations = new Set(
-  `post /v1/organizations
+  `post /v1/auth/verification/phone/otp
+post /v1/organizations
 post /v1/properties
 post /v1/listings
 post /v1/listings/{id}/transitions
@@ -392,6 +400,94 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (
+        [
+          'get /v1/auth/verification/phone/capabilities',
+          'post /v1/auth/verification/phone/otp',
+          'post /v1/auth/verification/phone/otp/confirm',
+        ].includes(operationId)
+      ) {
+        operation.description =
+          'Own-account phone verification for active pending or approved accounts; private, no-store. Contact verification never grants registration approval.';
+        const json = (schema: SchemaObject, description: string) => ({
+          description,
+          content: { 'application/json': { schema } },
+        });
+        const strict = (
+          properties: Record<string, SchemaObject>,
+        ): SchemaObject => ({
+          type: 'object',
+          additionalProperties: false,
+          required: Object.keys(properties),
+          properties,
+        });
+        if (method === 'get') {
+          operation.responses['200'] = json(
+            strict({
+              numericOtp: strict({
+                available: { type: 'boolean' },
+                reason: {
+                  type: 'string',
+                  enum: ['available', 'disabled', 'unconfigured'],
+                },
+              }),
+              legacyToken: strict({
+                available: { type: 'boolean', enum: [true] },
+              }),
+            }),
+            'Configuration availability, never proof of provider health or SMS delivery',
+          );
+        } else if (path.endsWith('/confirm')) {
+          operation.responses['201'] = json(
+            strict({ verified: { type: 'boolean', enum: [true] } }),
+            'Phone verified after committed contact update',
+          );
+          operation.responses['400'] = {
+            description:
+              'Invalid, wrong-user, consumed, expired or exhausted challenge: phone_otp_invalid. No attempt count is exposed.',
+          };
+          operation.responses['409'] = {
+            description:
+              'Claimed phone unavailable: phone_otp_contact_unavailable. No account details are exposed.',
+          };
+        } else {
+          operation.responses['201'] = json(
+            strict({
+              challengeId: { type: 'string', format: 'uuid' },
+              expiresAt: { type: 'string', format: 'date-time' },
+              resendAfter: { type: 'string', format: 'date-time' },
+              delivery: {
+                type: 'string',
+                enum: ['accepted', 'unavailable', 'unknown'],
+              },
+            }),
+            'Durable challenge allocation; acceptance does not confirm delivery; replay causes no new dispatch',
+          );
+          operation.responses['409'] = {
+            description: 'Idempotency key reused with a different phone',
+          };
+          operation.responses['429'] = {
+            ...json(
+              strict({
+                code: { type: 'string', enum: ['phone_otp_rate_limited'] },
+                message: { type: 'string' },
+                retryAfterSeconds: { type: 'integer', minimum: 1 },
+              }),
+              'Cooldown or rolling send quota exceeded',
+            ),
+            headers: {
+              'Retry-After': {
+                schema: { type: 'integer', minimum: 1 },
+                description: 'Seconds until retry',
+              },
+            },
+          };
+          operation.responses['503'] = {
+            description:
+              'Numeric OTP disabled or unconfigured: phone_otp_unavailable. No challenge, send event or dispatch is created.',
+          };
+        }
+      }
       if (operationId === 'get /v1/account/publication-quota') {
         const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
         operation.description =

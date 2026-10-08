@@ -69,7 +69,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     version: 1,
     sha: 'a'.repeat(40),
     runId: '123',
-    migrations: 16,
+    migrations: 17,
     riskyDefaults: 'off',
     gates: [
       'lint',
@@ -104,6 +104,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'apps/api/migrations/014_user_public_id.sql',
       'apps/api/migrations/015_staff_permissions.sql',
       'apps/api/migrations/016_registration_approval.sql',
+      'apps/api/migrations/017_phone_otp.sql',
       'pnpm-lock.yaml',
       'package.json',
       'infra/observability/alerts.yml',
@@ -134,6 +135,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     { runId: '123x' },
     { migrations: 0 },
     { migrations: 12 },
+    { migrations: 16 },
     { riskyDefaults: 'on' },
     { gates: ['lint'] },
     { files: [{ path: 'apps/api/dist/main.js', sha256: 'b'.repeat(64) }] },
@@ -203,7 +205,7 @@ test('Release verification binds measured evidence and rejects tampering', async
         sourceUntouched: true,
         databaseRestore: 'verified',
         objectFixtureRestore: 'verified',
-        migrationsVerified: 16,
+        migrationsVerified: 17,
         tablesVerified: 61,
         cipher: 'AES-256-GCM',
         sourceWritersQuiesced: true,
@@ -277,6 +279,7 @@ test('Release verification binds measured evidence and rejects tampering', async
     const recoveryPath = '.cache/phase4d-recovery.json';
     for (const patch of [
       { migrationsVerified: 12 },
+      { migrationsVerified: 16 },
       { sequenceStateAndConfig: undefined },
       { sourceWritersQuiesced: false },
       { sequenceNextValuesVerified: 8 },

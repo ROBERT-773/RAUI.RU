@@ -187,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '16',
+          '17',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -1571,6 +1571,9 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       };
       assert.ok(schema.paths['/v1/auth/register']);
       assert.ok(schema.paths['/v1/properties']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/capabilities']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/otp']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/otp/confirm']);
       const propertyContract = schema.paths['/v1/properties'] as {
         post: {
           requestBody: {
@@ -1644,7 +1647,8 @@ post /v1/partner/feeds/{id}/apply
 post /v1/partner/listings/bulk-pause`.split('\n'),
       );
       const keys = new Set(
-        `post /v1/organizations
+        `post /v1/auth/verification/phone/otp
+post /v1/organizations
 post /v1/properties
 post /v1/listings
 post /v1/listings/{id}/transitions
