@@ -257,6 +257,11 @@ export default function Account() {
             {register ? 'Создать и войти' : 'Войти'}
           </Button>
         </form>
+        {!register && (
+          <p>
+            <Link href="/account/forgot-password">Забыли пароль?</Link>
+          </p>
+        )}
         <Button onClick={() => setRegister(!register)}>
           {register ? 'Уже есть аккаунт' : 'Регистрация'}
         </Button>
