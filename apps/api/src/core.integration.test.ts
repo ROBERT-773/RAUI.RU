@@ -1602,7 +1602,9 @@ patch /v1/commerce/promotions/{code}/{version}`.split('\n'),
               ? []
               : partner.has(id)
                 ? [{ partner: [] }]
-                : [{ bearer: [] }, { cookie: [] }],
+                : id === 'get /v1/auth/csrf'
+                  ? [{ cookie: [] }]
+                  : [{ bearer: [] }, { cookie: [] }],
             id,
           );
           const headers = (operation.parameters ?? []).filter(
