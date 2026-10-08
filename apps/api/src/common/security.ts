@@ -8,6 +8,7 @@ import {
   CanActivate,
   ExecutionContext,
   SetMetadata,
+  applyDecorators,
   createParamDecorator,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -39,6 +40,16 @@ export type AuthRequest = Request & {
 };
 export const Public = () => SetMetadata('public', true);
 export const AdminOnly = () => SetMetadata('admin', true);
+export const staffPermissions = [
+  'moderation.read',
+  'moderation.decide',
+] as const;
+export type StaffPermission = (typeof staffPermissions)[number];
+export const StaffPermissionOnly = (permission: StaffPermission) =>
+  applyDecorators(
+    SetMetadata('admin', false),
+    SetMetadata('staffPermission', permission),
+  );
 export const CurrentActor = createParamDecorator(
   (_data: unknown, context: ExecutionContext): Actor =>
     context.switchToHttp().getRequest<AuthRequest>().actor!,
@@ -156,6 +167,20 @@ export class SessionGuard implements CanActivate {
     ) {
       if (actor.role !== 'admin') throw new ForbiddenException();
       verified(actor);
+    }
+    const permission = this.reflector.getAllAndOverride<StaffPermission>(
+      'staffPermission',
+      [context.getHandler(), context.getClass()],
+    );
+    if (permission) {
+      verified(actor);
+      if (actor.role !== 'admin') {
+        const [grant] = await this.db.rows<{ user_id: string }>(
+          'SELECT user_id FROM staff_permission_grants WHERE user_id=$1 AND permission=$2',
+          [actor.id, permission],
+        );
+        if (!grant) throw new ForbiddenException('Staff permission required');
+      }
     }
     req.actor = actor;
     return true;

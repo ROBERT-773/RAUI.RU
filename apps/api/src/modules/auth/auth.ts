@@ -61,6 +61,9 @@ export const loginSchema = z
   .strict();
 interface User {
   id: string;
+  public_id: string;
+  created_at: string;
+  updated_at: string;
   email: string;
   display_name: string;
   role: string;
@@ -71,9 +74,19 @@ interface User {
   password_hash: string;
 }
 function publicUser(user: User) {
-  const { password_hash: _password, ...safe } = user;
-  void _password;
-  return safe;
+  return {
+    id: user.id,
+    public_id: user.public_id,
+    email: user.email,
+    display_name: user.display_name,
+    role: user.role,
+    active: user.active,
+    email_verified_at: user.email_verified_at,
+    phone_verified_at: user.phone_verified_at,
+    phone: user.phone,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
 }
 @Injectable()
 export class AuthService {

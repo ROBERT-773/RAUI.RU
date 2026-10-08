@@ -481,3 +481,19 @@ test('Selected thread pagination appends older messages and consumes its cursor'
     screen.queryByRole('button', { name: 'Предыдущие сообщения' }),
   ).toBeNull();
 });
+
+test('Account displays its permanent ID without rounding large numeric identifiers', async () => {
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.endsWith('/auth/me')
+          ? { display_name: 'Buyer', public_id: '9007199254740993' }
+          : { items: [], cursor: null },
+    })),
+  );
+  render(<Account />);
+  expect(await screen.findByText('ID: 9007199254740993')).toBeTruthy();
+});

@@ -28,7 +28,10 @@ interface Notification {
   read_at: string | null;
 }
 export default function Account() {
-  const [user, setUser] = useState<{ display_name: string } | null>(null),
+  const [user, setUser] = useState<{
+      display_name: string;
+      public_id: string;
+    } | null>(null),
     [checking, setChecking] = useState(true),
     [tab, setTab] = useState<Tab>('favorite'),
     [notice, setNotice] = useState(''),
@@ -76,7 +79,7 @@ export default function Account() {
   useEffect(() => {
     const epochRef = identityEpoch;
     const epoch = identityEpoch.current;
-    api<{ display_name: string }>('v1/auth/me')
+    api<{ display_name: string; public_id: string }>('v1/auth/me')
       .then((u) => {
         if (epoch !== identityEpoch.current) return;
         setUser(u);
@@ -216,7 +219,7 @@ export default function Account() {
               if (epoch !== identityEpoch.current) return;
               const result = await api<{
                 csrfToken: string;
-                user: { display_name: string };
+                user: { display_name: string; public_id: string };
               }>('v1/auth/login', 'POST', {
                 email: d.get('email'),
                 password: d.get('password'),
@@ -272,6 +275,7 @@ export default function Account() {
     <>
       <h1>Мой аккаунт</h1>
       <p>{user.display_name}</p>
+      <p>ID: {user.public_id}</p>
       <Button
         onClick={async () => {
           const epoch = clearPrivateState();
