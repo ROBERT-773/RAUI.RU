@@ -104,6 +104,8 @@ export const envSchema = z
         );
       }, 'CDN base requires clean credential-free HTTP(S) URL')
       .optional(),
+    RESET_SMTP_ENABLED: z.enum(['true', 'false']).default('false'),
+    RESET_SMTP_PASSWORD: z.string().min(1).optional(),
     VERIFICATION_GATEWAY_URL: z
       .url()
       .refine((v) => safeUrl(v)?.protocol === 'https:')
@@ -119,6 +121,18 @@ export const envSchema = z
     const production = isProduction(value);
     const reject = (field: string, message: string) =>
       context.addIssue({ code: 'custom', path: [field], message });
+    if (value.RESET_SMTP_ENABLED === 'true') {
+      if (!value.RESET_SMTP_PASSWORD)
+        reject('RESET_SMTP_PASSWORD', 'Reset SMTP credentials required');
+      const origin = safeUrl(value.WEB_ORIGIN);
+      if (
+        origin?.protocol !== 'https:' ||
+        origin.username ||
+        origin.password ||
+        origin.origin !== value.WEB_ORIGIN
+      )
+        reject('WEB_ORIGIN', 'Reset SMTP requires a clean HTTPS origin');
+    }
     if (
       value.TRUSTED_PROXY_PEERS &&
       value.TRUSTED_PROXY_PEERS.split(',').some(
