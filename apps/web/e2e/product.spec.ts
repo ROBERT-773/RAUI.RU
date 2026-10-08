@@ -572,3 +572,36 @@ test('HTML uses fresh CSP nonces and protected browser headers', async ({
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
 });
+
+test('Cookie session survives a fresh tab without CSRF storage and permits search and logout', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  const restored = await context.newPage();
+  try {
+    const searchResponse = restored.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/search'),
+    );
+    await restored.goto('/');
+    expect(
+      await restored.evaluate(() => sessionStorage.getItem('raui_csrf')),
+    ).toBeNull();
+    expect((await searchResponse).status()).toBe(201);
+    await restored.goto('/account');
+    await expect(
+      restored.getByRole('heading', { name: 'Мой аккаунт' }),
+    ).toBeVisible();
+    const logoutResponse = restored.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/auth/logout'),
+    );
+    await restored.getByRole('button', { name: 'Выйти', exact: true }).click();
+    expect((await logoutResponse).status()).toBe(201);
+    await expect(
+      restored.getByRole('heading', { name: 'Войти в аккаунт' }),
+    ).toBeVisible();
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(401);
+  } finally {
+    await restored.close();
+  }
+});
