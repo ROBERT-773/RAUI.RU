@@ -105,6 +105,24 @@ test('unverified phone does not expose creation or publication controls', async 
   expect(screen.queryByText('Создание объекта')).toBeNull();
 });
 
+test('verified owner awaiting registration approval gets onboarding link and no listings request', async () => {
+  vi.mocked(api).mockResolvedValue({
+    role: 'owner',
+    email_verified_at: 'now',
+    phone_verified_at: 'now',
+    registration_approval_state: 'pending',
+  });
+  render(<OwnerListings />);
+  await screen.findByText(/Дождитесь одобрения регистрации/);
+  expect(
+    screen
+      .getByRole('link', { name: 'Профиль и подтверждение контактов' })
+      .getAttribute('href'),
+  ).toBe('/account');
+  expect(screen.queryByText('Создание объекта')).toBeNull();
+  expect(api).toHaveBeenCalledTimes(1);
+});
+
 test('published offer links to the actual public route', async () => {
   setup('published');
   render(<OwnerListings />);

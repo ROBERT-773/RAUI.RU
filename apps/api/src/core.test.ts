@@ -228,6 +228,48 @@ test('OpenAPI enrichment preserves path metadata and query parameters on repeate
     2,
   );
 });
+
+test('registration approval contract is scoped, strict and requires retry keys', () => {
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: {
+      '/v1/admin/registration-approvals/{id}/decision': {
+        post: { responses: {} },
+      },
+      '/v1/auth/register': { post: { responses: {} } },
+      '/v1/auth/me': { get: { responses: {} } },
+      '/v1/admin/users/{id}/permissions': { patch: { responses: {} } },
+    },
+  };
+  enrichOpenApi(document);
+  const decision =
+    document.paths['/v1/admin/registration-approvals/{id}/decision']!.post!;
+  assert.ok(
+    decision.parameters?.some(
+      (p) => 'name' in p && p.name === 'Idempotency-Key' && p.required,
+    ),
+  );
+  const serialized = JSON.stringify(decision.requestBody);
+  assert.ok(serialized.includes('"additionalProperties":false'));
+  assert.ok(serialized.includes('"approve"'));
+  assert.ok(serialized.includes('"reason"'));
+  assert.ok(
+    JSON.stringify(document.paths['/v1/auth/me']!.get!.responses).includes(
+      'registration_approval_state',
+    ),
+  );
+  assert.ok(
+    JSON.stringify(
+      document.paths['/v1/auth/register']!.post!.responses,
+    ).includes('verificationDelivery'),
+  );
+  assert.ok(
+    JSON.stringify(
+      document.paths['/v1/admin/users/{id}/permissions']!.patch!.requestBody,
+    ).includes('registration.decide'),
+  );
+});
 test('adaptive hashes use independent salts and reject incorrect passwords', async () => {
   const first = await passwordHash('a-strong-password'),
     second = await passwordHash('a-strong-password');

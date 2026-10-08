@@ -1,3 +1,4 @@
+import { RegistrationApprovals } from './registration-approval';
 import { Trust, TrustModule } from '../trust/trust';
 import {
   Body,
@@ -348,7 +349,30 @@ export class Administration {
 @AdminOnly()
 @Controller('v1/admin')
 export class AdminController {
-  constructor(private readonly admin: Administration) {}
+  constructor(
+    private readonly admin: Administration,
+    private readonly registrations: RegistrationApprovals,
+  ) {}
+  @StaffPermissionOnly('registration.read')
+  @Get('registration-approvals')
+  registrationQueue(@Query('after') after?: string) {
+    return this.registrations.queue(after);
+  }
+  @StaffPermissionOnly('registration.read')
+  @Get('registration-approvals/:id')
+  registrationDetail(@Param('id') id: string) {
+    return this.registrations.detail(id);
+  }
+  @StaffPermissionOnly('registration.decide')
+  @Post('registration-approvals/:id/decision')
+  registrationDecision(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+  ) {
+    return this.registrations.decision(actor, id, body, key);
+  }
   @Get('media-jobs') jobs() {
     return this.admin.mediaJobs();
   }
@@ -432,6 +456,6 @@ export class AdminController {
 @Module({
   imports: [ListingsModule, TrustModule, StorageModule],
   controllers: [AdminController],
-  providers: [Administration, Idempotency],
+  providers: [Administration, RegistrationApprovals, Idempotency],
 })
 export class AdminModule {}

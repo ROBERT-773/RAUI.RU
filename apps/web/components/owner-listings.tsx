@@ -73,16 +73,22 @@ export default function OwnerListings() {
           role: string;
           email_verified_at: string | null;
           phone_verified_at: string | null;
+          registration_approval_state?: string;
         }>('v1/auth/me');
         if (!mounted.current) return;
         const eligible =
+          (!user.registration_approval_state ||
+            user.registration_approval_state === 'approved') &&
           ['owner', 'agent', 'agency', 'developer', 'admin'].includes(
             user.role,
-          ) && Boolean(user.email_verified_at && user.phone_verified_at);
+          ) &&
+          Boolean(user.email_verified_at && user.phone_verified_at);
         setAllowed(eligible);
         if (!eligible) {
           setError(
-            'Подтвердите email и телефон и используйте кабинет продавца для размещения.',
+            user.registration_approval_state === 'pending'
+              ? 'Дождитесь одобрения регистрации сотрудником.'
+              : 'Подтвердите email и телефон и используйте кабинет продавца для размещения.',
           );
           return;
         }
@@ -214,6 +220,11 @@ export default function OwnerListings() {
     <section>
       <h1>Мои объявления</h1>
       <Link href="/account">Вернуться в аккаунт</Link>
+      {!checking && !allowed && (
+        <p>
+          <Link href="/account">Профиль и подтверждение контактов</Link>
+        </p>
+      )}
       {checking && <p>Проверяем доступ…</p>}
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}

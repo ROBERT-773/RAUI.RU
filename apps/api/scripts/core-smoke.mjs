@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import sharp from 'sharp';
+import { Pool } from 'pg';
 const api = process.env.SMOKE_API_URL ?? 'http://127.0.0.1:3001';
 const database = new URL(process.env.DATABASE_URL ?? '');
 if (
@@ -21,6 +22,7 @@ const suffix = randomBytes(6).toString('hex'),
 async function call(path, method = 'GET', body, session, key) {
   const response = await fetch(`${api}/v1${path}`, {
     method,
+    redirect: 'error',
     signal: AbortSignal.timeout(10000),
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -53,7 +55,7 @@ async function challenge(destination, purpose) {
 }
 async function user(prefix) {
   const email = `${prefix}-${suffix}@example.test`;
-  await call('/auth/register', 'POST', {
+  const registered = await call('/auth/register', 'POST', {
     email,
     password,
     displayName: 'Local core smoke',
@@ -77,15 +79,76 @@ async function user(prefix) {
     { token: await challenge(phone, 'phone') },
     session,
   );
-  return { email, session };
+  const profile = await call('/auth/me', 'GET', undefined, session);
+  assert.equal(profile.registration_approval_state, 'pending');
+  assert.ok(profile.email_verified_at && profile.phone_verified_at);
+  return { id: registered.id, email, session };
 }
+// A separate trusted fixture supplies the first reviewer in this local-only smoke.
+// Registered applicants still pass through the real, audited approval API.
+const { passwordHash } = await import('../dist/common/security.js');
+const operatorEmail = `operator-${suffix}@example.test`;
+const pool = new Pool({ connectionString: database.toString() });
+try {
+  await pool.query(
+    "INSERT INTO users(email,password_hash,display_name,role,email_verified_at,phone_verified_at,registration_approval_state) VALUES($1,$2,'Local smoke operator','admin',now(),now(),'approved')",
+    [operatorEmail, await passwordHash(password)],
+  );
+} finally {
+  await pool.end();
+}
+const operator = await call('/auth/login', 'POST', {
+  email: operatorEmail,
+  password,
+  transport: 'bearer',
+});
 const owner = await user('owner'),
   moderator = await user('moderator');
+for (const applicant of [owner, moderator]) {
+  let cursor = null;
+  let request;
+  do {
+    const page = await call(
+      '/admin/registration-approvals' +
+        (cursor ? '?after=' + encodeURIComponent(cursor) : ''),
+      'GET',
+      undefined,
+      operator,
+    );
+    request = page.items.find((item) => item.user_id === applicant.id);
+    cursor = page.cursor;
+  } while (!request && cursor);
+  assert.ok(request, 'Registered applicant must appear in approval queue');
+  await call(
+    `/admin/registration-approvals/${request.id}/decision`,
+    'POST',
+    {
+      decision: 'approve',
+      reason: 'Verified local built-service smoke applicant',
+    },
+    operator,
+    randomUUID(),
+  );
+  assert.equal(
+    (await call('/auth/me', 'GET', undefined, applicant.session))
+      .registration_approval_state,
+    'approved',
+  );
+}
 // Explicit local operator bootstrap; never allowed by an unauthenticated HTTP request.
 execFileSync(
   process.execPath,
   ['dist/modules/auth/bootstrap-admin.js', moderator.email],
   { stdio: 'pipe' },
+);
+assert.equal(
+  (
+    await fetch(`${api}/v1/auth/me`, {
+      redirect: 'error',
+      headers: { Authorization: `Bearer ${moderator.session.sessionToken}` },
+    })
+  ).status,
+  401,
 );
 moderator.session = await call('/auth/login', 'POST', {
   email: moderator.email,
@@ -209,6 +272,7 @@ assert.equal(
   401,
 );
 await call('/auth/logout-all', 'POST', {}, moderator.session);
+await call('/auth/logout-all', 'POST', {}, operator);
 console.log(
-  'Built-service core smoke passed: real local delivery, auth, domain entities, separate media worker, moderation, publication and revocation',
+  'Built-service core smoke passed: real local delivery, auth, staff registration approval, operator bootstrap, domain entities, separate media worker, moderation, publication and revocation',
 );

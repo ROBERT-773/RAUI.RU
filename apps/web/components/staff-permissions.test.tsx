@@ -80,3 +80,41 @@ test('admin can reach staff beyond the first page of users', async () => {
   });
   expect(api).toHaveBeenCalledWith('v1/admin/users?after=user-99');
 });
+
+test('registration permissions are independently selected without automatic grants', async () => {
+  vi.mocked(api).mockImplementation(async (path) =>
+    path === 'v1/admin/users'
+      ? [{ id: target, email: 'staff@example.test', display_name: 'Модератор' }]
+      : { userId: target, permissions: ['moderation.read'] },
+  );
+  render(<StaffPermissions />);
+  await screen.findByRole('option', { name: 'Модератор — staff@example.test' });
+  fireEvent.change(screen.getByLabelText('Сотрудник'), {
+    target: { value: target },
+  });
+  await screen.findByLabelText('Разрешение');
+  expect(vi.mocked(api).mock.calls.some((call) => call[1] === 'PATCH')).toBe(
+    false,
+  );
+  fireEvent.change(screen.getByLabelText('Разрешение'), {
+    target: { value: 'registration.decide' },
+  });
+  fireEvent.change(screen.getByLabelText('Причина изменения'), {
+    target: { value: 'Проверка регистрации' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Выдать разрешение' }));
+  await waitFor(() =>
+    expect(api).toHaveBeenCalledWith(
+      `v1/admin/users/${target}/permissions`,
+      'PATCH',
+      {
+        permission: 'registration.decide',
+        granted: true,
+        reason: 'Проверка регистрации',
+      },
+    ),
+  );
+  expect(
+    screen.getByRole('option', { name: 'Просмотр заявок на регистрацию' }),
+  ).toBeTruthy();
+});

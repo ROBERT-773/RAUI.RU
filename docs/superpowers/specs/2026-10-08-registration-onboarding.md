@@ -1,0 +1,15 @@
+# Registration approval and contact onboarding
+
+The user explicitly requested continued implementation from the newest account scenario and parallel agents, without repeated approval pauses. Moscow and Moscow Oblast remain the launch geography. This slice completes the existing email/password onboarding path; short SMS codes and external identity integrations remain separate provider-dependent work.
+
+Existing users retain approved access through an additive default-approved column. New registrations atomically create a pending approval request. Pending users may authenticate only for onboarding: current profile, CSRF bootstrap, contact verification, session management and logout. All other authenticated operations are denied centrally, including bearer sessions. Rejected registrations cannot log in. Administrative activation and role changes cannot bypass the independent approval state.
+
+Approval requires independently verified email and phone, an active account, a fresh authorized staff actor, a nonempty reason (3–2000 characters), and a pending request. Self-review is forbidden. Decisions are idempotent and transactional; rejection revokes sessions. Approval does not verify contacts, change roles or reactivate disabled accounts. Separate registration.read and registration.decide permissions are delegated only by administrators. No default delegation is granted.
+
+GET /v1/admin/registration-approvals returns {items,cursor}; items contain id,user_id,public_id,display_name,role,email_verified_at,phone_verified_at,requested_at. GET /v1/admin/registration-approvals/:id returns the same fields plus email,phone,state,reason,resolved_at. POST /:id/decision accepts {decision:approve|reject,reason} with Idempotency-Key. GET auth/me includes registration_approval_state and registration_approval_reason (own decision reason only). Staff queue serves as an in-portal notification; background push delivery is not claimed.
+
+Registration keeps its existing response fields and adds verificationDelivery: accepted|unavailable. A known provider failure after account creation must not pretend creation failed; database/programming errors must still fail. Existing gateway payload and 43-character confirmation tokens stay unchanged. No local test token is exposed by production APIs. UI states request acceptance, not confirmed delivery; no invented numeric SMS or call flow.
+
+Web provides buyer/owner registration choice, an authenticated contact panel with request/confirmation/refresh actions, explicit pending/rejected status, and an authorized staff queue with reasoned decisions. Pending accounts never load normal private collections. Identity changes/unmount invalidate late results. The proxy admits only the specified staff paths/methods.
+
+Recovery approval, phone-first signup/login, ESIA/social/Sber, six-object quotas, tariffs, destructive lifecycle jobs and re-registration embargo are outside this deliverable. No merge or remote deployment is authorized by this implementation task.

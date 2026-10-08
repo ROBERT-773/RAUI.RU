@@ -6,6 +6,18 @@ import type { ListingCard, SearchDefinition } from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
 import { attributeLabels } from '../lib/labels';
 import { Card } from './card';
+import AccountProfile from './account-profile';
+interface AccountUser {
+  display_name: string;
+  public_id: string;
+  registration_approval_state?: 'pending' | 'approved' | 'rejected';
+  registration_approval_reason?: string | null;
+}
+const sessionExpired = (error: unknown) =>
+  error instanceof Error && 'status' in error && error.status === 401;
+const approved = (user: AccountUser) =>
+  !user.registration_approval_state ||
+  user.registration_approval_state === 'approved';
 type Tab =
   'favorite' | 'compare' | 'recent' | 'saved' | 'messages' | 'notifications';
 interface Saved {
@@ -28,10 +40,8 @@ interface Notification {
   read_at: string | null;
 }
 export default function Account() {
-  const [user, setUser] = useState<{
-      display_name: string;
-      public_id: string;
-    } | null>(null),
+  const [user, setUser] = useState<AccountUser | null>(null),
+    [profileOpen, setProfileOpen] = useState(false),
     [checking, setChecking] = useState(true),
     [tab, setTab] = useState<Tab>('favorite'),
     [notice, setNotice] = useState(''),
@@ -49,6 +59,7 @@ export default function Account() {
   const collectionRequest = useRef(0);
   const navigationEpoch = useRef(0);
   const threadRequest = useRef(0);
+  const profileRequest = useRef(0);
   function selectTab(next: Tab) {
     const navigation = ++navigationEpoch.current;
     threadRequest.current++;
@@ -63,6 +74,7 @@ export default function Account() {
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab('favorite');
+    setProfileOpen(false);
     setNotice('');
     setRegister(false);
     setItems([]);
@@ -79,11 +91,11 @@ export default function Account() {
   useEffect(() => {
     const epochRef = identityEpoch;
     const epoch = identityEpoch.current;
-    api<{ display_name: string; public_id: string }>('v1/auth/me')
+    api<AccountUser>('v1/auth/me')
       .then((u) => {
         if (epoch !== identityEpoch.current) return;
         setUser(u);
-        void load('favorite');
+        if (approved(u)) void load('favorite');
       })
       .catch(() => {})
       .finally(() => {
@@ -197,6 +209,40 @@ export default function Account() {
       return false;
     }
   }
+  function expireIdentity(epoch: number) {
+    if (epoch !== identityEpoch.current) return;
+    clearPrivateState();
+    setCsrf('');
+    setUser(null);
+    setNotice('Войдите в аккаунт, чтобы продолжить.');
+  }
+  async function refreshProfile() {
+    const epoch = identityEpoch.current;
+    const request = ++profileRequest.current;
+    try {
+      const current = await api<AccountUser>('v1/auth/me');
+      if (epoch !== identityEpoch.current || request !== profileRequest.current)
+        return;
+      collectionRequest.current++;
+      navigationEpoch.current++;
+      threadRequest.current++;
+      setUser(current);
+      setItems([]);
+      setSaved([]);
+      setThreads([]);
+      setNotifications([]);
+      setActiveThread('');
+      setMessages([]);
+      setCursor(null);
+      setMessageCursor(null);
+      if (approved(current)) void load(tab);
+    } catch (error) {
+      if (epoch !== identityEpoch.current || request !== profileRequest.current)
+        return;
+      if (sessionExpired(error)) expireIdentity(epoch);
+      else setNotice((error as Error).message);
+    }
+  }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
   if (!user)
     return (
@@ -209,17 +255,23 @@ export default function Account() {
             const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
-              if (register)
-                await api('v1/auth/register', 'POST', {
+              let deliveryUnavailable = false;
+              if (register) {
+                const created = await api<{
+                  verificationDelivery?: 'accepted' | 'unavailable';
+                }>('v1/auth/register', 'POST', {
                   email: d.get('email'),
                   password: d.get('password'),
                   displayName: d.get('name'),
-                  role: 'buyer',
+                  role: d.get('role'),
                 });
+                deliveryUnavailable =
+                  created.verificationDelivery === 'unavailable';
+              }
               if (epoch !== identityEpoch.current) return;
               const result = await api<{
                 csrfToken: string;
-                user: { display_name: string; public_id: string };
+                user: AccountUser;
               }>('v1/auth/login', 'POST', {
                 email: d.get('email'),
                 password: d.get('password'),
@@ -229,7 +281,11 @@ export default function Account() {
               clearPrivateState();
               setCsrf(result.csrfToken);
               setUser(result.user);
-              void load('favorite');
+              if (deliveryUnavailable)
+                setNotice(
+                  'Аккаунт создан. Не удалось подтвердить отправку письма. Запросите письмо повторно в профиле.',
+                );
+              if (approved(result.user)) void load('favorite');
             } catch (error) {
               if (epoch !== identityEpoch.current) return;
               setNotice((error as Error).message);
@@ -237,10 +293,24 @@ export default function Account() {
           }}
         >
           {register && (
-            <label>
-              Имя
-              <input name="name" autoComplete="name" required maxLength={100} />
-            </label>
+            <>
+              <label>
+                Тип аккаунта
+                <select name="role" defaultValue="buyer">
+                  <option value="buyer">Покупатель или арендатор</option>
+                  <option value="owner">Собственник</option>
+                </select>
+              </label>
+              <label>
+                Имя
+                <input
+                  name="name"
+                  autoComplete="name"
+                  required
+                  maxLength={100}
+                />
+              </label>
+            </>
           )}
           <label>
             Email
@@ -271,28 +341,56 @@ export default function Account() {
         {notice && <p role="alert">{notice}</p>}
       </>
     );
+  const logoutButton = (
+    <Button
+      onClick={async () => {
+        const epoch = clearPrivateState();
+        try {
+          await api('v1/auth/logout', 'POST');
+          if (epoch !== identityEpoch.current) return;
+          clearPrivateState();
+          setCsrf('');
+          setUser(null);
+        } catch (e) {
+          if (epoch !== identityEpoch.current) return;
+          if (sessionExpired(e)) expireIdentity(epoch);
+          else setNotice((e as Error).message);
+        }
+      }}
+    >
+      Выйти
+    </Button>
+  );
+  const profileEpoch = identityEpoch.current;
+  if (!approved(user) || profileOpen)
+    return (
+      <>
+        <h1>Мой аккаунт</h1>
+        <p>{user.display_name}</p>
+        <p>ID: {user.public_id}</p>
+        {logoutButton}
+        {approved(user) && (
+          <Button onClick={() => setProfileOpen(false)}>
+            Вернуться к разделам аккаунта
+          </Button>
+        )}
+        {notice && <p role="status">{notice}</p>}
+        <AccountProfile
+          key={identityEpoch.current}
+          onRefresh={refreshProfile}
+          onSessionExpired={() => expireIdentity(profileEpoch)}
+        />
+      </>
+    );
   return (
     <>
       <h1>Мой аккаунт</h1>
       <p>{user.display_name}</p>
       <p>ID: {user.public_id}</p>
       <Link href="/account/listings">Мои объявления</Link>
-      <Button
-        onClick={async () => {
-          const epoch = clearPrivateState();
-          try {
-            await api('v1/auth/logout', 'POST');
-            if (epoch !== identityEpoch.current) return;
-            clearPrivateState();
-            setCsrf('');
-            setUser(null);
-          } catch (e) {
-            if (epoch !== identityEpoch.current) return;
-            setNotice((e as Error).message);
-          }
-        }}
-      >
-        Выйти
+      {logoutButton}
+      <Button onClick={() => setProfileOpen(true)}>
+        Профиль и подтверждение контактов
       </Button>
       <nav className="toolbar" aria-label="Разделы аккаунта">
         {(

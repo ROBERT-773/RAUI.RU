@@ -33,6 +33,7 @@ export interface Actor {
   email_verified_at: string | null;
   phone_verified_at: string | null;
   session_id: string;
+  registration_approval_state?: 'pending' | 'approved' | 'rejected';
 }
 export type AuthRequest = Request & {
   actor?: Actor;
@@ -43,6 +44,8 @@ export const AdminOnly = () => SetMetadata('admin', true);
 export const staffPermissions = [
   'moderation.read',
   'moderation.decide',
+  'registration.read',
+  'registration.decide',
 ] as const;
 export type StaffPermission = (typeof staffPermissions)[number];
 export const StaffPermissionOnly = (permission: StaffPermission) =>
@@ -138,10 +141,33 @@ export class SessionGuard implements CanActivate {
       throw new UnauthorizedException();
     }
     const [actor] = await this.db.rows<Actor & { csrf_hash: string }>(
-      `SELECT u.id,u.role,u.email_verified_at,u.phone_verified_at,s.id AS session_id,s.csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.active`,
+      `SELECT u.id,u.role,u.email_verified_at,u.phone_verified_at,u.registration_approval_state,s.id AS session_id,s.csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.active`,
       [hash(secret)],
     );
     if (!actor) throw new UnauthorizedException();
+    if (actor.registration_approval_state === 'rejected')
+      throw new ForbiddenException('Registration rejected');
+    if (actor.registration_approval_state === 'pending') {
+      const path = req.url.split('?')[0];
+      const onboarding = new Set([
+        'GET /v1/auth/me',
+        'GET /v1/auth/csrf',
+        'GET /v1/auth/sessions',
+        'POST /v1/auth/logout',
+        'POST /v1/auth/logout-all',
+        'POST /v1/auth/verification/email',
+        'POST /v1/auth/verification/phone',
+        'POST /v1/auth/verification/phone/confirm',
+      ]);
+      if (
+        !onboarding.has(`${req.method} ${path}`) &&
+        !(
+          req.method === 'DELETE' &&
+          /^\/v1\/auth\/sessions\/[0-9a-f-]{36}$/i.test(path!)
+        )
+      )
+        throw new ForbiddenException('Registration approval pending');
+    }
     if (!bearer) req.csrfRecoveryToken = sessionCsrf(secret);
     if (!bearer && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const supplied = req.headers['x-csrf-token'];

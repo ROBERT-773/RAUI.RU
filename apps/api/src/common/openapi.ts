@@ -31,7 +31,7 @@ import { uploadSchema } from '../modules/media/media';
 import { createSchema } from '../modules/properties/properties';
 import { fields } from '../modules/listings/listings';
 import { addressSchema } from '../modules/geo/geo';
-import { uuid } from './security';
+import { staffPermissions, uuid } from './security';
 const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
@@ -124,7 +124,7 @@ const bodyContracts: Record<string, z.ZodType> = {
   }),
 
   'patch /v1/admin/users/{id}/permissions': object({
-    permission: z.enum(['moderation.read', 'moderation.decide']),
+    permission: z.enum(staffPermissions),
     granted: z.boolean(),
     reason: z.string().trim().min(3).max(2000),
   }),
@@ -216,6 +216,10 @@ const bodyContracts: Record<string, z.ZodType> = {
     decision: z.enum(['approve', 'reject']),
     reason: z.string().min(3).max(2000),
   }),
+  'post /v1/admin/registration-approvals/{id}/decision': object({
+    decision: z.enum(['approve', 'reject']),
+    reason: z.string().trim().min(3).max(2000),
+  }),
   'patch /v1/admin/users/{id}': object({
     active: z.boolean().optional(),
     role: z
@@ -268,6 +272,7 @@ post /v1/structures/sections
 post /v1/structures/floors
 post /v1/admin/media-jobs/{id}/retry
 post /v1/admin/moderation/{id}/decision
+post /v1/admin/registration-approvals/{id}/decision
 post /v1/trust/listings/{id}/scan
 post /v1/admin/trust/listings/{id}/decision
 post /v1/admin/trust/candidates/{id}/decision
@@ -403,6 +408,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
             'display_name',
             'role',
             'active',
+            'registration_approval_state',
           ],
           additionalProperties: false,
           properties: {
@@ -420,6 +426,19 @@ export function enrichOpenApi(document: OpenAPIObject) {
               enum: ['buyer', 'owner', 'agent', 'agency', 'developer', 'admin'],
             },
             active: { type: 'boolean' },
+            registration_approval_state: {
+              type: 'string',
+              enum: ['pending', 'approved', 'rejected'],
+            },
+            registration_approval_reason: { type: 'string', nullable: true },
+            ...(operationId === 'post /v1/auth/register'
+              ? {
+                  verificationDelivery: {
+                    type: 'string' as const,
+                    enum: ['accepted', 'unavailable'],
+                  },
+                }
+              : {}),
             phone: { type: 'string', nullable: true },
             email_verified_at: {
               type: 'string',
@@ -469,7 +488,13 @@ export function enrichOpenApi(document: OpenAPIObject) {
       }
       if (operationId.endsWith('/v1/admin/users/{id}/permissions')) {
         operation.description =
-          'Administrator-only delegated moderation permissions. Changes require an audit reason and do not change account roles.';
+          'Administrator-only delegated moderation and registration permissions. Changes require an audit reason and do not change account roles.';
+      }
+      if (path.startsWith('/v1/admin/registration-approvals')) {
+        operation.description =
+          method === 'post'
+            ? 'Administrator or registration.decide staff: audited idempotent decision on pending registration; approval requires both verified contacts and active applicant. Authorization is rechecked before replay. No self-review.'
+            : 'Administrator or registration.read staff: private registration queue and contact evidence; excludes credentials, tokens and sessions.';
       }
       if (
         operationId ===

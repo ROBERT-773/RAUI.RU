@@ -309,3 +309,77 @@ test('owner and moderation proxy exposes only selected methods and preserves ide
     ).status,
   ).toBe(404);
 });
+
+test('registration approval proxy admits only queue, detail and idempotent decision', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, POST, PATCH } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const base = ['v1', 'admin', 'registration-approvals'];
+  for (const path of [base, [...base, id]]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(200);
+  }
+  const path = [...base, id, 'decision'];
+  expect(
+    (
+      await POST(
+        new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+          method: 'POST',
+          headers: {
+            origin: 'https://staging.raui.ru',
+            'idempotency-key': 'approval-retry-key',
+          },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    new Headers((fetcher.mock.calls[2]?.[1] as RequestInit).headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('approval-retry-key');
+  for (const denied of [
+    [...base, 'bad-id'],
+    [...base, id, 'permissions'],
+    [...base, id, 'decision'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + denied.join('/')),
+          { params: Promise.resolve({ path: denied }) },
+        )
+      ).status,
+    ).toBe(404);
+  }
+  expect(
+    (
+      await PATCH(
+        new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+          method: 'PATCH',
+          headers: { origin: 'https://staging.raui.ru' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(404);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});

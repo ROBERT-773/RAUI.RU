@@ -84,7 +84,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants','registration_approval_requests') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
             : tablename === 'addresses'
               ? "to_jsonb(t)-'region_code'"
               : tablename === 'users'
-                ? "to_jsonb(t)-'public_id'"
+                ? "to_jsonb(t)-'public_id'-'registration_approval_state'"
                 : 'to_jsonb(t)';
         const rows = (
           await pool.query(
@@ -139,10 +139,11 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 15);
+    assert.equal(upgradedLedger.length, 16);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
+      [15, '016_registration_approval.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -156,6 +157,30 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       await pool.query('SELECT public_id::text FROM users WHERE id=$1', [user])
     ).rows[0];
     assert.match(identity.public_id, /^[1-9][0-9]*$/);
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT registration_approval_state FROM users WHERE id=$1',
+          [user],
+        )
+      ).rows[0].registration_approval_state,
+      'approved',
+    );
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT count(*)::int AS count FROM registration_approval_requests',
+        )
+      ).rows[0].count,
+      0,
+    );
+    await assert.rejects(
+      pool.query(
+        'UPDATE users SET registration_approval_state=$2 WHERE id=$1',
+        [user, 'invalid'],
+      ),
+      /registration_approval_state_check/,
+    );
     assert.equal(
       (
         await pool.query(

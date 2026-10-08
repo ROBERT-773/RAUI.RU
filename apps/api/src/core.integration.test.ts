@@ -148,6 +148,11 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       { token: delivery.latest(phone, 'phone') },
       session,
     );
+    // These fixtures exercise business behavior, independently of onboarding.
+    await pool.query(
+      "UPDATE users SET registration_approval_state='approved' WHERE email=$1",
+      [email],
+    );
     return session;
   }
   async function property(
@@ -182,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '15',
+          '16',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -294,6 +299,11 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           displayName: 'unverified',
           role: 'owner',
         });
+        // Keep this assertion about missing contact verification specifically.
+        await pool.query(
+          "UPDATE users SET registration_approval_state='approved' WHERE email=$1",
+          ['unverified@example.test'],
+        );
         const unverified = await ok<Session>('/auth/login', 'POST', {
           email: 'unverified@example.test',
           password: 'correct-long-password',
@@ -1574,6 +1584,40 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         ].schema.required.includes('address'),
       );
       assert.ok(schema.paths['/v1/admin/moderation/{id}/decision']);
+      assert.ok(schema.paths['/v1/admin/registration-approvals']);
+      assert.ok(schema.paths['/v1/admin/registration-approvals/{id}']);
+      const approvalContract = schema.paths[
+        '/v1/admin/registration-approvals/{id}/decision'
+      ] as {
+        post: {
+          description: string;
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  required: string[];
+                  additionalProperties: boolean;
+                  properties: {
+                    decision: { enum: string[] };
+                    reason: { minLength: number; maxLength: number };
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+      const approvalBody =
+        approvalContract.post.requestBody.content['application/json'].schema;
+      assert.deepEqual(approvalBody.required.sort(), ['decision', 'reason']);
+      assert.equal(approvalBody.additionalProperties, false);
+      assert.deepEqual(approvalBody.properties.decision.enum, [
+        'approve',
+        'reject',
+      ]);
+      assert.equal(approvalBody.properties.reason.minLength, 3);
+      assert.equal(approvalBody.properties.reason.maxLength, 2000);
+      assert.match(approvalContract.post.description, /registration\.decide/);
       const anonymous = new Set(
         `get /health
 get /health/ready
@@ -1611,6 +1655,7 @@ post /v1/structures/sections
 post /v1/structures/floors
 post /v1/admin/media-jobs/{id}/retry
 post /v1/admin/moderation/{id}/decision
+post /v1/admin/registration-approvals/{id}/decision
 post /v1/trust/listings/{id}/scan
 post /v1/admin/trust/listings/{id}/decision
 post /v1/admin/trust/candidates/{id}/decision

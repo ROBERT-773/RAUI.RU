@@ -14,6 +14,18 @@ const reply = (value: unknown = {}, status = 200) => ({
   json: async () => value,
 });
 
+test('HTTP failures expose status without exposing backend error details', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => reply({ message: 'private provider details' }, 401)),
+  );
+  const { api } = await import('./client');
+  await expect(api('v1/auth/me')).rejects.toMatchObject({
+    status: 401,
+    message: 'Войдите в аккаунт, чтобы продолжить.',
+  });
+});
+
 test('restored session without storage bootstraps before mutation', async () => {
   const fetch = vi.fn<TestFetch>(async (url) =>
     reply(url.endsWith('/csrf') ? { csrfToken: 'restored' } : { ok: true }),
