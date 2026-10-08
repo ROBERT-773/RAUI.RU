@@ -13,13 +13,27 @@ vi.mock('next/link', () => ({
     href: string;
   }) => <a href={href}>{children}</a>,
 }));
+function stubFetch(
+  name: string,
+  implementation: (input: string, init?: RequestInit) => Promise<unknown>,
+) {
+  vi.stubGlobal(name, (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/api/v1/auth/csrf'
+      ? Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ csrfToken: 'test-session-csrf' }),
+        } as Response)
+      : implementation(String(input), init),
+  );
+}
 afterEach(() => {
   cleanup();
   navigation.replace.mockClear();
   vi.unstubAllGlobals();
 });
 test('loading → empty results and accessible filters', async () => {
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn().mockResolvedValue({
       ok: true,
@@ -49,7 +63,7 @@ test('API error is actionable and retry reissues the request', async () => {
         ? { ok: true, json: async () => ({ items: [] }) }
         : { ok: false, status: 503 },
     );
-  vi.stubGlobal('fetch', fetch);
+  stubFetch('fetch', fetch);
   render(<SearchProduct />);
   expect(await screen.findByRole('alert')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
@@ -75,7 +89,7 @@ test('catalogue region change clears geographic criteria and survives submit and
           ? []
           : { items: [], total: 0, cursor: null, facets: {} },
   }));
-  vi.stubGlobal('fetch', fetch);
+  stubFetch('fetch', fetch);
   render(
     <SearchProduct
       initialDefinition={{
@@ -143,7 +157,7 @@ test('catalogue region change clears geographic criteria and survives submit and
 });
 
 test('catalogue failure is explicit and offers no invented regions', async () => {
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn().mockImplementation(async (url: string) => ({
       ok: url !== '/api/v1/regions',

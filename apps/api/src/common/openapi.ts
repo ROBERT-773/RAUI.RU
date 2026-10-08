@@ -382,6 +382,24 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/auth/csrf') {
+        operation.responses['200'] = {
+          description:
+            'Uncached cookie-session CSRF token; not an authentication token',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['csrfToken'],
+                additionalProperties: false,
+                properties: {
+                  csrfToken: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' },
+                },
+              },
+            },
+          },
+        };
+      }
       if (operationId === 'get /v1/search/sitemap') {
         operation.parameters = [
           ...(operation.parameters ?? []).filter(

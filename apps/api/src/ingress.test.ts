@@ -108,3 +108,47 @@ test('Forged, expired, path-replayed or untrusted forwarded identities fail clos
       /Forwarded identity rejected/,
     );
 });
+
+test('CSRF recovery uses the API quota without consuming credential-attempt quota', async (t) => {
+  const rate = guard(t);
+  for (let n = 0; n < 300; n++)
+    await rate.canActivate(
+      context(
+        signed('8.8.8.8', 'GET', '/v1/auth/csrf'),
+        '127.0.0.1',
+        'GET',
+        '/v1/auth/csrf',
+      ),
+    );
+  await assert.rejects(
+    rate.canActivate(
+      context(
+        signed('8.8.8.8', 'GET', '/v1/auth/csrf'),
+        '127.0.0.1',
+        'GET',
+        '/v1/auth/csrf',
+      ),
+    ),
+    /Rate limit exceeded/,
+  );
+  for (let n = 0; n < 30; n++)
+    await rate.canActivate(
+      context(
+        signed('8.8.8.8', 'POST', '/v1/auth/login'),
+        '127.0.0.1',
+        'POST',
+        '/v1/auth/login',
+      ),
+    );
+  await assert.rejects(
+    rate.canActivate(
+      context(
+        signed('8.8.8.8', 'POST', '/v1/auth/login'),
+        '127.0.0.1',
+        'POST',
+        '/v1/auth/login',
+      ),
+    ),
+    /Rate limit exceeded/,
+  );
+});
