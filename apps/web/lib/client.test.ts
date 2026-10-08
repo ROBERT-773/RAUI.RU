@@ -26,6 +26,45 @@ test('HTTP failures expose status without exposing backend error details', async
   });
 });
 
+test('known publication quota conflict uses safe guidance instead of backend details', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      reply(
+        {
+          code: 'OWNER_PUBLICATION_QUOTA_EXCEEDED',
+          message: 'private database details',
+        },
+        409,
+      ),
+    ),
+  );
+  const { api } = await import('./client');
+  await expect(
+    api('v1/admin/moderation/example/decision'),
+  ).rejects.toMatchObject({
+    status: 409,
+    message:
+      'Достигнут лимит: 6 объектов одновременно. Приостановите все опубликованные объявления одного объекта; сотрудник сможет повторить проверку текущей заявки.',
+  });
+});
+
+for (const [status, code] of [
+  [409, 'STALE_VERSION'],
+  [503, 'OWNER_PUBLICATION_QUOTA_EXCEEDED'],
+] as const)
+  test(`unrelated failure ${status}/${code} retains generic safe guidance`, async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => reply({ code, message: 'private details' }, status)),
+    );
+    const { api } = await import('./client');
+    await expect(api('v1/example')).rejects.toMatchObject({
+      status,
+      message: 'Не удалось выполнить запрос. Попробуйте ещё раз.',
+    });
+  });
+
 test('restored session without storage bootstraps before mutation', async () => {
   const fetch = vi.fn<TestFetch>(async (url) =>
     reply(url.endsWith('/csrf') ? { csrfToken: 'restored' } : { ok: true }),

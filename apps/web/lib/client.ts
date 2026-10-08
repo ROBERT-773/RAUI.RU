@@ -69,7 +69,20 @@ export async function api<T>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     cache: 'no-store',
   });
-  if (!response.ok)
+  if (!response.ok) {
+    if (response.status === 409) {
+      const failure: unknown = await response.json().catch(() => null);
+      if (
+        failure &&
+        typeof failure === 'object' &&
+        'code' in failure &&
+        failure.code === 'OWNER_PUBLICATION_QUOTA_EXCEEDED'
+      )
+        throw new ApiError(
+          'Достигнут лимит: 6 объектов одновременно. Приостановите все опубликованные объявления одного объекта; сотрудник сможет повторить проверку текущей заявки.',
+          response.status,
+        );
+    }
     throw new ApiError(
       response.status === 401
         ? 'Войдите в аккаунт, чтобы продолжить.'
@@ -78,6 +91,7 @@ export async function api<T>(
           : 'Не удалось выполнить запрос. Попробуйте ещё раз.',
       response.status,
     );
+  }
   return (await response.json()) as T;
 }
 let analytics: AnalyticsAdapter = { emit: () => {} };

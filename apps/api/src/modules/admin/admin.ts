@@ -29,12 +29,15 @@ import {
   parse,
   uuid,
   verified,
-  seller,
 } from '../../common/security';
 import { Database } from '../database/database';
 import { Audit } from '../audit/audit';
 import { Listings, ListingsModule } from '../listings/listings';
 import type { Listing } from '../listings/access';
+import {
+  PublicationQuotaModule,
+  PublicationQuotas,
+} from '../listings/publication-quota';
 @Injectable()
 export class Administration {
   constructor(
@@ -44,6 +47,7 @@ export class Administration {
     private readonly idem: Idempotency,
     private readonly trust: Trust,
     private readonly storage: ObjectStorage,
+    private readonly quotas: PublicationQuotas,
   ) {}
   async mediaJobs() {
     return this.db.rows(
@@ -287,6 +291,11 @@ export class Administration {
         [pending.listing_id],
         sql,
       );
+      if (!reference) throw new ConflictException('Stale moderation case');
+      const publicationSeller =
+        input.decision === 'approve'
+          ? await this.quotas.lockSeller(sql, reference.seller_id)
+          : undefined;
       await sql.query('SELECT id FROM properties WHERE id=$1 FOR UPDATE', [
         reference!.property_id,
       ]);
@@ -301,6 +310,10 @@ export class Administration {
         sql,
       );
       if (
+        !current ||
+        !listing ||
+        listing.seller_id !== reference.seller_id ||
+        listing.property_id !== reference.property_id ||
         current!.state !== 'pending' ||
         listing!.status !== 'moderation' ||
         listing!.version !== pending.listing_version
@@ -309,16 +322,22 @@ export class Administration {
       if (listing!.seller_id === actor.id)
         throw new ForbiddenException('Cannot moderate own listing');
       // Eligibility is checked against the original seller, not reviewer privileges.
-      const [sellerActor] = await this.db.rows<Actor>(
-        'SELECT id,role,email_verified_at,phone_verified_at FROM users WHERE id=$1 AND active',
-        [listing!.seller_id],
-        sql,
-      );
-      if (!sellerActor) throw new ConflictException('Seller inactive');
       if (input.decision === 'approve') {
-        seller(sellerActor);
+        const sellerActor: Actor = { ...publicationSeller!, session_id: '' };
         await this.listings.validate(sql, listing!, sellerActor);
         await this.trust.checkPublication(sql, listing!.id);
+        await this.quotas.assertCapacity(
+          sql,
+          publicationSeller!,
+          listing!.property_id,
+        );
+      } else {
+        const [sellerActor] = await this.db.rows<Actor>(
+          'SELECT id,role,email_verified_at,phone_verified_at,registration_approval_state FROM users WHERE id=$1 AND active',
+          [listing!.seller_id],
+          sql,
+        );
+        if (!sellerActor) throw new ConflictException('Seller inactive');
       }
       const status = input.decision === 'approve' ? 'published' : 'rejected';
       await sql.query(
@@ -454,7 +473,7 @@ export class AdminController {
   }
 }
 @Module({
-  imports: [ListingsModule, TrustModule, StorageModule],
+  imports: [ListingsModule, TrustModule, StorageModule, PublicationQuotaModule],
   controllers: [AdminController],
   providers: [Administration, RegistrationApprovals, Idempotency],
 })

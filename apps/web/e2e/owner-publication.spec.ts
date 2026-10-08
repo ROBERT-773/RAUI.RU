@@ -40,6 +40,25 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
   try {
     await login(page, 'seller@e2e.test');
     await page.goto('/account/listings');
+    const baselineResponse = await page.request.get(
+      '/api/v1/account/publication-quota',
+    );
+    expect(baselineResponse.status()).toBe(200);
+    const baseline = (await baselineResponse.json()) as {
+      applies: boolean;
+      limit: number;
+      publishedObjects: number;
+      remaining: number;
+    };
+    expect(baseline.applies).toBe(true);
+    expect(baseline.limit).toBe(6);
+    expect(baseline.publishedObjects).toBeLessThan(baseline.limit);
+    const quotaPanel = page.getByRole('region', {
+      name: 'Лимит публикации объектов',
+    });
+    await expect(quotaPanel).toContainText(
+      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+    );
     const creation = page.locator('form').filter({
       has: page.getByRole('heading', {
         name: 'Новое объявление',
@@ -87,6 +106,11 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
         exact: true,
       }),
     ).toBeDisabled();
+    const draftQuota = await page.request.get(
+      '/api/v1/account/publication-quota',
+    );
+    expect(draftQuota.status()).toBe(200);
+    expect(await draftQuota.json()).toEqual(baseline);
     // A reload proves the draft was persisted rather than held only in component state.
     await page.reload();
     await page.getByRole('button', { name: title, exact: true }).click();
@@ -165,13 +189,103 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       .getByRole('button', { name: 'Подтвердить решение', exact: true })
       .click();
     expect((await decision).status()).toBe(201);
-    await expect(staff.getByRole('status')).toContainText('Решение сохранено');
+    await expect(staff.locator('main').getByRole('status')).toContainText(
+      'Решение сохранено',
+    );
     // Public visibility is checked through an independent visitor with no seller session.
     const publicResponse = await visitor.goto(`/listings/${listingId}`);
     expect(publicResponse?.status()).toBe(200);
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
     ).toBeVisible();
+    const publishedQuota = await page.request.get(
+      '/api/v1/account/publication-quota',
+    );
+    expect(publishedQuota.status()).toBe(200);
+    expect(await publishedQuota.json()).toEqual({
+      ...baseline,
+      publishedObjects: baseline.publishedObjects + 1,
+      remaining: baseline.remaining - 1,
+    });
+    await page.reload();
+    await expect(quotaPanel).toContainText(
+      `Опубликовано объектов: ${baseline.publishedObjects + 1} из 6. Свободных мест: ${baseline.remaining - 1}.`,
+    );
+    await page.getByRole('button', { name: title, exact: true }).click();
+    await expect(
+      draft.getByText('Статус: Опубликовано', { exact: true }),
+    ).toBeVisible();
+    const paused = page.waitForResponse((value) =>
+      endpoint(value, 'POST', `/api/v1/listings/${listingId}/transitions`),
+    );
+    await draft
+      .getByRole('button', { name: 'Приостановить', exact: true })
+      .click();
+    expect((await paused).status()).toBe(201);
+    await expect(
+      draft.getByText('Статус: Приостановлено', { exact: true }),
+    ).toBeVisible();
+    expect((await visitor.request.get(`/listings/${listingId}`)).status()).toBe(
+      404,
+    );
+    const releasedQuota = await page.request.get(
+      '/api/v1/account/publication-quota',
+    );
+    expect(releasedQuota.status()).toBe(200);
+    expect(await releasedQuota.json()).toEqual(baseline);
+    await quotaPanel
+      .getByRole('button', { name: 'Обновить лимит публикации', exact: true })
+      .click();
+    await expect(quotaPanel).toContainText(
+      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+    );
+    // Reload cleared the new-listing form; supply valid fields before checking
+    // draft availability, so category-loading validation is not mistaken for quota.
+    const secondTitle = `Черновик после освобождения места ${info.project.name} ${randomUUID()}`;
+    await creation
+      .getByRole('combobox', { name: 'Регион', exact: true })
+      .selectOption('moscow');
+    await creation
+      .getByRole('combobox', { name: 'Категория', exact: true })
+      .selectOption('apartment');
+    await creation
+      .getByLabel('Адрес', { exact: true })
+      .fill('Москва, Тверская улица, 17');
+    await creation
+      .getByLabel('Населённый пункт', { exact: true })
+      .fill('Москва');
+    await creation.getByLabel('Долгота', { exact: true }).fill('37.62');
+    await creation.getByLabel('Широта', { exact: true }).fill('55.76');
+    await creation.getByLabel('Площадь, м²', { exact: false }).fill('48');
+    await creation.getByLabel('Заголовок', { exact: true }).fill(secondTitle);
+    await creation.getByLabel('Цена, ₽', { exact: true }).fill('11000000');
+    await creation
+      .getByLabel('Описание', { exact: true })
+      .fill('Черновик остаётся доступным после освобождения места публикации.');
+    const saveDraft = creation.getByRole('button', {
+      name: 'Сохранить черновик',
+      exact: true,
+    });
+    await expect(saveDraft).toBeEnabled();
+    const secondSaved = page.waitForResponse((value) =>
+      endpoint(value, 'POST', '/api/v1/listings'),
+    );
+    await saveDraft.click();
+    expect((await secondSaved).status()).toBe(201);
+    const secondDraft = page.locator('article.panel').filter({
+      has: page.getByRole('heading', { name: secondTitle, exact: true }),
+    });
+    await expect(
+      secondDraft.getByText('Статус: Черновик', { exact: true }),
+    ).toBeVisible();
+    const finalQuota = await page.request.get(
+      '/api/v1/account/publication-quota',
+    );
+    expect(finalQuota.status()).toBe(200);
+    expect(await finalQuota.json()).toEqual(baseline);
+    await expect(quotaPanel).toContainText(
+      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+    );
   } finally {
     if (listingId) {
       const current = await page.request.get(`/api/v1/listings/${listingId}`);

@@ -23,6 +23,10 @@ import { Database, Sql } from '../database/database';
 import { ListingAccess, ListingAccessModule } from '../listings/access';
 import { Search, SearchModule } from '../search/search';
 import { searchSchema } from '../search/contracts';
+import {
+  PublicationQuotaModule,
+  PublicationQuotas,
+} from '../listings/publication-quota';
 const collection = z.enum(['favorite', 'compare', 'recent']);
 const page = z.object({
   cursor: z.coerce.number().int().positive().optional(),
@@ -295,7 +299,13 @@ export class Product {
 }
 @Controller('v1/account')
 export class ProductController {
-  constructor(readonly product: Product) {}
+  constructor(
+    readonly product: Product,
+    readonly quotas: PublicationQuotas,
+  ) {}
+  @Get('publication-quota') publicationQuota(@CurrentActor() actor: Actor) {
+    return this.quotas.own(actor);
+  }
   @Get('collections/:kind') collections(
     @CurrentActor() a: Actor,
     @Param('kind') k: string,
@@ -380,7 +390,7 @@ export class ProductController {
   }
 }
 @Module({
-  imports: [ListingAccessModule, SearchModule],
+  imports: [ListingAccessModule, SearchModule, PublicationQuotaModule],
   controllers: [ProductController],
   providers: [
     Product,

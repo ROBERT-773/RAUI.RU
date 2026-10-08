@@ -7,8 +7,11 @@ import {
   waitFor,
 } from '@testing-library/react';
 import OwnerListings from './owner-listings';
-import { api } from '../lib/client';
-vi.mock('../lib/client', () => ({ api: vi.fn() }));
+import { api, ApiError } from '../lib/client';
+vi.mock('../lib/client', async (original) => ({
+  ...(await original<typeof import('../lib/client')>()),
+  api: vi.fn(),
+}));
 vi.mock('./new-listing', () => ({ default: () => <p>Создание объекта</p> }));
 const listing = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -32,6 +35,8 @@ function setup(status = 'draft') {
         email_verified_at: 'now',
         phone_verified_at: 'now',
       };
+    if (path === 'v1/account/publication-quota')
+      return { applies: true, limit: 6, publishedObjects: 4, remaining: 2 };
     if (path === 'v1/listings?limit=20') return [{ ...listing, status }];
     if (path.endsWith('/history'))
       return [
@@ -280,3 +285,213 @@ test.each([
     ).toBe(false);
   },
 );
+
+function quotaSetup(count = 4, role = 'owner') {
+  setup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path === 'v1/auth/me')
+      return {
+        role,
+        email_verified_at: 'now',
+        phone_verified_at: 'now',
+        registration_approval_state: 'approved',
+      };
+    if (path === 'v1/account/publication-quota')
+      return {
+        applies: role === 'owner',
+        limit: role === 'owner' ? 6 : null,
+        publishedObjects: role === 'owner' ? count : null,
+        remaining: role === 'owner' ? Math.max(0, 6 - count) : null,
+      };
+    return base(path, method, body, options);
+  });
+}
+test.each([
+  [4, 2],
+  [6, 0],
+  [7, 0],
+])(
+  'quota shows authoritative %i objects and %i remaining while draft creation stays available',
+  async (count, remaining) => {
+    quotaSetup(count);
+    render(<OwnerListings />);
+    await screen.findByText(
+      `Опубликовано объектов: ${count} из 6. Свободных мест: ${remaining}.`,
+    );
+    expect(screen.getByText('Создание объекта')).toBeTruthy();
+    expect(
+      vi
+        .mocked(api)
+        .mock.calls.filter(([path]) => path === 'v1/account/publication-quota'),
+    ).toHaveLength(1);
+  },
+);
+test('non-owner has no owner quota panel or request', async () => {
+  quotaSetup(0, 'agent');
+  render(<OwnerListings />);
+  await screen.findByText('Создание объекта');
+  expect(
+    screen.queryByRole('region', { name: 'Лимит публикации объектов' }),
+  ).toBeNull();
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.some(([path]) => path === 'v1/account/publication-quota'),
+  ).toBe(false);
+});
+test('quota failure offers manual refresh without inventing zero capacity', async () => {
+  quotaSetup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  let fail = true;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path === 'v1/account/publication-quota' && fail)
+      throw new Error('Unavailable');
+    return base(path, method, body, options);
+  });
+  render(<OwnerListings />);
+  await screen.findByText(
+    'Не удалось загрузить лимит публикации. Обновите данные.',
+  );
+  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+  expect(screen.getByText('Создание объекта')).toBeTruthy();
+  fail = false;
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Обновить лимит публикации' }),
+  );
+  await screen.findByText('Опубликовано объектов: 4 из 6. Свободных мест: 2.');
+});
+test('late quota response after unmount never appears in another account', async () => {
+  quotaSetup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  let resolve!: (value: unknown) => void;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) =>
+    path === 'v1/account/publication-quota'
+      ? new Promise((done) => {
+          resolve = done;
+        })
+      : base(path, method, body, options),
+  );
+  const previous = render(<OwnerListings />);
+  await waitFor(() => expect(resolve).toBeTypeOf('function'));
+  previous.unmount();
+  quotaSetup(0, 'agent');
+  render(<OwnerListings />);
+  await screen.findByText('Создание объекта');
+  resolve({ applies: true, limit: 6, publishedObjects: 7, remaining: 0 });
+  await waitFor(() =>
+    expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull(),
+  );
+});
+test('full quota keeps draft editing, media and moderation submission enabled', async () => {
+  quotaSetup(6);
+  render(<OwnerListings />);
+  await screen.findByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.');
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  expect(
+    (
+      (await screen.findByRole('button', {
+        name: 'Отправить на модерацию',
+      })) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  expect(
+    (
+      screen.getByRole('button', {
+        name: 'Сохранить изменения',
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  expect(
+    (screen.getByLabelText('Добавить фотографию') as HTMLInputElement).disabled,
+  ).toBe(false);
+});
+
+test('pausing a published offer refreshes authoritative quota without assuming a slot was freed', async () => {
+  quotaSetup(6);
+  const base = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path === 'v1/listings?limit=20')
+      return [{ ...listing, status: 'published' }];
+    if (path === `v1/listings/${listing.id}`)
+      return { ...listing, status: 'published' };
+    return base(path, method, body, options);
+  });
+  render(<OwnerListings />);
+  await screen.findByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.');
+  fireEvent.click(screen.getByRole('button', { name: listing.title }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Приостановить' }));
+  await screen.findByText('Размещение приостановлено.');
+  expect(
+    screen.getByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.'),
+  ).toBeTruthy();
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === 'v1/account/publication-quota'),
+  ).toHaveLength(2);
+});
+test('explicit listing-state refresh also reloads quota', async () => {
+  quotaSetup();
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Обновить состояние' }),
+  );
+  await screen.findByText('Состояние обновлено.');
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === 'v1/account/publication-quota'),
+  ).toHaveLength(2);
+});
+
+test.each([403, 503])(
+  'quota status %i is recoverable and preserves draft access',
+  async (status) => {
+    quotaSetup();
+    const base = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+      if (path === 'v1/account/publication-quota')
+        throw new ApiError('Unavailable', status);
+      return base(path, method, body, options);
+    });
+    render(<OwnerListings />);
+    await screen.findByText(
+      'Не удалось загрузить лимит публикации. Обновите данные.',
+    );
+    expect(screen.getByText('Создание объекта')).toBeTruthy();
+    expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+  },
+);
+test('expired quota session hides seller controls and asks for login', async () => {
+  quotaSetup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path === 'v1/account/publication-quota')
+      throw new ApiError('Войдите в аккаунт, чтобы продолжить.', 401);
+    return base(path, method, body, options);
+  });
+  render(<OwnerListings />);
+  await screen.findByText('Войдите в аккаунт, чтобы продолжить.');
+  expect(screen.queryByText('Создание объекта')).toBeNull();
+  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+});
+
+test('fresh non-applicable quota hides owner panel after a role change', async () => {
+  quotaSetup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) =>
+    path === 'v1/account/publication-quota'
+      ? { applies: false, limit: null, publishedObjects: null, remaining: null }
+      : base(path, method, body, options),
+  );
+  render(<OwnerListings />);
+  await screen.findByText('Создание объекта');
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('region', { name: 'Лимит публикации объектов' }),
+    ).toBeNull(),
+  );
+  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+});
