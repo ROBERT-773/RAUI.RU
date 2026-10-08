@@ -274,8 +274,8 @@ test('delegated moderation permissions require explicit admin grants and respect
       let response: Promise<Response | Error> | undefined;
       try {
         await holder.query('BEGIN');
-        const pid = (await holder.query('SELECT pg_backend_pid() AS pid')).rows[0]
-          .pid as number;
+        const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+          .rows[0].pid as number;
         await holder.query(
           'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`${staff.id}:moderation:${caseId}:${key}`],
@@ -290,7 +290,9 @@ test('delegated moderation permissions require explicit admin grants and respect
           },
           body: JSON.stringify({ decision: 'reject', reason }),
         }).catch((error: unknown) =>
-          error instanceof Error ? error : new Error('Decision transport failed'),
+          error instanceof Error
+            ? error
+            : new Error('Decision transport failed'),
         );
         const deadline = performance.now() + 5000;
         let waiting = false;
@@ -306,7 +308,10 @@ test('delegated moderation permissions require explicit admin grants and respect
           if (waiting) break;
           await setImmediate();
         }
-        assert.ok(waiting, 'HTTP decision must reach the held idempotency lock');
+        assert.ok(
+          waiting,
+          'HTTP decision must reach the held idempotency lock',
+        );
         assert.equal((await grant('moderation.decide', false)).status, 200);
         assert.equal(
           (
