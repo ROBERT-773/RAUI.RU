@@ -43,7 +43,7 @@ test('delegated moderation permissions require explicit admin grants and respect
     actor: { secret: string },
     method = 'GET',
     body?: unknown,
-    key = randomUUID(),
+    key: string = randomUUID(),
   ) {
     return fetch(`${base}/v1${path}`, {
       method,
