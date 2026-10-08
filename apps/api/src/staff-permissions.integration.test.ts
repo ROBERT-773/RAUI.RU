@@ -251,7 +251,7 @@ test('delegated moderation permissions require explicit admin grants and respect
         await pool.query(
           `SELECT to_jsonb(c) AS moderation_case,to_jsonb(l) AS listing,
             (SELECT count(*)::int FROM listing_history h WHERE h.listing_id=l.id) AS history_count,
-            (SELECT count(*)::int FROM audit_events a WHERE a.entity_id=l.id AND a.action='moderation.decided') AS audit_count,
+            (SELECT count(*)::int FROM audit_events a WHERE a.entity_id=l.id::text AND a.action='moderation.decided') AS audit_count,
             (SELECT count(*)::int FROM idempotency_records i WHERE i.actor_id=$2 AND i.scope=$3 AND i.key=$4) AS ledger_count,
             (SELECT coalesce(jsonb_agg(to_jsonb(i)),'[]'::jsonb) FROM idempotency_records i WHERE i.actor_id=$2 AND i.scope=$3 AND i.key=$4) AS ledger
             FROM moderation_cases c JOIN listings l ON l.id=c.listing_id WHERE c.id=$1`,
