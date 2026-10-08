@@ -30,7 +30,7 @@ import {
   uuid,
   verified,
 } from '../../common/security';
-import { Database } from '../database/database';
+import { Database, Sql } from '../database/database';
 import { Audit } from '../audit/audit';
 import { Listings, ListingsModule } from '../listings/listings';
 import type { Listing } from '../listings/access';
@@ -267,6 +267,58 @@ export class Administration {
     res.setHeader('Cache-Control', 'private, no-store');
     res.send(await this.storage.get(image.key));
   }
+  private async authorizeDecision(
+    sql: Sql,
+    actor: Actor,
+    caseId: string,
+    approving: boolean,
+  ) {
+    // Lock hints only: the mutation still validates the current listing references.
+    const [reference] = approving
+      ? await this.db.rows<{ seller_id: string }>(
+          'SELECT l.seller_id FROM moderation_cases c JOIN listings l ON l.id=c.listing_id WHERE c.id=$1',
+          [caseId],
+          sql,
+        )
+      : [];
+    // Both reviewers and sellers may be staff. Use one deterministic order and
+    // preserve FK KEY SHARE compatibility for audit/history/idempotency inserts.
+    const userIds = [
+      ...new Set([actor.id, ...(reference ? [reference.seller_id] : [])]),
+    ].sort();
+    const users = await this.db.rows<Actor & { active: boolean }>(
+      'SELECT id,role,active,email_verified_at,phone_verified_at,registration_approval_state FROM users WHERE id=ANY($1::uuid[]) ORDER BY id FOR NO KEY UPDATE',
+      [userIds],
+      sql,
+    );
+    const current = users.find((user) => user.id === actor.id);
+    if (!current?.active || current.registration_approval_state !== 'approved')
+      throw new ForbiddenException('Staff access unavailable');
+    verified(current);
+    const [session] = await this.db.rows(
+      'SELECT id FROM sessions WHERE id=$1 AND user_id=$2 FOR UPDATE',
+      [actor.session_id, actor.id],
+      sql,
+    );
+    if (!session) throw new ForbiddenException('Staff session unavailable');
+    if (current.role !== 'admin') {
+      const [grant] = await this.db.rows(
+        "SELECT user_id FROM staff_permission_grants WHERE user_id=$1 AND permission='moderation.decide' FOR UPDATE",
+        [actor.id],
+        sql,
+      );
+      if (!grant) throw new ForbiddenException('Staff permission required');
+    }
+    // Evaluate wall time only after all authorization locks have been acquired.
+    const [validSession] = await this.db.rows(
+      'SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at>clock_timestamp()',
+      [actor.session_id, actor.id],
+      sql,
+    );
+    if (!validSession)
+      throw new ForbiddenException('Staff session unavailable');
+    return reference?.seller_id;
+  }
   async decision(actor: Actor, id: string, body: unknown, key: unknown) {
     verified(actor);
     parse(uuid, id);
@@ -279,90 +331,110 @@ export class Administration {
         .strict(),
       body,
     );
-    return this.idem.run(actor, `moderation:${id}`, key, input, async (sql) => {
-      const [pending] = await this.db.rows<{
-        listing_id: string;
-        listing_version: number;
-        state: string;
-      }>('SELECT * FROM moderation_cases WHERE id=$1', [id], sql);
-      if (!pending) throw new NotFoundException();
-      const [reference] = await this.db.rows<Listing>(
-        'SELECT * FROM listings WHERE id=$1',
-        [pending.listing_id],
-        sql,
-      );
-      if (!reference) throw new ConflictException('Stale moderation case');
-      const publicationSeller =
-        input.decision === 'approve'
-          ? await this.quotas.lockSeller(sql, reference.seller_id)
-          : undefined;
-      await sql.query('SELECT id FROM properties WHERE id=$1 FOR UPDATE', [
-        reference!.property_id,
-      ]);
-      const [listing] = await this.db.rows<Listing>(
-        'SELECT * FROM listings WHERE id=$1 FOR UPDATE',
-        [pending.listing_id],
-        sql,
-      );
-      const [current] = await this.db.rows<{ state: string }>(
-        'SELECT state FROM moderation_cases WHERE id=$1 FOR UPDATE',
-        [id],
-        sql,
-      );
-      if (
-        !current ||
-        !listing ||
-        listing.seller_id !== reference.seller_id ||
-        listing.property_id !== reference.property_id ||
-        current!.state !== 'pending' ||
-        listing!.status !== 'moderation' ||
-        listing!.version !== pending.listing_version
-      )
-        throw new ConflictException('Stale moderation case');
-      if (listing!.seller_id === actor.id)
-        throw new ForbiddenException('Cannot moderate own listing');
-      // Eligibility is checked against the original seller, not reviewer privileges.
-      if (input.decision === 'approve') {
-        const sellerActor: Actor = { ...publicationSeller!, session_id: '' };
-        await this.listings.validate(sql, listing!, sellerActor);
-        await this.trust.checkPublication(sql, listing!.id);
-        await this.quotas.assertCapacity(
-          sql,
-          publicationSeller!,
-          listing!.property_id,
-        );
-      } else {
-        const [sellerActor] = await this.db.rows<Actor>(
-          'SELECT id,role,email_verified_at,phone_verified_at,registration_approval_state FROM users WHERE id=$1 AND active',
-          [listing!.seller_id],
+    let authorizedSellerId: string | undefined;
+    return this.idem.run(
+      actor,
+      `moderation:${id}`,
+      key,
+      input,
+      async (sql) => {
+        const [pending] = await this.db.rows<{
+          listing_id: string;
+          listing_version: number;
+          state: string;
+        }>('SELECT * FROM moderation_cases WHERE id=$1', [id], sql);
+        if (!pending) throw new NotFoundException();
+        const [reference] = await this.db.rows<Listing>(
+          'SELECT * FROM listings WHERE id=$1',
+          [pending.listing_id],
           sql,
         );
-        if (!sellerActor) throw new ConflictException('Seller inactive');
-      }
-      const status = input.decision === 'approve' ? 'published' : 'rejected';
-      await sql.query(
-        'UPDATE moderation_cases SET state=$2,reviewer_id=$3,reason=$4,resolved_at=now() WHERE id=$1',
-        [
-          id,
-          input.decision === 'approve' ? 'approved' : 'rejected',
+        if (
+          !reference ||
+          (input.decision === 'approve' &&
+            reference.seller_id !== authorizedSellerId)
+        )
+          throw new ConflictException('Stale moderation case');
+        const publicationSeller =
+          input.decision === 'approve'
+            ? await this.quotas.lockSeller(sql, reference.seller_id)
+            : undefined;
+        await sql.query('SELECT id FROM properties WHERE id=$1 FOR UPDATE', [
+          reference!.property_id,
+        ]);
+        const [listing] = await this.db.rows<Listing>(
+          'SELECT * FROM listings WHERE id=$1 FOR UPDATE',
+          [pending.listing_id],
+          sql,
+        );
+        const [current] = await this.db.rows<{ state: string }>(
+          'SELECT state FROM moderation_cases WHERE id=$1 FOR UPDATE',
+          [id],
+          sql,
+        );
+        if (
+          !current ||
+          !listing ||
+          listing.seller_id !== reference.seller_id ||
+          listing.property_id !== reference.property_id ||
+          current!.state !== 'pending' ||
+          listing!.status !== 'moderation' ||
+          listing!.version !== pending.listing_version
+        )
+          throw new ConflictException('Stale moderation case');
+        if (listing!.seller_id === actor.id)
+          throw new ForbiddenException('Cannot moderate own listing');
+        // Eligibility is checked against the original seller, not reviewer privileges.
+        if (input.decision === 'approve') {
+          const sellerActor: Actor = { ...publicationSeller!, session_id: '' };
+          await this.listings.validate(sql, listing!, sellerActor);
+          await this.trust.checkPublication(sql, listing!.id);
+          await this.quotas.assertCapacity(
+            sql,
+            publicationSeller!,
+            listing!.property_id,
+          );
+        } else {
+          const [sellerActor] = await this.db.rows<Actor>(
+            'SELECT id,role,email_verified_at,phone_verified_at,registration_approval_state FROM users WHERE id=$1 AND active',
+            [listing!.seller_id],
+            sql,
+          );
+          if (!sellerActor) throw new ConflictException('Seller inactive');
+        }
+        const status = input.decision === 'approve' ? 'published' : 'rejected';
+        await sql.query(
+          'UPDATE moderation_cases SET state=$2,reviewer_id=$3,reason=$4,resolved_at=now() WHERE id=$1',
+          [
+            id,
+            input.decision === 'approve' ? 'approved' : 'rejected',
+            actor.id,
+            input.reason,
+          ],
+        );
+        await sql.query(
+          "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN now() ELSE published_at END,updated_at=now() WHERE id=$1",
+          [listing!.id, status],
+        );
+        await this.audit.history(
+          sql,
           actor.id,
-          input.reason,
-        ],
-      );
-      await sql.query(
-        "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN now() ELSE published_at END,updated_at=now() WHERE id=$1",
-        [listing!.id, status],
-      );
-      await this.audit.history(
-        sql,
-        actor.id,
-        listing!.id,
-        'moderation.decided',
-        { status: listing!.status },
-        { status, caseId: id, reason: input.reason },
-      );
-      return { listingId: listing!.id, status };
-    });
+          listing!.id,
+          'moderation.decided',
+          { status: listing!.status },
+          { status, caseId: id, reason: input.reason },
+        );
+        return { listingId: listing!.id, status };
+      },
+      async (sql) => {
+        authorizedSellerId = await this.authorizeDecision(
+          sql,
+          actor,
+          id,
+          input.decision === 'approve',
+        );
+      },
+    );
   }
 }
 @AdminOnly()
