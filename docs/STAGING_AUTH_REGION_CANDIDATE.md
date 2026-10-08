@@ -43,6 +43,11 @@ a clean HTTPS WEB_ORIGIN. Gateway priority, verified TLS, AUTH LOGIN, the total
 five-second SMTP deadline and reset response privacy remain unchanged. Never
 place credentials in Git, chat or evidence. Production still requires the
 approved HTTPS verification gateway; SMTP is not a substitute for that gate.
+The production predicate includes either `NODE_ENV=production` or
+`DEPLOYMENT_ENV=production`. Consequently, staging with `NODE_ENV=production`
+also requires the gateway and selects it before SMTP. Direct SMTP is available
+only when both markers are non-production and no gateway is configured; do not
+weaken production validation to enable it.
 
 Full details: `PASSWORD_RESET_SMTP.md`, `PASSWORD_RESET_API_PRIVACY.md`,
 `EMAIL_PASSWORD_RECOVERY.md` and `SESSION_CSRF_RECOVERY.md`.

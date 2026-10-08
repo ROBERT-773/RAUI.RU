@@ -21,7 +21,7 @@ dry-run` workflow takes a successful RAUI CI run ID, full source SHA and either
 staging-dry-run or rollback-dry-run. It verifies GitHub run provenance and every
 manifest hash from the retained artifact using the trusted checked-out verifier.
 The selected run must be completed/successful for the exact `.github/workflows/ci.yml` path and source SHA; the downloaded manifest must carry the same run ID. It has read-only permissions and no deploy command or production credential.
-The current RC verifier requires all 12 migrations and RC evidence, so historical pre-RC artifacts cannot pass it. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
+The current verifier requires all 13 migrations, including `013_region_search.sql`, and compatible release/recovery evidence. Historical artifacts with only 12 migrations cannot pass this contract. Prepare a newly verified compatible rollback artifact preserving security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
 Locally, from an extracted artifact root, use the trusted repository verifier:
 `node /path/to/RAUI.RU/scripts/release-contract.mjs verify .cache/phase4d-release.json <full-sha>`.
 Do not create a fake CI manifest or use a mutable branch/tag as release identity.
@@ -61,8 +61,12 @@ real traffic; disable the flag through the same audited API if exceeded.
 
 Keep the previous successful immutable artifact/image and config available.
 Before rollback verify its successful CI provenance, hashes, schema expectations,
-provider contract and flag state. Phase 4D adds no SQL migration; schema 001–011
-remains unchanged and accepted Phase 4C can read it. Nonce CSP/web-origin changes
+provider contract and flag state. Historically, Phase 4D added no SQL migration;
+its schema 001–011 remained unchanged and accepted Phase 4C could read it.
+The current regional/auth candidate additionally requires migrations 012 and
+013 before their readers start. Retain both during application rollback and
+reconcile the regional search index as described in `REGIONAL_SEARCH.md`.
+Nonce CSP/web-origin changes
 must be rolled back as one API/web/config unit. Disable risky flags before traffic
 cutover and drain workers/leases; preserve queues, billing and audit history.
 
