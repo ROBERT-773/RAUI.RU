@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
 import { Test } from '@nestjs/testing';
 import { Pool } from 'pg';
 import { AppModule } from './app.module';
@@ -10,7 +11,7 @@ import { migrate } from './modules/database/migrate';
 import { hash, token } from './common/security';
 import { ObjectStorage } from './modules/media/storage';
 
-test('delegated moderation permissions require explicit admin grants and respect immediate revocation', async () => {
+test('delegated moderation permissions require explicit admin grants and respect immediate revocation', async (t) => {
   assert.ok(process.env.TEST_DATABASE_URL?.includes('/raui_test_'));
   const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   await migrate(pool);
@@ -42,13 +43,14 @@ test('delegated moderation permissions require explicit admin grants and respect
     actor: { secret: string },
     method = 'GET',
     body?: unknown,
+    key = randomUUID(),
   ) {
     return fetch(`${base}/v1${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${actor.secret}`,
         'Content-Type': 'application/json',
-        'Idempotency-Key': randomUUID(),
+        'Idempotency-Key': key,
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
@@ -242,6 +244,122 @@ test('delegated moderation permissions require explicit admin grants and respect
     );
     assert.equal(audit.rowCount, 4);
     assert.equal(audit.rows[3].data.granted, false);
+
+    // Catch decisions/replays that retain an initial grant snapshot after waiting.
+    async function decisionState(caseId: string, key: string) {
+      return (
+        await pool.query(
+          `SELECT to_jsonb(c) AS moderation_case,to_jsonb(l) AS listing,
+            (SELECT count(*)::int FROM listing_history h WHERE h.listing_id=l.id) AS history_count,
+            (SELECT count(*)::int FROM audit_events a WHERE a.entity_id=l.id AND a.action='moderation.decided') AS audit_count,
+            (SELECT count(*)::int FROM idempotency_records i WHERE i.actor_id=$2 AND i.scope=$3 AND i.key=$4) AS ledger_count,
+            (SELECT coalesce(jsonb_agg(to_jsonb(i)),'[]'::jsonb) FROM idempotency_records i WHERE i.actor_id=$2 AND i.scope=$3 AND i.key=$4) AS ledger
+            FROM moderation_cases c JOIN listings l ON l.id=c.listing_id WHERE c.id=$1`,
+          [caseId, staff.id, `moderation:${caseId}`, key],
+        )
+      ).rows[0];
+    }
+    const reason = 'Listing information requires correction';
+    async function reject(caseId: string, key: string) {
+      return call(
+        `/admin/moderation/${caseId}/decision`,
+        staff,
+        'POST',
+        { decision: 'reject', reason },
+        key,
+      );
+    }
+    async function revokeWhileWaiting(caseId: string, key: string) {
+      const holder = await pool.connect();
+      let response: Promise<Response | Error> | undefined;
+      try {
+        await holder.query('BEGIN');
+        const pid = (await holder.query('SELECT pg_backend_pid() AS pid')).rows[0]
+          .pid as number;
+        await holder.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [`${staff.id}:moderation:${caseId}:${key}`],
+        );
+        response = fetch(`${base}/v1/admin/moderation/${caseId}/decision`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(15000),
+          headers: {
+            Authorization: `Bearer ${staff.secret}`,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': key,
+          },
+          body: JSON.stringify({ decision: 'reject', reason }),
+        }).catch((error: unknown) =>
+          error instanceof Error ? error : new Error('Decision transport failed'),
+        );
+        const deadline = performance.now() + 5000;
+        let waiting = false;
+        while (performance.now() < deadline) {
+          waiting = (
+            await pool.query(
+              `SELECT EXISTS(SELECT 1 FROM pg_locks
+                WHERE locktype='advisory' AND NOT granted
+                AND $1=ANY(pg_blocking_pids(pid))) AS waiting`,
+              [pid],
+            )
+          ).rows[0].waiting as boolean;
+          if (waiting) break;
+          await setImmediate();
+        }
+        assert.ok(waiting, 'HTTP decision must reach the held idempotency lock');
+        assert.equal((await grant('moderation.decide', false)).status, 200);
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS n FROM staff_permission_grants WHERE user_id=$1 AND permission='moderation.decide'",
+              [staff.id],
+            )
+          ).rows[0].n,
+          0,
+          'Admin revocation must commit before the decision resumes',
+        );
+      } finally {
+        await holder.query('ROLLBACK');
+        holder.release();
+        // Await the HTTP operation even when synchronization assertions fail.
+        if (response) await response;
+      }
+      assert.ok(response);
+      const result = await response;
+      if (result instanceof Error) throw result;
+      await result.arrayBuffer();
+      return result.status;
+    }
+    await t.test(
+      'moderation grant revoked during idempotency wait prevents new decision',
+      async () => {
+        assert.equal((await grant('moderation.decide', true)).status, 200);
+        const caseId = await pending(other.id);
+        const key = randomUUID();
+        const before = await decisionState(caseId, key);
+        const status = await revokeWhileWaiting(caseId, key);
+        assert.deepEqual(
+          { status, state: await decisionState(caseId, key) },
+          { status: 403, state: before },
+        );
+      },
+    );
+    await t.test(
+      'moderation grant revoked during idempotency wait prevents cached replay',
+      async () => {
+        assert.equal((await grant('moderation.decide', true)).status, 200);
+        const caseId = await pending(other.id);
+        const key = randomUUID();
+        assert.equal((await reject(caseId, key)).status, 201);
+        const before = await decisionState(caseId, key);
+        assert.equal(before.ledger_count, 1);
+        const status = await revokeWhileWaiting(caseId, key);
+        assert.deepEqual(
+          { status, state: await decisionState(caseId, key) },
+          { status: 403, state: before },
+        );
+      },
+    );
   } finally {
     await app.get(ObjectStorage).delete(mediaKey);
     await app.close();
