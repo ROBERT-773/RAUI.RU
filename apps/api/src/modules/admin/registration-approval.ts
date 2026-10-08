@@ -110,6 +110,15 @@ export class RegistrationApprovals {
       );
       if (!grant) throw new ForbiddenException('Staff permission required');
     }
+    // Transaction-start now() can be stale after idempotency or grant waits.
+    // Evaluate expiry after all authorization locks, before replay or mutation.
+    const [validSession] = await this.db.rows(
+      'SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at>clock_timestamp()',
+      [actor.session_id, actor.id],
+      sql,
+    );
+    if (!validSession)
+      throw new ForbiddenException('Staff session unavailable');
   }
   async decision(actor: Actor, id: string, body: unknown, key: unknown) {
     parse(uuid, id);
