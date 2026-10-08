@@ -9,6 +9,24 @@ async function proxy(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       value ?? '',
     );
+  const phoneOtpPrefix =
+    path.slice(0, 4).join('/') === 'v1/auth/verification/phone';
+  const phoneOtpOperation =
+    phoneOtpPrefix && ['capabilities', 'otp'].includes(path[4] ?? '');
+  if (
+    phoneOtpOperation &&
+    !(
+      (path.length === 5 &&
+        path[4] === 'capabilities' &&
+        request.method === 'GET') ||
+      (path.length === 5 && path[4] === 'otp' && request.method === 'POST') ||
+      (path.length === 6 &&
+        path[4] === 'otp' &&
+        path[5] === 'confirm' &&
+        request.method === 'POST')
+    )
+  )
+    return NextResponse.json({ message: 'Not found' }, { status: 404 });
   const propertyRoute =
     path[1] === 'properties' &&
     ((path.length === 2 && request.method === 'POST') ||

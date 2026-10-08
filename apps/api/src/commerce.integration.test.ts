@@ -188,7 +188,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '16',
+          '17',
         );
         assert.equal(
           (

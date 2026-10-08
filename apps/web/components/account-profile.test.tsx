@@ -171,7 +171,9 @@ test('requests verification for the exact E164 phone and does not mark it verifi
 test('expired session during profile refresh notifies the parent', async () => {
   const expired = vi.fn();
   let reads = 0;
-  vi.mocked(api).mockImplementation(async () => {
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path.endsWith('/capabilities'))
+      return { numericOtp: { available: false } };
     if (++reads === 1) return user;
     throw Object.assign(new Error('Войдите'), { status: 401 });
   });
@@ -236,4 +238,89 @@ test('accepted email token does not claim this profile is verified when refreshe
   );
   expect(screen.queryByText('Контакт подтверждён.')).toBeNull();
   expect(screen.getAllByText('Не подтверждён')).toHaveLength(2);
+});
+
+const numericCapability = {
+  numericOtp: { available: true, reason: 'available' },
+  legacyToken: { available: true },
+};
+for (const reason of ['disabled', 'unconfigured'])
+  test(`${reason} keeps explicit long-token phone fallback`, async () => {
+    vi.mocked(api).mockImplementation(async (path) =>
+      path.endsWith('/capabilities')
+        ? { ...numericCapability, numericOtp: { available: false, reason } }
+        : user,
+    );
+    render(<AccountProfile />);
+    await screen.findByText('Подтверждение коротким кодом пока недоступно.');
+    expect(
+      screen.getByText('Подтверждение телефона длинным токеном'),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByLabelText('Код подтверждения телефона из сообщения')
+        .getAttribute('minlength'),
+    ).toBe('43');
+    expect(screen.queryByLabelText('SMS-код из 6 цифр')).toBeNull();
+  });
+test('numeric phone confirmation refreshes timestamps without approving pending registration', async () => {
+  let reads = 0;
+  const refreshed = vi.fn();
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path.endsWith('/capabilities')) return numericCapability;
+    if (path === 'v1/auth/me')
+      return ++reads === 1
+        ? user
+        : { ...user, phone: '+79991234567', phone_verified_at: 'now' };
+    if (path.endsWith('/otp'))
+      return {
+        challengeId: '11111111-1111-4111-8111-111111111111',
+        expiresAt: new Date(Date.now() + 300000).toISOString(),
+        resendAfter: new Date(Date.now() + 60000).toISOString(),
+        delivery: 'accepted',
+      };
+    return { verified: true };
+  });
+  render(<AccountProfile onRefresh={refreshed} />);
+  await screen.findByLabelText('Номер телефона для SMS');
+  fireEvent.change(screen.getByLabelText('Номер телефона для SMS'), {
+    target: { value: '+79991234567' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Запросить SMS-код' }));
+  await screen.findByLabelText('SMS-код из 6 цифр');
+  fireEvent.change(screen.getByLabelText('SMS-код из 6 цифр'), {
+    target: { value: '000123' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить SMS-код' }));
+  await screen.findByText('Контакт подтверждён.');
+  expect(screen.getByText('Ожидает одобрения сотрудника')).toBeTruthy();
+  expect(screen.getByText('Подтверждён')).toBeTruthy();
+  expect(refreshed).toHaveBeenCalledTimes(1);
+});
+test('late capability for old identity cannot replace new identity fallback', async () => {
+  let finish!: (value: unknown) => void;
+  vi.mocked(api).mockImplementation(async (path) =>
+    path.endsWith('/capabilities')
+      ? new Promise((resolve) => {
+          finish = resolve;
+        })
+      : user,
+  );
+  const view = render(<AccountProfile key="old" />);
+  await screen.findByText('owner@example.test');
+  vi.mocked(api).mockImplementation(async (path) =>
+    path.endsWith('/capabilities')
+      ? {
+          ...numericCapability,
+          numericOtp: { available: false, reason: 'disabled' },
+        }
+      : { ...user, email: 'new@example.test' },
+  );
+  view.rerender(<AccountProfile key="new" />);
+  await screen.findByText('new@example.test');
+  await act(async () => finish(numericCapability));
+  expect(screen.queryByLabelText('Номер телефона для SMS')).toBeNull();
+  expect(
+    screen.getByText('Подтверждение коротким кодом пока недоступно.'),
+  ).toBeTruthy();
 });

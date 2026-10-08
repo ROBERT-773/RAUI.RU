@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isIP } from 'node:net';
 import { normalizeIp } from '@raui/config/ingress';
 export function isProduction(value: {
   NODE_ENV: string;
@@ -14,6 +15,42 @@ function safeUrl(value: string): URL | null {
   } catch {
     return null;
   }
+}
+export function validPhoneOtpUrl(value: string): boolean {
+  const url = safeUrl(value);
+  return (
+    !!url &&
+    url.protocol === 'https:' &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    (!url.port || url.port === '443') &&
+    !isIP(url.hostname) &&
+    !url.hostname.startsWith('[') &&
+    url.hostname.includes('.')
+  );
+}
+export function validPhoneOtpPepper(value: string): boolean {
+  return (
+    /^[A-Za-z0-9_-]+$/.test(value) &&
+    Buffer.from(value, 'base64url').length >= 32 &&
+    Buffer.from(value, 'base64url').toString('base64url') === value
+  );
+}
+export function phoneOtpCapability(config: {
+  PHONE_OTP_ENABLED: string;
+  PHONE_OTP_PEPPER?: string | undefined;
+  PHONE_OTP_GATEWAY_URL?: string | undefined;
+  PHONE_OTP_GATEWAY_TOKEN?: string | undefined;
+}): { available: boolean; reason: 'available' | 'disabled' | 'unconfigured' } {
+  if (config.PHONE_OTP_ENABLED !== 'true')
+    return { available: false, reason: 'disabled' };
+  return config.PHONE_OTP_PEPPER &&
+    config.PHONE_OTP_GATEWAY_URL &&
+    config.PHONE_OTP_GATEWAY_TOKEN
+    ? { available: true, reason: 'available' }
+    : { available: false, reason: 'unconfigured' };
 }
 export const envSchema = z
   .object({
@@ -103,6 +140,23 @@ export const envSchema = z
           !url.hash
         );
       }, 'CDN base requires clean credential-free HTTP(S) URL')
+      .optional(),
+    PHONE_OTP_ENABLED: z.enum(['true', 'false']).default('false'),
+    PHONE_OTP_PEPPER: z
+      .string()
+      .max(1024)
+      .refine(validPhoneOtpPepper)
+      .optional(),
+    PHONE_OTP_GATEWAY_URL: z
+      .string()
+      .max(2048)
+      .refine(validPhoneOtpUrl)
+      .optional(),
+    PHONE_OTP_GATEWAY_TOKEN: z
+      .string()
+      .min(16)
+      .max(4096)
+      .regex(/^[\x21-\x7e]+$/)
       .optional(),
     RESET_SMTP_ENABLED: z.enum(['true', 'false']).default('false'),
     RESET_SMTP_PASSWORD: z.string().min(1).optional(),

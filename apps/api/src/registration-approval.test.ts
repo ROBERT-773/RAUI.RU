@@ -167,3 +167,39 @@ test('decision replay requires a fresh approved staff actor', async () => {
     ForbiddenException,
   );
 });
+
+for (const [method, url, allowed] of [
+  ['GET', '/v1/auth/verification/phone/capabilities', true],
+  ['POST', '/v1/auth/verification/phone/otp', true],
+  ['POST', '/v1/auth/verification/phone/otp/confirm', true],
+  ['GET', '/v1/auth/verification/phone/otp', false],
+  ['POST', '/v1/auth/verification/phone/capabilities', false],
+  ['GET', '/v1/auth/verification/phone/otp/confirm', false],
+  ['POST', '/v1/auth/verification/phone/otp/confirm/extra', false],
+  ['POST', '/v1/auth/verification/phone/otp/', false],
+] as const) {
+  test(`pending OTP onboarding method boundary: ${method} ${url}`, async () => {
+    const guard = new SessionGuard(
+      {
+        rows: async () => [{ registration_approval_state: 'pending' }],
+      } as unknown as Database,
+      { getAllAndOverride: () => undefined } as unknown as Reflector,
+    );
+    const req = {
+      url,
+      method,
+      headers: { authorization: `Bearer ${'a'.repeat(43)}` },
+    };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => req }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    };
+    if (allowed) assert.equal(await guard.canActivate(context as never), true);
+    else
+      await assert.rejects(
+        guard.canActivate(context as never),
+        ForbiddenException,
+      );
+  });
+}

@@ -147,7 +147,7 @@ try {
     run,
   );
   console.log(
-    'Encrypted populated fixture restore verified with complete scratch cleanup: domain/history/audit,PostGIS,16 migrations and sequence identity',
+    'Encrypted populated fixture restore verified with complete scratch cleanup: domain/history/audit,PostGIS,17 migrations and sequence identity',
   );
 } catch {
   console.error(
