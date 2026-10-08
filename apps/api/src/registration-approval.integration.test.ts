@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
@@ -491,6 +492,139 @@ test('registration approval preserves existing users and enforces onboarding and
         assert.equal(active, 0);
       },
     );
+    for (const wait of ['idempotency', 'grant'] as const) {
+      for (const replay of [false, true]) {
+        await t.test(
+          `registration expired session after ${wait} wait denies ${replay ? 'cached replay' : 'fresh decision'}`,
+          async () => {
+            const reviewer = await fixture();
+            assert.equal(
+              (await grant(reviewer, 'registration.decide', true)).status,
+              200,
+            );
+            const user = await applicant();
+            await contacts(user);
+            const key = randomUUID();
+            if (replay)
+              assert.equal(
+                (await decision(user, reviewer, 'approve', key)).status,
+                201,
+              );
+            async function state() {
+              return (
+                await pool.query(
+                  `SELECT to_jsonb(u) AS applicant,to_jsonb(r) AS request,
+                (SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.id),'[]'::jsonb) FROM audit_events a WHERE a.entity_id=u.id::text AND a.action='admin.registration.decided') AS audit,
+                (SELECT coalesce(jsonb_agg(to_jsonb(i)),'[]'::jsonb) FROM idempotency_records i WHERE i.actor_id=$2 AND i.scope=$3 AND i.key=$4) AS ledger
+                FROM users u JOIN registration_approval_requests r ON r.user_id=u.id WHERE r.id=$1`,
+                  [
+                    user.request,
+                    reviewer.id,
+                    `registration:${user.request}`,
+                    key,
+                  ],
+                )
+              ).rows[0];
+            }
+            const before = await state();
+            const holder = await pool.connect();
+            let response: Promise<Response | Error> | undefined;
+            try {
+              await holder.query('BEGIN');
+              const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+                .rows[0].pid as number;
+              if (wait === 'idempotency') {
+                await holder.query(
+                  'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+                  [`${reviewer.id}:registration:${user.request}:${key}`],
+                );
+              } else {
+                await holder.query(
+                  "SELECT user_id FROM staff_permission_grants WHERE user_id=$1 AND permission='registration.decide' FOR UPDATE",
+                  [reviewer.id],
+                );
+                // The guard and session lookup run before expiry; the permission lock
+                // then forces the final authorization to happen after wall time expires.
+                await pool.query(
+                  "UPDATE sessions SET expires_at=clock_timestamp()+interval '3 seconds' WHERE user_id=$1 AND token_hash=$2",
+                  [reviewer.id, hash(reviewer.secret)],
+                );
+              }
+              response = fetch(
+                `${base}/v1/admin/registration-approvals/${user.request}/decision`,
+                {
+                  method: 'POST',
+                  signal: AbortSignal.timeout(15000),
+                  headers: {
+                    Authorization: `Bearer ${reviewer.secret}`,
+                    'Content-Type': 'application/json',
+                    'Idempotency-Key': key,
+                  },
+                  body: JSON.stringify({
+                    decision: 'approve',
+                    reason: 'Reviewed contact registration',
+                  }),
+                },
+              ).catch((error: unknown) =>
+                error instanceof Error
+                  ? error
+                  : new Error('Registration transport failed'),
+              );
+              const deadline = performance.now() + 8000;
+              let waiting = false;
+              while (performance.now() < deadline) {
+                waiting = (
+                  await pool.query(
+                    'SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))) AS waiting',
+                    [pid],
+                  )
+                ).rows[0].waiting as boolean;
+                if (waiting) break;
+                await setImmediate();
+              }
+              assert.ok(
+                waiting,
+                `HTTP decision must reach held ${wait} lock before expiry`,
+              );
+              if (wait === 'idempotency') {
+                const expired = await pool.query(
+                  'UPDATE sessions SET expires_at=clock_timestamp() WHERE user_id=$1 AND token_hash=$2 RETURNING id',
+                  [reviewer.id, hash(reviewer.secret)],
+                );
+                assert.equal(expired.rowCount, 1);
+              }
+              let expired = false;
+              while (performance.now() < deadline) {
+                expired = (
+                  await pool.query(
+                    'SELECT expires_at<=clock_timestamp() AS expired FROM sessions WHERE user_id=$1 AND token_hash=$2',
+                    [reviewer.id, hash(reviewer.secret)],
+                  )
+                ).rows[0].expired as boolean;
+                if (expired) break;
+                await setImmediate();
+              }
+              assert.ok(
+                expired,
+                'Persisted reviewer session must be expired before releasing the wait',
+              );
+            } finally {
+              await holder.query('ROLLBACK');
+              holder.release();
+              if (response) await response;
+            }
+            assert.ok(response);
+            const result = await response;
+            if (result instanceof Error) throw result;
+            await result.arrayBuffer();
+            assert.deepEqual(
+              { status: result.status, state: await state() },
+              { status: 403, state: before },
+            );
+          },
+        );
+      }
+    }
   } finally {
     await app.close();
     await pool.end();
