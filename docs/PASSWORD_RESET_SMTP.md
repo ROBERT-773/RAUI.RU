@@ -32,8 +32,11 @@ An existing `VERIFICATION_GATEWAY_URL` always takes priority. Failure of that
 gateway never falls back to SMTP. Enabled SMTP configuration must still be
 complete when a gateway is present. The production requirement for an HTTPS
 verification gateway is unchanged, so SMTP cannot replace that gateway in
-production under this contract. The SMTP path is currently usable in explicitly
-configured development/staging environments without a gateway.
+production under this contract. Direct SMTP requires both `NODE_ENV` and
+`DEPLOYMENT_ENV` to be non-production and no verification gateway configured.
+`DEPLOYMENT_ENV=staging` with `NODE_ENV=production` still requires the production
+verification gateway, which takes precedence over SMTP. Do not weaken production
+validation to activate direct SMTP.
 
 Local tests use a temporary synthetic certificate trusted only by the test
 connector and a loopback SMTP server. They exercise TLS, LOGIN, envelope, MIME
