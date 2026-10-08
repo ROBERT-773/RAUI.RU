@@ -123,6 +123,11 @@ const bodyContracts: Record<string, z.ZodType> = {
     push: z.boolean(),
   }),
 
+  'patch /v1/admin/users/{id}/permissions': object({
+    permission: z.enum(['moderation.read', 'moderation.decide']),
+    granted: z.boolean(),
+    reason: z.string().trim().min(3).max(2000),
+  }),
   'post /v1/auth/register': registerSchema,
   'post /v1/auth/login': loginSchema,
   'post /v1/auth/verification/phone': object({
@@ -382,6 +387,123 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (
+        [
+          'post /v1/auth/register',
+          'post /v1/auth/login',
+          'get /v1/auth/me',
+        ].includes(operationId)
+      ) {
+        const userSchema: SchemaObject = {
+          type: 'object',
+          required: [
+            'id',
+            'public_id',
+            'email',
+            'display_name',
+            'role',
+            'active',
+          ],
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            public_id: {
+              type: 'string',
+              pattern: '^[1-9][0-9]*$',
+              description:
+                'Permanent numeric identifier, encoded as a string; not an authentication secret',
+            },
+            email: { type: 'string', format: 'email' },
+            display_name: { type: 'string' },
+            role: {
+              type: 'string',
+              enum: ['buyer', 'owner', 'agent', 'agency', 'developer', 'admin'],
+            },
+            active: { type: 'boolean' },
+            phone: { type: 'string', nullable: true },
+            email_verified_at: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+            phone_verified_at: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+            ...(operationId === 'get /v1/auth/me'
+              ? {
+                  twoFactorEnabled: { type: 'boolean' as const, enum: [false] },
+                }
+              : {}),
+          },
+        };
+        operation.responses[operationId.startsWith('post') ? '201' : '200'] = {
+          description: 'Account identity; public_id is informational only',
+          content: {
+            'application/json': {
+              schema:
+                operationId === 'post /v1/auth/login'
+                  ? {
+                      type: 'object',
+                      required: ['user', 'csrfToken'],
+                      properties: {
+                        user: userSchema,
+                        csrfToken: { type: 'string' },
+                        sessionToken: {
+                          type: 'string',
+                          description: 'Bearer transport only',
+                        },
+                      },
+                    }
+                  : userSchema,
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/admin/moderation/{id}/materials') {
+        operation.description =
+          'Current pending-case materials for an administrator or staff with moderation.read; excludes private contacts, storage keys and authentication data.';
+      }
+      if (operationId.endsWith('/v1/admin/users/{id}/permissions')) {
+        operation.description =
+          'Administrator-only delegated moderation permissions. Changes require an audit reason and do not change account roles.';
+      }
+      if (
+        operationId ===
+        'get /v1/admin/moderation/{id}/media/{mediaId}/{variant}'
+      ) {
+        operation.description =
+          'Administrator or staff with moderation.read may inspect ready images belonging to the current pending moderation case. No public access or storage keys.';
+        operation.parameters = [
+          ...(operation.parameters ?? []).filter(
+            (p: ParameterObject | ReferenceObject) =>
+              !('name' in p && p.name === 'variant'),
+          ),
+          {
+            name: 'variant',
+            in: 'path',
+            required: true,
+            schema: {
+              type: 'string',
+              enum: ['thumb', 'small', 'large', 'avif'],
+            },
+          },
+        ];
+        operation.responses['200'] = {
+          description:
+            'Ready image for the current pending moderation case; private, no-store',
+          content: {
+            'image/webp': { schema: { type: 'string', format: 'binary' } },
+            'image/avif': { schema: { type: 'string', format: 'binary' } },
+          },
+        };
+        operation.responses['404'] = {
+          description: 'Current pending case or matching ready image not found',
+        };
+      }
       if (operationId === 'get /v1/auth/csrf') {
         operation.security = [{ cookie: [] }];
         operation.responses['200'] = {

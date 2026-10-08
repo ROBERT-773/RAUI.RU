@@ -5,19 +5,30 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await context.params;
+  const staffPermissionsRoute =
+    path[1] === 'admin' &&
+    path[2] === 'users' &&
+    ((path.length === 3 && request.method === 'GET') ||
+      (path.length === 5 &&
+        path[4] === 'permissions' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          path[3] ?? '',
+        ) &&
+        ['GET', 'PATCH'].includes(request.method)));
   if (
     path[0] !== 'v1' ||
-    ![
-      'auth',
-      'search',
-      'listings',
-      'account',
-      'media',
-      'geo',
-      'regions',
-      'catalog',
-      'categories',
-    ].includes(path[1] ?? '') ||
+    (!staffPermissionsRoute &&
+      ![
+        'auth',
+        'search',
+        'listings',
+        'account',
+        'media',
+        'geo',
+        'regions',
+        'catalog',
+        'categories',
+      ].includes(path[1] ?? '')) ||
     path.some((s) => !/^[a-zA-Z0-9_-]+$/.test(s))
   )
     return NextResponse.json({ message: 'Not found' }, { status: 404 });

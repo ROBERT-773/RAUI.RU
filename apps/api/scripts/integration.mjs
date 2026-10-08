@@ -15,6 +15,8 @@ if (
 for (const testFile of [
   'migration.integration.test.js',
   'core.integration.test.js',
+  'staff-permissions.integration.test.js',
+  'public-id.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',
   'professional.integration.test.js',

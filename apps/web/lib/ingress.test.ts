@@ -185,3 +185,50 @@ test('CSRF recovery proxy rejects cross-origin browser reads before contacting A
   }
   expect(fetch).not.toHaveBeenCalled();
 });
+
+test('staff permissions proxy forwards only the bounded admin routes', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const { GET, PATCH } = await import('../app/api/[...path]/route');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const id = '11111111-1111-4111-8111-111111111111';
+  const path = ['v1', 'admin', 'users', id, 'permissions'];
+  const granted = await PATCH(
+    new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+      method: 'PATCH',
+      headers: {
+        origin: 'https://staging.raui.ru',
+        'x-csrf-token': 'fixture-csrf',
+      },
+      body: '{}',
+    }),
+    { params: Promise.resolve({ path }) },
+  );
+  expect(granted.status).toBe(200);
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(fetcher.mock.calls[0]?.[0]).toBe(
+    'http://127.0.0.1:3001/v1/admin/users/' + id + '/permissions',
+  );
+  const denied = await GET(
+    new NextRequest('https://staging.raui.ru/api/v1/admin/audit'),
+    { params: Promise.resolve({ path: ['v1', 'admin', 'audit'] }) },
+  );
+  expect(denied.status).toBe(404);
+  const wrongMethod = await PATCH(
+    new NextRequest('https://staging.raui.ru/api/v1/admin/users', {
+      method: 'PATCH',
+      headers: { origin: 'https://staging.raui.ru' },
+      body: '{}',
+    }),
+    { params: Promise.resolve({ path: ['v1', 'admin', 'users'] }) },
+  );
+  expect(wrongMethod.status).toBe(404);
+  expect(fetcher).toHaveBeenCalledOnce();
+});

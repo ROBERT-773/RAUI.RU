@@ -404,3 +404,36 @@ test('CSRF recovery OpenAPI requires cookie authentication and exposes only the 
   assert.ok(operation.responses['200']);
   assert.ok(operation.responses['401']);
 });
+
+test('Moderation image OpenAPI describes private binary images and restricts variants', () => {
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'Test', version: '1' },
+    paths: {
+      '/v1/admin/moderation/{id}/media/{mediaId}/{variant}': {
+        get: { responses: {} },
+      },
+    },
+  };
+  enrichOpenApi(document);
+  const operation =
+    document.paths['/v1/admin/moderation/{id}/media/{mediaId}/{variant}']!.get!;
+  assert.match(operation.description!, /moderation.read/);
+  assert.deepEqual(operation.responses['200'], {
+    description:
+      'Ready image for the current pending moderation case; private, no-store',
+    content: {
+      'image/webp': { schema: { type: 'string', format: 'binary' } },
+      'image/avif': { schema: { type: 'string', format: 'binary' } },
+    },
+  });
+  const variant = operation.parameters!.find(
+    (p) => 'name' in p && p.name === 'variant',
+  );
+  assert.deepEqual(variant, {
+    name: 'variant',
+    in: 'path',
+    required: true,
+    schema: { type: 'string', enum: ['thumb', 'small', 'large', 'avif'] },
+  });
+});

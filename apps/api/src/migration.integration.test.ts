@@ -84,7 +84,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'schema_migrations' ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -94,7 +94,9 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
             ? "to_jsonb(t)-'enqueued_at'"
             : tablename === 'addresses'
               ? "to_jsonb(t)-'region_code'"
-              : 'to_jsonb(t)';
+              : tablename === 'users'
+                ? "to_jsonb(t)-'public_id'"
+                : 'to_jsonb(t)';
         const rows = (
           await pool.query(
             `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
@@ -109,7 +111,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       const sequences = [];
       for (const config of (
         await pool.query(
-          "SELECT sequencename,data_type::text,start_value,min_value,max_value,increment_by,cycle,cache_size FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename",
+          "SELECT sequencename,data_type::text,start_value,min_value,max_value,increment_by,cycle,cache_size FROM pg_sequences WHERE schemaname='public' AND sequencename<>'users_public_id_seq' ORDER BY sequencename",
         )
       ).rows) {
         const state = (
@@ -137,7 +139,31 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 13);
+    assert.equal(upgradedLedger.length, 15);
+    for (const [index, name] of [
+      [13, '014_user_public_id.sql'],
+      [14, '015_staff_permissions.sql'],
+    ] as const) {
+      assert.equal(upgradedLedger[index].name, name);
+      assert.equal(
+        upgradedLedger[index].checksum,
+        createHash('sha256')
+          .update(await readFile('migrations/' + name))
+          .digest('hex'),
+      );
+    }
+    const identity = (
+      await pool.query('SELECT public_id::text FROM users WHERE id=$1', [user])
+    ).rows[0];
+    assert.match(identity.public_id, /^[1-9][0-9]*$/);
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT count(*)::int AS count FROM staff_permission_grants',
+        )
+      ).rows[0].count,
+      0,
+    );
     assert.equal(upgradedLedger[12].name, '013_region_search.sql');
     assert.equal(
       upgradedLedger[12].checksum,

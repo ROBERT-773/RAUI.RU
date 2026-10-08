@@ -10,13 +10,18 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { z } from 'zod';
+import type { Response } from 'express';
+import { ObjectStorage, StorageModule } from '../media/storage';
 import {
   AdminOnly,
+  StaffPermissionOnly,
+  staffPermissions,
   Actor,
   CurrentActor,
   Idempotency,
@@ -37,6 +42,7 @@ export class Administration {
     private readonly listings: Listings,
     private readonly idem: Idempotency,
     private readonly trust: Trust,
+    private readonly storage: ObjectStorage,
   ) {}
   async mediaJobs() {
     return this.db.rows(
@@ -122,6 +128,65 @@ export class Administration {
       return row;
     });
   }
+  async permissions(id: string) {
+    const [user] = await this.db.rows('SELECT id FROM users WHERE id=$1', [
+      parse(uuid, id),
+    ]);
+    if (!user) throw new NotFoundException();
+    const grants = await this.db.rows<{ permission: string }>(
+      'SELECT permission FROM staff_permission_grants WHERE user_id=$1 ORDER BY permission',
+      [id],
+    );
+    return { userId: id, permissions: grants.map((grant) => grant.permission) };
+  }
+  async permission(actor: Actor, id: string, body: unknown) {
+    verified(actor);
+    if (actor.role !== 'admin') throw new ForbiddenException();
+    parse(uuid, id);
+    if (id === actor.id)
+      throw new ForbiddenException('Cannot change own admin privileges');
+    const input = parse(
+      z
+        .object({
+          permission: z.enum(staffPermissions),
+          granted: z.boolean(),
+          reason: z.string().trim().min(3).max(2000),
+        })
+        .strict(),
+      body,
+    );
+    return this.db.transaction(async (sql) => {
+      const [user] = await this.db.rows(
+        'SELECT id FROM users WHERE id=$1 FOR UPDATE',
+        [id],
+        sql,
+      );
+      if (!user) throw new NotFoundException();
+      if (input.granted)
+        await sql.query(
+          'INSERT INTO staff_permission_grants(user_id,permission,granted_by) VALUES($1,$2,$3) ON CONFLICT(user_id,permission) DO NOTHING',
+          [id, input.permission, actor.id],
+        );
+      else
+        await sql.query(
+          'DELETE FROM staff_permission_grants WHERE user_id=$1 AND permission=$2',
+          [id, input.permission],
+        );
+      await this.audit.record(
+        sql,
+        actor.id,
+        'admin.staff.permission.changed',
+        'user',
+        id,
+        input,
+      );
+      return {
+        userId: id,
+        permission: input.permission,
+        granted: input.granted,
+      };
+    });
+  }
   async organization(actor: Actor, id: string, body: unknown) {
     verified(actor);
     const input = parse(z.object({ active: z.boolean() }).strict(), body);
@@ -159,6 +224,43 @@ export class Administration {
     return this.db.rows(
       "SELECT * FROM moderation_cases WHERE state='pending' ORDER BY created_at LIMIT 100",
     );
+  }
+  async materials(id: string) {
+    const [row] = await this.db.rows(
+      `SELECT c.id AS "caseId",c.listing_version AS "listingVersion",
+        jsonb_build_object('id',l.id,'title',l.title,'description',l.description,'price',l.price,'deal_type',l.deal_type,'version',l.version) AS listing,
+        jsonb_build_object('id',p.id,'category_code',p.category_code,'attributes',p.attributes,'address',a.formatted) AS property,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'kind',m.kind,'state',m.state) ORDER BY m.id) FROM media m WHERE m.listing_id=l.id),'[]'::jsonb) AS media
+       FROM moderation_cases c JOIN listings l ON l.id=c.listing_id
+       JOIN properties p ON p.id=l.property_id JOIN addresses a ON a.id=p.address_id
+       WHERE c.id=$1 AND c.state='pending' AND l.status='moderation' AND c.listing_version=l.version`,
+      [parse(uuid, id)],
+    );
+    if (!row) throw new NotFoundException();
+    return row;
+  }
+  async materialImage(
+    caseId: string,
+    mediaId: string,
+    variant: string,
+    res: Response,
+  ) {
+    const [row] = await this.db.rows<{
+      variants: Record<string, { key: string; mime: string }>;
+    }>(
+      `SELECT m.variants FROM moderation_cases c JOIN listings l ON l.id=c.listing_id
+       JOIN media m ON m.listing_id=l.id WHERE c.id=$1 AND m.id=$2
+       AND c.state='pending' AND l.status='moderation' AND c.listing_version=l.version AND m.state='ready'`,
+      [parse(uuid, caseId), parse(uuid, mediaId)],
+    );
+    const image =
+      row?.variants[
+        parse(z.enum(['thumb', 'small', 'large', 'avif']), variant)
+      ];
+    if (!image) throw new NotFoundException();
+    res.setHeader('Content-Type', image.mime);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(await this.storage.get(image.key));
   }
   async decision(actor: Actor, id: string, body: unknown, key: unknown) {
     verified(actor);
@@ -276,6 +378,16 @@ export class AdminController {
   ) {
     return this.admin.user(actor, id, body);
   }
+  @Get('users/:id/permissions') permissions(@Param('id') id: string) {
+    return this.admin.permissions(id);
+  }
+  @Patch('users/:id/permissions') permission(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.admin.permission(actor, id, body);
+  }
   @Patch('organizations/:id') organization(
     @CurrentActor() actor: Actor,
     @Param('id') id: string,
@@ -286,10 +398,29 @@ export class AdminController {
   @Get('audit') audit(@Query() query: unknown) {
     return this.admin.auditLog(query);
   }
-  @Get('moderation') cases() {
+  @StaffPermissionOnly('moderation.read')
+  @Get('moderation')
+  cases() {
     return this.admin.cases();
   }
-  @Post('moderation/:id/decision') decision(
+  @StaffPermissionOnly('moderation.read')
+  @Get('moderation/:id/materials')
+  materials(@Param('id') id: string) {
+    return this.admin.materials(id);
+  }
+  @StaffPermissionOnly('moderation.read')
+  @Get('moderation/:id/media/:mediaId/:variant')
+  materialImage(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @Param('variant') variant: string,
+    @Res() res: Response,
+  ) {
+    return this.admin.materialImage(id, mediaId, variant, res);
+  }
+  @StaffPermissionOnly('moderation.decide')
+  @Post('moderation/:id/decision')
+  decision(
     @CurrentActor() actor: Actor,
     @Param('id') id: string,
     @Body() body: unknown,
@@ -299,7 +430,7 @@ export class AdminController {
   }
 }
 @Module({
-  imports: [ListingsModule, TrustModule],
+  imports: [ListingsModule, TrustModule, StorageModule],
   controllers: [AdminController],
   providers: [Administration, Idempotency],
 })
