@@ -269,7 +269,11 @@ test('delegated moderation permissions require explicit admin grants and respect
         key,
       );
     }
-    async function revokeWhileWaiting(caseId: string, key: string) {
+    async function revokeWhileWaiting(
+      caseId: string,
+      key: string,
+      invalidate?: () => Promise<void>,
+    ) {
       const holder = await pool.connect();
       let response: Promise<Response | Error> | undefined;
       try {
@@ -312,17 +316,20 @@ test('delegated moderation permissions require explicit admin grants and respect
           waiting,
           'HTTP decision must reach the held idempotency lock',
         );
-        assert.equal((await grant('moderation.decide', false)).status, 200);
-        assert.equal(
-          (
-            await pool.query(
-              "SELECT count(*)::int AS n FROM staff_permission_grants WHERE user_id=$1 AND permission='moderation.decide'",
-              [staff.id],
-            )
-          ).rows[0].n,
-          0,
-          'Admin revocation must commit before the decision resumes',
-        );
+        if (invalidate) await invalidate();
+        else {
+          assert.equal((await grant('moderation.decide', false)).status, 200);
+          assert.equal(
+            (
+              await pool.query(
+                "SELECT count(*)::int AS n FROM staff_permission_grants WHERE user_id=$1 AND permission='moderation.decide'",
+                [staff.id],
+              )
+            ).rows[0].n,
+            0,
+            'Admin revocation must commit before the decision resumes',
+          );
+        }
       } finally {
         await holder.query('ROLLBACK');
         holder.release();
@@ -365,6 +372,40 @@ test('delegated moderation permissions require explicit admin grants and respect
         );
       },
     );
+    for (const boundary of ['revoked', 'expired'] as const) {
+      await t.test(
+        `moderation ${boundary} session after idempotency wait prevents mutation and replay`,
+        async () => {
+          assert.equal((await grant('moderation.decide', true)).status, 200);
+          for (const replay of [false, true]) {
+            const caseId = await pending(other.id);
+            const key = randomUUID();
+            if (replay) assert.equal((await reject(caseId, key)).status, 201);
+            const before = await decisionState(caseId, key);
+            try {
+              const status = await revokeWhileWaiting(caseId, key, async () => {
+                const result = await pool.query(
+                  boundary === 'revoked'
+                    ? 'UPDATE sessions SET revoked_at=clock_timestamp() WHERE user_id=$1 AND token_hash=$2 RETURNING id'
+                    : 'UPDATE sessions SET expires_at=clock_timestamp() WHERE user_id=$1 AND token_hash=$2 RETURNING id',
+                  [staff.id, hash(staff.secret)],
+                );
+                assert.equal(result.rowCount, 1);
+              });
+              assert.deepEqual(
+                { status, state: await decisionState(caseId, key) },
+                { status: 403, state: before },
+              );
+            } finally {
+              await pool.query(
+                "UPDATE sessions SET revoked_at=NULL,expires_at=clock_timestamp()+interval '1 day' WHERE user_id=$1 AND token_hash=$2",
+                [staff.id, hash(staff.secret)],
+              );
+            }
+          }
+        },
+      );
+    }
   } finally {
     await app.get(ObjectStorage).delete(mediaKey);
     await app.close();
