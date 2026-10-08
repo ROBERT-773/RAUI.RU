@@ -24,6 +24,10 @@ Final local real-browser run passed all28 desktop/Android Chromium cases, includ
 
 Initial integration runs correctly failed historical hardcoded15-migration and idempotent-operation expectations. Updated explicit expectations and checksum/schema-preservation checks; the complete rerun passed. Independent review found stale authenticated UI after rejection; reproduced with failing tests and fixed. Some agent UI test-first execution was initially blocked by the system pnpm launcher; no observed red-first claim is made for those tests.
 
+The first exact-head CI run37757347731 failed its Production smoke step after the browser suite passed. Reproduced locally: the historical core smoke attempted property creation for a newly registered, verified but still pending owner and received403. Corrected only the local smoke fixture: a separate trusted synthetic administrator approves real registered applicants through the audited registration API before domain actions. The existing operator bootstrap remains unchanged and its session revocation is asserted. Local-only adapter/database guards remain in place; no production authorization bypass was added.
+
+The corrected built-service core smoke passed registration, verification, staff approval, operator bootstrap, property/listing creation, separate media-worker processing, moderation, public media and session revocation. Commerce/professional/trust worker one-shot runs, search reconciliation and built search/map/selection/SSR smoke also passed. An intermediate repeated smoke run hit the existing shared auth rate limit; the rerun waited for the normal window without disabling or clearing limits. Lint, typecheck, full unit tests and build passed again. Updated exact-head CI evidence belongs in the PR; the initial failed run is not reported as successful.
+
 ## Limits
 
 No real email/SMS was dispatched. Live verification gateway acceptance, numeric SMS/call codes, phone-first registration/login, ESIA/social/Sber and recovery approval remain separate work. The existing email password-reset flow remains functional and does not yet require staff approval.
