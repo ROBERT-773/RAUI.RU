@@ -624,7 +624,9 @@ test('Password recovery reaches the API anonymously and removes invalid reset fr
     'Если аккаунт с этим email существует',
   );
   await page.goto('/account/reset-password#token=invalid');
-  await expect(page.getByRole('alert')).toContainText('Ссылка недействительна');
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' }),
+  ).toBeVisible();
   await expect(page).toHaveURL(/\/account\/reset-password$/);
   await expect(
     page.getByRole('button', { name: 'Сохранить пароль' }),
