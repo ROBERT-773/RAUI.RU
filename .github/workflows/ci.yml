@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   checks:
+    name: RAUI CI
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
