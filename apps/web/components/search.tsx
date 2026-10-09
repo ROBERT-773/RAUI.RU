@@ -39,6 +39,7 @@ function SearchView({
   const router = useRouter();
   const [navigationPending, startNavigation] = useTransition();
   const [requestRevision, setRequestRevision] = useState(0);
+  const [advancedCategory, setAdvancedCategory] = useState<string | null>(null);
   const [page, setPage] = useState<SearchPage | null>(null),
     [error, setError] = useState(''),
     [loading, setLoading] = useState(true),
@@ -121,9 +122,24 @@ function SearchView({
         onSubmit={(e) => {
           e.preventDefault();
           const data = new FormData(e.currentTarget);
+          // Guard Enter/programmatic submits as well as the disabled button.
+          if (
+            data.get('advancedCategory') !==
+            (data.get('category') || 'apartment')
+          ) {
+            setNotice('Дождитесь загрузки фильтров или повторите загрузку.');
+            return;
+          }
+          const advanced = advancedDefinition(
+            data,
+            filterCategory === (definition.category ?? 'apartment')
+              ? definition.attributes
+              : undefined,
+          );
+          setNotice('');
           update({
             ...definition,
-            ...advancedDefinition(data),
+            ...advanced,
             q: String(data.get('q') ?? ''),
             category: String(data.get('category') || '') || undefined,
             dealType: (String(data.get('dealType') || '') ||
@@ -134,7 +150,7 @@ function SearchView({
             },
             locality: String(data.get('locality') || '') || undefined,
             attributes: {
-              ...advancedDefinition(data).attributes,
+              ...advanced.attributes,
               ...Object.fromEntries(
                 ['rooms', 'area'].flatMap((attribute) => {
                   const min = data.get(attribute + 'Min');
@@ -320,8 +336,16 @@ function SearchView({
             <option value="area_desc">Площадь</option>
           </select>
         </label>
-        <AdvancedFilters category={filterCategory} definition={definition} />
-        <Button className="primary" type="submit">
+        <AdvancedFilters
+          category={filterCategory}
+          definition={definition}
+          onReadyCategory={setAdvancedCategory}
+        />
+        <Button
+          className="primary"
+          type="submit"
+          disabled={advancedCategory !== filterCategory}
+        >
           Найти
         </Button>
       </form>
