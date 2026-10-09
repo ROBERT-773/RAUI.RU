@@ -12,7 +12,7 @@ jobs:
   checks:
     name: RAUI CI
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +33,11 @@ jobs:
       - run: pnpm observability:check
       - run: pnpm security:check
       - run: pnpm build
+      - name: Runtime image build and contract
+        run: |
+          node scripts/runtime-image-build.mjs --site-url http://127.0.0.1:3000 --environment staging
+          RUNTIME_IMAGE_ID=$(docker image inspect --format '{{.Id}}' raui-runtime:local)
+          docker run --rm --network=none --entrypoint node "$RUNTIME_IMAGE_ID" scripts/runtime-image-check.mjs
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm test:integration
       - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
