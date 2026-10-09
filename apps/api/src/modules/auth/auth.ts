@@ -5,12 +5,14 @@ import {
   Post,
   Param,
   Res,
+  Req,
   Module,
   Injectable,
   BadRequestException,
   UnauthorizedException,
   NotFoundException,
   Delete,
+  ForbiddenException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -18,6 +20,7 @@ import { Database } from '../database/database';
 import { Audit } from '../audit/audit';
 import {
   Actor,
+  AuthRequest,
   CurrentActor,
   Public,
   hash,
@@ -335,6 +338,16 @@ export class AuthController {
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);
+  }
+  @Get('csrf') csrf(
+    @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    if (req.headers.origin && req.headers.origin !== loadConfig().WEB_ORIGIN)
+      throw new ForbiddenException('Origin rejected');
+    if (!req.csrfRecoveryToken) throw new UnauthorizedException();
+    res.setHeader('Cache-Control', 'no-store');
+    return { csrfToken: req.csrfRecoveryToken };
   }
   @Post('logout') logout(
     @CurrentActor() actor: Actor,

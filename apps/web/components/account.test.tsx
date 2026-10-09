@@ -16,6 +16,20 @@ vi.mock('next/link', () => ({
     href: string;
   }) => <a href={href}>{children}</a>,
 }));
+function stubFetch(
+  name: string,
+  implementation: (input: string, init?: RequestInit) => Promise<unknown>,
+) {
+  vi.stubGlobal(name, (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/api/v1/auth/csrf'
+      ? Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ csrfToken: 'test-session-csrf' }),
+        } as Response)
+      : implementation(String(input), init),
+  );
+}
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -27,7 +41,7 @@ for (const delayed of [false, true]) {
     let identity = 'A';
     let release: (() => void) | undefined;
     const privateMessage = 'Private message belonging only to A';
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string) => {
         let value: unknown = { items: [], cursor: null };
@@ -96,7 +110,7 @@ for (const delayed of [false, true]) {
 
 test('Late favorites response cannot replace selected comparison cards or pagination', async () => {
   let release: (() => void) | undefined;
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string) => {
       let value: unknown = { items: [], cursor: null };
@@ -149,7 +163,7 @@ for (const mutation of ['favorite-delete', 'saved-rename', 'saved-delete']) {
       price: 100,
       address: 'Fixture address',
     };
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string, options?: { method?: string }) => {
         let value: unknown = { items: [], cursor: null };
@@ -225,7 +239,7 @@ for (const mutation of ['favorite-delete', 'saved-rename', 'saved-delete']) {
 for (const delayed of ['open', 'page', 'send']) {
   test(`Late thread A ${delayed} preserves thread B messages, cursor and draft`, async () => {
     let release: (() => void) | undefined;
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string, options?: { method?: string }) => {
         let value: unknown = { items: [], cursor: null };
@@ -319,7 +333,7 @@ for (const delayed of ['open', 'page', 'send']) {
 for (const delay of ['read', 'threads', 'none']) {
   test(`Notification ${delay} completion respects current navigation`, async () => {
     let release: (() => void) | undefined;
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string) => {
         let value: unknown = { items: [], cursor: null };
@@ -391,7 +405,7 @@ for (const delay of ['read', 'threads', 'none']) {
 
 test('Successful send refreshes the selected thread and clears its submitted draft', async () => {
   let sent = false;
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string, options?: { method?: string }) => {
       let value: unknown = { items: [], cursor: null };
@@ -432,7 +446,7 @@ test('Successful send refreshes the selected thread and clears its submitted dra
 });
 
 test('Selected thread pagination appends older messages and consumes its cursor', async () => {
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string) => {
       let value: unknown = { items: [], cursor: null };

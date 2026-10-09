@@ -12,12 +12,26 @@ vi.mock('next/link', () => ({
     href: string;
   }) => <a href={href}>{children}</a>,
 }));
+function stubFetch(
+  name: string,
+  implementation: (input: string, init?: RequestInit) => Promise<unknown>,
+) {
+  vi.stubGlobal(name, (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/api/v1/auth/csrf'
+      ? Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ csrfToken: 'test-session-csrf' }),
+        } as Response)
+      : implementation(String(input), init),
+  );
+}
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 test('loading → empty results and accessible filters', async () => {
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn().mockResolvedValue({
       ok: true,
@@ -41,7 +55,7 @@ test('loading → empty results and accessible filters', async () => {
 });
 test('API error is actionable and retry reissues the request', async () => {
   const fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
-  vi.stubGlobal('fetch', fetch);
+  stubFetch('fetch', fetch);
   render(<SearchProduct />);
   expect(await screen.findByRole('alert')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));

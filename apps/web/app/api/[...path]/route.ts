@@ -21,6 +21,16 @@ async function proxy(
   )
     return NextResponse.json({ message: 'Not found' }, { status: 404 });
   const mutation = !['GET', 'HEAD'].includes(request.method);
+  const csrfRecovery = path.join('/') === 'v1/auth/csrf';
+  if (
+    csrfRecovery &&
+    ((request.headers.get('origin') !== null &&
+      request.headers.get('origin') !==
+        (process.env.WEB_ORIGIN ?? new URL(request.url).origin)) ||
+      (request.headers.get('sec-fetch-site') !== null &&
+        request.headers.get('sec-fetch-site') !== 'same-origin'))
+  )
+    return NextResponse.json({ message: 'Invalid origin' }, { status: 403 });
   if (
     mutation &&
     request.headers.get('origin') !==
