@@ -396,6 +396,9 @@ test('saved search create, rename, reopen and delete persist', async ({
   const created = (await create.json()) as SavedRow;
   const article = await savedArticle(page, created.id);
   expect(article).not.toBeNull();
+  await expect(
+    article!.getByText('Цена: до 15\u00a0000\u00a0000 ₽', { exact: false }),
+  ).toBeVisible();
   const name = `RC ${info.project.name} ${created.id}`;
   await article!.getByLabel('Название', { exact: true }).fill(name);
   const path = '/api/v1/account/saved-searches/' + created.id;
