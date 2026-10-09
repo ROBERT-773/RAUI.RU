@@ -92,6 +92,20 @@ jobs:
           JS
           cd .cache
           sha256sum runtime-image.tar.gz runtime-image-receipt.json > runtime-image-sha256.txt
+      - name: Restore saved runtime archive
+        run: |
+          set -o pipefail
+          node scripts/runtime-image-archive.mjs "$(git rev-parse HEAD)" "$GITHUB_RUN_ID"
+          RUNTIME_IMAGE_ID=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".cache/runtime-image-receipt.json", "utf8")).imageId)')
+          [[ "$RUNTIME_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker image rm -f "$RUNTIME_IMAGE_ID"
+          if docker image inspect "$RUNTIME_IMAGE_ID" > /dev/null 2>&1; then
+            echo 'Original runtime image still present before archive restore' >&2
+            exit 1
+          fi
+          gzip -dc .cache/runtime-image.tar.gz | docker load
+          test "$(docker image inspect --format '{{.Id}}' "$RUNTIME_IMAGE_ID")" = "$RUNTIME_IMAGE_ID"
+          docker run --rm --network=none --entrypoint node "$RUNTIME_IMAGE_ID" scripts/runtime-image-check.mjs
       - name: Release and rollback artifact dry-run
         run: |
           node scripts/release-contract.mjs create .cache/phase4d-release.json "$(git rev-parse HEAD)"

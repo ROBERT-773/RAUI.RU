@@ -125,3 +125,12 @@ image ID and source labels. The receipt and SHA256 files provide integrity and
 identity evidence, not a registry signature or external attestation. The build
 origin remains `http://127.0.0.1:3000`; production requires its own public build
 configuration, policy-compatible artifact and separately authorized acceptance.
+
+Before release verification, CI verifies the archive bytes against the bound
+receipt, removes the original local image and confirms it is absent, loads the
+saved archive, checks the restored immutable image ID and runs the offline image
+contract from the restored image. This confirms archive restoration rather than
+reusing the original runner image. Downloaded archives can be checked with
+`node /trusted/checkout/scripts/runtime-image-archive.mjs <source-sha> <ci-run-id>`
+from an artifact root containing `.cache/runtime-image-receipt.json` and
+`.cache/runtime-image.tar.gz`, after the receipt passes trusted release verification.
