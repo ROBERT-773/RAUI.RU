@@ -1,5 +1,11 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import {
+  act,
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+} from '@testing-library/react';
 import SearchProduct from './search';
 import type { SearchDefinition } from '@raui/types/product';
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
@@ -62,6 +68,173 @@ function routedDefinition() {
     ) as SearchDefinition,
   };
 }
+async function submitReadySearch() {
+  const submit = screen.getByRole('button', { name: 'Найти' });
+  await vi.waitFor(() => expect(submit).toHaveProperty('disabled', false));
+  fireEvent.click(submit);
+}
+test('pending or failed advanced lookup blocks form submission until retry safely restores saved attributes', async () => {
+  const replies: {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+  }[] = [];
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => ({
+      ok: true,
+      json: () =>
+        url.includes('/categories/')
+          ? new Promise((resolve, reject) => replies.push({ resolve, reject }))
+          : Promise.resolve({
+              items: [],
+              total: 0,
+              totalIsEstimate: false,
+              cursor: null,
+              facets: {},
+            }),
+    })),
+  );
+  const view = render(
+    <SearchProduct
+      initialDefinition={{
+        category: 'apartment',
+        attributes: {
+          elevator: false,
+          floor: { max: 8 },
+          unseen: 'saved',
+        },
+      }}
+    />,
+  );
+  await screen.findByText(/Объявления не найдены/);
+  const form = view.container.querySelector('form')!;
+  fireEvent.submit(form);
+  expect(replace).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Найти' })).toHaveProperty(
+    'disabled',
+    true,
+  );
+  await act(async () => replies[0]!.reject(new Error('unavailable')));
+  fireEvent.submit(form);
+  expect(replace).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: /Повторить.*фильтр/ }));
+  await vi.waitFor(() => expect(replies).toHaveLength(2));
+  await act(async () =>
+    replies[1]!.resolve([
+      { code: 'elevator', name: 'Лифт', kind: 'boolean', options: [] },
+      { code: 'floor', name: 'Этаж', kind: 'number', options: [] },
+    ]),
+  );
+  expect(screen.getByRole('button', { name: 'Найти' })).toHaveProperty(
+    'disabled',
+    false,
+  );
+  fireEvent.submit(form);
+  expect(routedDefinition().definition.attributes).toEqual({
+    elevator: false,
+    floor: { max: 8 },
+    unseen: 'saved',
+  });
+  fireEvent.change(screen.getByLabelText('Лифт'), { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText('До'), { target: { value: '' } });
+  fireEvent.submit(form);
+  expect(routedDefinition().definition.attributes).toEqual({ unseen: 'saved' });
+});
+test('category submission waits for current fields and visibly removes prior-category attributes', async () => {
+  const replies: ((value: unknown) => void)[] = [];
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => ({
+      ok: true,
+      json: () =>
+        url.includes('/categories/')
+          ? new Promise((resolve) => replies.push(resolve))
+          : Promise.resolve({
+              items: [],
+              total: 0,
+              totalIsEstimate: false,
+              cursor: null,
+              facets: {},
+            }),
+    })),
+  );
+  const view = render(
+    <SearchProduct
+      initialDefinition={{
+        category: 'apartment',
+        attributes: { elevator: false, rooms: { min: 2, max: 4 } },
+      }}
+    />,
+  );
+  await vi.waitFor(() => expect(replies).toHaveLength(1));
+  await act(async () =>
+    replies[0]!([
+      { code: 'elevator', name: 'Лифт', kind: 'boolean', options: [] },
+    ]),
+  );
+  fireEvent.change(screen.getByLabelText('Объект'), {
+    target: { value: 'house' },
+  });
+  fireEvent.submit(view.container.querySelector('form')!);
+  expect(replace).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('Лифт')).toBeNull();
+  await vi.waitFor(() => expect(replies).toHaveLength(2));
+  await act(async () =>
+    replies[1]!([
+      { code: 'elevator', name: 'Лифт', kind: 'boolean', options: [] },
+    ]),
+  );
+  expect(screen.getByLabelText('Лифт')).toHaveProperty('value', '');
+  expect(screen.getByText(/фильтры.*предыдущ.*категории/i)).toBeTruthy();
+  fireEvent.submit(view.container.querySelector('form')!);
+  expect(routedDefinition().definition.attributes).toEqual({
+    rooms: { min: 2, max: 4 },
+  });
+  expect(routedDefinition().definition.category).toBe('house');
+});
+test('a saved enum value omitted by the lookup remains visible and survives until deliberately cleared', async () => {
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes('/categories/')
+          ? [
+              {
+                code: 'finish',
+                name: 'Отделка',
+                kind: 'enum',
+                options: ['modern'],
+              },
+            ]
+          : {
+              items: [],
+              total: 0,
+              totalIsEstimate: false,
+              cursor: null,
+              facets: {},
+            },
+    })),
+  );
+  const view = render(
+    <SearchProduct
+      initialDefinition={{
+        category: 'apartment',
+        attributes: { finish: 'legacy' },
+      }}
+    />,
+  );
+  await screen.findByLabelText('Отделка');
+  expect(screen.getByLabelText('Отделка')).toHaveProperty('value', 'legacy');
+  expect(screen.getByText(/legacy.*сохранённое значение/)).toBeTruthy();
+  fireEvent.submit(view.container.querySelector('form')!);
+  expect(routedDefinition().definition.attributes).toEqual({
+    finish: 'legacy',
+  });
+  fireEvent.change(screen.getByLabelText('Отделка'), { target: { value: '' } });
+  fireEvent.submit(view.container.querySelector('form')!);
+  expect(routedDefinition().definition.attributes).toEqual({});
+});
 test('same-route navigation restores the executed definition, visible fields and mode', async () => {
   const fetch = captureSearch();
   const view = render(
@@ -123,7 +296,7 @@ for (const attributes of [
         screen.getByLabelText('Площадь до, м²') as HTMLInputElement
       ).checkValidity(),
     ).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+    await submitReadySearch();
     await vi.waitFor(() => expect(replace).toHaveBeenCalled());
     const { url, definition } = routedDefinition();
     expect(definition.attributes).toEqual(attributes);
@@ -166,7 +339,7 @@ test('range edits preserve the other endpoint, accept zero and clear only the in
   fireEvent.change(screen.getByLabelText('Площадь от, м²'), {
     target: { value: '' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+  await submitReadySearch();
   let current = routedDefinition();
   expect(current.definition.attributes).toEqual({
     rooms: { min: 0, max: 4 },
@@ -177,7 +350,7 @@ test('range edits preserve the other endpoint, accept zero and clear only the in
   await screen.findByText(/Объявления не найдены/);
   for (const label of ['Комнат от', 'Комнат до', 'Площадь до, м²'])
     fireEvent.change(screen.getByLabelText(label), { target: { value: '' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+  await submitReadySearch();
   current = routedDefinition();
   expect(current.definition.attributes).toEqual({});
 });
@@ -201,7 +374,11 @@ test('a late previous-search response cannot replace the new route or finish its
   await vi.waitFor(() => expect(replies).toHaveLength(2));
   replies[0]!({ items: [], total: 999, facets: {} });
   await vi.waitFor(() =>
-    expect(screen.getByRole('status').textContent).toContain('Загрузка'),
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((status) => status.textContent?.includes('Загрузка')),
+    ).toBe(true),
   );
   expect(screen.queryByText(/999/)).toBeNull();
   replies[1]!({ items: [], total: 7, facets: {} });
@@ -210,13 +387,20 @@ test('a late previous-search response cannot replace the new route or finish its
 test('loading → empty results and accessible filters', async () => {
   stubFetch(
     'fetch',
-    vi.fn().mockResolvedValue({
+    vi.fn(async (url: string) => ({
       ok: true,
-      json: async () => ({ items: [], total: 0, cursor: null, facets: {} }),
-    }),
+      json: async () =>
+        url.includes('/categories/')
+          ? []
+          : { items: [], total: 0, cursor: null, facets: {} },
+    })),
   );
   render(<SearchProduct />);
-  expect(screen.getByRole('status').textContent).toContain('Загрузка');
+  expect(
+    screen
+      .getAllByRole('status')
+      .some((status) => status.textContent?.includes('Загрузка')),
+  ).toBe(true);
   expect(
     screen
       .getByRole('button', { name: 'Сохранить поиск' })
@@ -231,13 +415,13 @@ test('loading → empty results and accessible filters', async () => {
   ).toBe(false);
 });
 test('API error is actionable and retry reissues the request', async () => {
-  const fetch = vi
-    .fn()
-    .mockImplementation(async (url: string) =>
-      url === '/api/v1/regions'
-        ? { ok: true, json: async () => ({ items: [] }) }
+  const fetch = vi.fn(async (url: string) =>
+    url === '/api/v1/regions'
+      ? { ok: true, json: async () => ({ items: [] }) }
+      : url.includes('/categories/')
+        ? { ok: true, json: async () => [] }
         : { ok: false, status: 503 },
-    );
+  );
   stubFetch('fetch', fetch);
   render(<SearchProduct />);
   expect(await screen.findByRole('alert')).toBeTruthy();
@@ -301,7 +485,7 @@ test('catalogue region change clears geographic criteria and survives submit and
     expect((screen.getByLabelText('Город') as HTMLInputElement).value).toBe(''),
   );
   const navigations = replace.mock.calls.length;
-  fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+  await submitReadySearch();
   await vi.waitFor(() =>
     expect(replace.mock.calls.length).toBeGreaterThan(navigations),
   );
