@@ -84,6 +84,8 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'security',
       'restore',
       'observability',
+      'runtime-contract',
+      'runtime-smoke',
     ],
     files: [
       'apps/api/dist/main.js',
@@ -112,6 +114,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'infra/observability/prometheus.yml',
       '.cache/phase4d-load.json',
       '.cache/phase4d-recovery.json',
+      '.cache/runtime-image-receipt.json',
     ].map((path) => ({ path, sha256: 'b'.repeat(64) })),
   };
   assert.doesNotThrow(() => validateRelease(good, 'a'.repeat(40)));
@@ -142,6 +145,13 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     { files: [{ path: '../.env', sha256: 'b'.repeat(64) }] },
   ])
     assert.throws(() => validateRelease({ ...good, ...patch }, 'a'.repeat(40)));
+  for (const gate of ['runtime-contract', 'runtime-smoke'])
+    assert.throws(() =>
+      validateRelease(
+        { ...good, gates: good.gates.filter((value) => value !== gate) },
+        'a'.repeat(40),
+      ),
+    );
   assert.throws(() => validateRelease(good, 'c'.repeat(40)));
   assert.throws(() => validateRelease(good, 'a'.repeat(40), '456'));
   assert.doesNotThrow(() => validateRelease(good, 'a'.repeat(40), '123'));
@@ -174,7 +184,25 @@ test('Release verification binds measured evidence and rejects tampering', async
   const root = await mkdtemp(join(tmpdir(), 'raui-release-test-'));
   try {
     await mkdir(join(root, '.cache'));
+    const receipt = {
+      version: 1,
+      sourceRevision: 'a'.repeat(40),
+      ciRunId: '123',
+      imageId: 'sha256:' + 'b'.repeat(64),
+      archiveSha256: 'c'.repeat(64),
+      sourceState: 'committed',
+      siteUrl: 'http://127.0.0.1:3000',
+      deploymentEnvironment: 'staging',
+      contract: 'passed',
+      serviceSmoke: 'passed',
+      migrationCount: 17,
+      network: 'linux-host',
+      adapters: 'local-development',
+      stagingAcceptance: 'not_executed',
+      deployment: 'not_executed',
+    };
     const values = {
+      '.cache/runtime-image-receipt.json': receipt,
       '.cache/phase4d-load.json': {
         version: 1,
         results: [
@@ -225,7 +253,34 @@ test('Release verification binds measured evidence and rejects tampering', async
         sha256: createHash('sha256').update(bytes).digest('hex'),
       });
     }
-    await assert.doesNotReject(verifyFiles({ files }, root));
+    await assert.doesNotReject(
+      verifyFiles({ sha: 'a'.repeat(40), runId: '123', files }, root),
+    );
+    const receiptPath = '.cache/runtime-image-receipt.json';
+    for (const patch of [
+      { sourceRevision: 'd'.repeat(40) },
+      { ciRunId: '456' },
+      { serviceSmoke: 'pending' },
+    ]) {
+      const bytes = JSON.stringify({ ...receipt, ...patch });
+      await writeFile(join(root, receiptPath), bytes);
+      const changed = files.map((file) =>
+        file.path === receiptPath
+          ? {
+              ...file,
+              sha256: createHash('sha256').update(bytes).digest('hex'),
+            }
+          : file,
+      );
+      await assert.rejects(
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
+        /Invalid runtime image evidence/,
+      );
+    }
+    await writeFile(join(root, receiptPath), JSON.stringify(receipt));
     const loadPath = '.cache/phase4d-load.json';
     const goodResults = values[loadPath].results;
     const badInventories = [
@@ -271,7 +326,10 @@ test('Release verification binds measured evidence and rejects tampering', async
           : file,
       );
       await assert.rejects(
-        verifyFiles({ files: changed }, root),
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
         /Invalid measured load evidence/,
       );
     }
@@ -300,7 +358,10 @@ test('Release verification binds measured evidence and rejects tampering', async
           : file,
       );
       await assert.rejects(
-        verifyFiles({ files: changed }, root),
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
         /Invalid restore evidence/,
       );
     }
@@ -309,7 +370,10 @@ test('Release verification binds measured evidence and rejects tampering', async
       JSON.stringify(values[recoveryPath]),
     );
     await writeFile(join(root, '.cache/phase4d-load.json'), '{}');
-    await assert.rejects(verifyFiles({ files }, root), /checksum mismatch/);
+    await assert.rejects(
+      verifyFiles({ sha: 'a'.repeat(40), runId: '123', files }, root),
+      /checksum mismatch/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -506,4 +570,55 @@ test('CI provenance rejects same-name workflows and binds successful immutable r
     { status: 'in_progress' },
   ])
     assert.throws(() => validateCiRun({ ...run, ...patch }, sha, '123'));
+});
+
+test('Runtime receipt is bound to the source and CI run with completed local acceptance', async () => {
+  const { validateRuntimeReceipt } =
+    await import('../../../scripts/release-contract.mjs');
+  const good = {
+    version: 1,
+    sourceRevision: 'a'.repeat(40),
+    ciRunId: '123',
+    imageId: 'sha256:' + 'b'.repeat(64),
+    archiveSha256: 'c'.repeat(64),
+    sourceState: 'committed',
+    siteUrl: 'http://127.0.0.1:3000',
+    deploymentEnvironment: 'staging',
+    contract: 'passed',
+    serviceSmoke: 'passed',
+    migrationCount: 17,
+    network: 'linux-host',
+    adapters: 'local-development',
+    stagingAcceptance: 'not_executed',
+    deployment: 'not_executed',
+  };
+  assert.doesNotThrow(() =>
+    validateRuntimeReceipt(good, 'a'.repeat(40), '123'),
+  );
+  for (const patch of [
+    { sourceRevision: 'd'.repeat(40) },
+    { ciRunId: '456' },
+    { ciRunId: 123 },
+    { imageId: 'raui-runtime:local' },
+    { archiveSha256: undefined },
+    { archiveSha256: 'bad' },
+    { archiveSha256: ['c'.repeat(64)] },
+    { imageId: ['sha256:' + 'b'.repeat(64)] },
+    { sourceState: 'candidate' },
+    { contract: 'pending' },
+    { serviceSmoke: 'failed' },
+    { migrationCount: 12 },
+    { network: 'bridge' },
+    { adapters: 'production' },
+    { siteUrl: 'https://example.invalid' },
+    { deploymentEnvironment: 'production' },
+    { stagingAcceptance: 'passed' },
+    { deployment: 'passed' },
+  ]) {
+    assert.throws(
+      () =>
+        validateRuntimeReceipt({ ...good, ...patch }, 'a'.repeat(40), '123'),
+      /Invalid runtime image evidence/,
+    );
+  }
 });

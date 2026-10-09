@@ -32,6 +32,23 @@ OWNER_PUBLICATION_QUOTA_VERIFICATION.md and PHONE_OTP_VERIFICATION.md.
 These instructions do not authorize account changes, messages, merge or deployment.
 Real provider delivery and infrastructure acceptance remain separate gates.
 
+## Runtime evidence binding
+
+The current release verifier also requires the hashed runtime-image receipt and
+completed `runtime-contract` / `runtime-smoke` gates. It binds source SHA and CI
+run ID to the same receipt, validates immutable image ID and archive SHA256,
+and requires 17 migrations plus completed local image acceptance. A rehashed
+receipt from another source/run or an incomplete smoke must fail verification.
+The receipt certifies Linux host networking and local development adapters only;
+external staging acceptance and deployment remain not executed.
+
+The readiness artifact includes the receipt; the larger image archive stays in
+the separate retained runtime artifact. Verify the receipt against the trusted
+release manifest before comparing the downloaded archive's SHA256 with the
+receipt's `archiveSha256`. Historical readiness artifacts without runtime evidence
+cannot pass this updated contract. The receipt is integrity/provenance evidence,
+not a registry signature or deployment authorization.
+
 ## Artifact and dry-run pipeline
 
 RAUI CI checks out the exact PR head, runs frozen installation, lint, strict types,

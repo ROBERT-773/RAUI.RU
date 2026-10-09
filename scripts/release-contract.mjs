@@ -22,11 +22,13 @@ const gates = [
   'security',
   'restore',
   'observability',
+  'runtime-contract',
+  'runtime-smoke',
 ];
 function releasePath(path) {
   return (
     typeof path === 'string' &&
-    /^(apps\/api\/(dist|migrations)\/|apps\/web\/\.next\/|infra\/observability\/|pnpm-lock\.yaml$|package\.json$|\.cache\/phase4d-(load|recovery)\.json$)/.test(
+    /^(apps\/api\/(dist|migrations)\/|apps\/web\/\.next\/|infra\/observability\/|pnpm-lock\.yaml$|package\.json$|\.cache\/phase4d-(load|recovery)\.json$|\.cache\/runtime-image-receipt\.json$)/.test(
       path,
     ) &&
     !path.split('/').some((part) => part === '..' || part === '.' || !part) &&
@@ -34,6 +36,31 @@ function releasePath(path) {
     !path.includes('\u0000') &&
     !path.endsWith('.env')
   );
+}
+export function validateRuntimeReceipt(receipt, expectedSha, expectedRunId) {
+  if (
+    !receipt ||
+    receipt.version !== 1 ||
+    !/^[a-f0-9]{40}$/.test(expectedSha ?? '') ||
+    receipt.sourceRevision !== expectedSha ||
+    !/^[1-9][0-9]*$/.test(expectedRunId ?? '') ||
+    receipt.ciRunId !== expectedRunId ||
+    typeof receipt.imageId !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(receipt.imageId) ||
+    typeof receipt.archiveSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(receipt.archiveSha256) ||
+    receipt.sourceState !== 'committed' ||
+    receipt.contract !== 'passed' ||
+    receipt.serviceSmoke !== 'passed' ||
+    receipt.migrationCount !== 17 ||
+    receipt.siteUrl !== 'http://127.0.0.1:3000' ||
+    receipt.deploymentEnvironment !== 'staging' ||
+    receipt.network !== 'linux-host' ||
+    receipt.adapters !== 'local-development' ||
+    receipt.stagingAcceptance !== 'not_executed' ||
+    receipt.deployment !== 'not_executed'
+  )
+    throw new Error('Invalid runtime image evidence');
 }
 export function validateCiRun(run, expectedSha, expectedRunId) {
   if (
@@ -104,6 +131,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
     'infra/observability/prometheus.yml',
     '.cache/phase4d-load.json',
     '.cache/phase4d-recovery.json',
+    '.cache/runtime-image-receipt.json',
   ])
     if (!seen.has(path)) throw new Error('Incomplete release artifact');
 }
@@ -142,6 +170,16 @@ export async function verifyFiles(manifest, root) {
     )
       throw new Error('Release artifact checksum mismatch');
   }
+  validateRuntimeReceipt(
+    JSON.parse(
+      await readFile(
+        resolve(root, '.cache/runtime-image-receipt.json'),
+        'utf8',
+      ),
+    ),
+    manifest.sha,
+    manifest.runId,
+  );
   const load = JSON.parse(
     await readFile(resolve(root, '.cache/phase4d-load.json'), 'utf8'),
   );
@@ -255,6 +293,7 @@ async function main() {
       'pnpm-lock.yaml',
       '.cache/phase4d-load.json',
       '.cache/phase4d-recovery.json',
+      '.cache/runtime-image-receipt.json',
       'package.json',
     ])
       await hashFiles(process.cwd(), path, files);
@@ -274,7 +313,7 @@ async function main() {
     validateRelease(manifest, expectedSha, expectedRunId);
     await verifyFiles(manifest, process.cwd());
     console.log(
-      'Release/rollback artifact identity, hashes, gates and migration/flag contract verified; no deployment',
+      'Release/rollback artifact identity, hashes, gates, runtime image evidence and migration/flag contract verified; no deployment',
     );
   }
 }
