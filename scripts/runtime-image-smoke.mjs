@@ -182,10 +182,12 @@ try {
       },
     });
     assert.equal(smoke.status, 0, smoke.stderr);
+    // Preserve the fixture's ../dist module imports inside the API scripts directory.
+    docker('exec', `${name}-api`, 'mkdir', '-p', '/app/apps/api/scripts');
     docker(
       'cp',
       'apps/api/scripts/core-smoke.mjs',
-      `${name}-api:/app/apps/api/runtime-core-smoke.mjs`,
+      `${name}-api:/app/apps/api/scripts/runtime-core-smoke.mjs`,
     );
     docker(
       'exec',
@@ -193,7 +195,7 @@ try {
       '/app/apps/api',
       `${name}-api`,
       'node',
-      'runtime-core-smoke.mjs',
+      'scripts/runtime-core-smoke.mjs',
     );
     assert.ok(
       (
