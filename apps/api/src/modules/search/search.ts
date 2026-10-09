@@ -211,7 +211,9 @@ export class Search {
         ) as { hash: string; after: unknown[]; expires: number };
         if (
           c.hash !== fingerprint ||
-          c.expires < Date.now() ||
+          typeof c.expires !== 'number' ||
+          !Number.isSafeInteger(c.expires) ||
+          c.expires <= Date.now() ||
           !Array.isArray(c.after) ||
           c.after.length !== 2
         )
