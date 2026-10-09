@@ -72,6 +72,25 @@ jobs:
           pnpm worker:trust --once
           pnpm search:reconcile
           pnpm smoke:search
+      - name: Prepare accepted local runtime image
+        run: |
+          RUNTIME_IMAGE_ID=$(cat .cache/runtime-image-id)
+          docker save "$RUNTIME_IMAGE_ID" | gzip > .cache/runtime-image.tar.gz
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync, createReadStream } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const imageId = readFileSync('.cache/runtime-image-id', 'utf8').trim();
+          const revision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const metadata = JSON.parse(execFileSync('docker', ['image', 'inspect', imageId], {encoding: 'utf8'}))[0];
+          if (metadata.Id !== imageId || metadata.Config.Labels['org.opencontainers.image.revision'] !== revision || metadata.Config.Labels['raui.source-state'] !== 'committed') throw Error('Runtime source/image identity mismatch');
+          const archiveHash = createHash('sha256');
+          for await (const chunk of createReadStream('.cache/runtime-image.tar.gz')) archiveHash.update(chunk);
+          const archiveSha256 = archiveHash.digest('hex');
+          writeFileSync('.cache/runtime-image-receipt.json', JSON.stringify({version: 1, sourceRevision: revision, imageId, archiveSha256, sourceState: 'committed', siteUrl: metadata.Config.Labels['raui.site-url'], deploymentEnvironment: metadata.Config.Labels['raui.deployment-env'], ciRunId: process.env.GITHUB_RUN_ID, contract: 'passed', serviceSmoke: 'passed', migrationCount: 17, network: 'linux-host', adapters: 'local-development', stagingAcceptance: 'not_executed', deployment: 'not_executed'}, null, 2) + '\n');
+          JS
+          cd .cache
+          sha256sum runtime-image.tar.gz runtime-image-receipt.json > runtime-image-sha256.txt
       - name: Release and rollback artifact dry-run
         run: |
           node scripts/release-contract.mjs create .cache/phase4d-release.json "$(git rev-parse HEAD)"
@@ -86,6 +105,7 @@ jobs:
             .cache/phase4d-release.json
             .cache/phase4d-load.json
             .cache/phase4d-recovery.json
+            .cache/runtime-image-receipt.json
             apps/api/dist
             apps/api/migrations
             apps/web/.next
@@ -93,21 +113,6 @@ jobs:
             infra/observability
             pnpm-lock.yaml
             package.json
-      - name: Preserve accepted local runtime image
-        run: |
-          RUNTIME_IMAGE_ID=$(cat .cache/runtime-image-id)
-          docker save "$RUNTIME_IMAGE_ID" | gzip > .cache/runtime-image.tar.gz
-          node --input-type=module <<'JS'
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const imageId = readFileSync('.cache/runtime-image-id', 'utf8').trim();
-          const revision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
-          const metadata = JSON.parse(execFileSync('docker', ['image', 'inspect', imageId], {encoding: 'utf8'}))[0];
-          if (metadata.Id !== imageId || metadata.Config.Labels['org.opencontainers.image.revision'] !== revision || metadata.Config.Labels['raui.source-state'] !== 'committed') throw Error('Runtime source/image identity mismatch');
-          writeFileSync('.cache/runtime-image-receipt.json', JSON.stringify({version: 1, sourceRevision: revision, imageId, sourceState: 'committed', siteUrl: metadata.Config.Labels['raui.site-url'], deploymentEnvironment: metadata.Config.Labels['raui.deployment-env'], ciRunId: process.env.GITHUB_RUN_ID, contract: 'passed', serviceSmoke: 'passed', migrationCount: 17, network: 'linux-host', adapters: 'local-development', stagingAcceptance: 'not_executed', deployment: 'not_executed'}, null, 2) + '\n');
-          JS
-          cd .cache
-          sha256sum runtime-image.tar.gz runtime-image-receipt.json > runtime-image-sha256.txt
       - name: Upload accepted local runtime image
         uses: actions/upload-artifact@v4
         with:
