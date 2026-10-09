@@ -14,7 +14,7 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test && python3 -m unittest discover -s apps/ai/tests",
+    "test": "pnpm -r test && python3 -m unittest discover -s apps/ai/tests && node --test scripts/runtime-image.test.mjs",
     "build": "pnpm -r build",
     "smoke": "node scripts/smoke.mjs",
     "test:integration": "pnpm --filter @raui/api test:integration",
@@ -32,7 +32,8 @@
     "security:check": "node scripts/security-check.mjs && pnpm audit --prod --audit-level moderate",
     "recovery:drill": "pnpm --filter @raui/api recovery:drill",
     "release:verify": "node scripts/release-contract.mjs verify",
-    "observability:check": "node scripts/observability-check.mjs"
+    "observability:check": "node scripts/observability-check.mjs",
+    "test:runtime": "node --test scripts/runtime-image.test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
