@@ -1260,6 +1260,113 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           ).status,
           403,
         );
+        const recover = () =>
+          call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+            Cookie: cookie,
+          });
+        const recovered = await Promise.all([recover(), recover()]);
+        for (const response of recovered) {
+          assert.equal(response.status, 200);
+          assert.equal(response.headers.get('cache-control'), 'no-store');
+        }
+        const recoveredToken = (recovered[0]!.data as { csrfToken: string })
+          .csrfToken;
+        assert.match(recoveredToken, /^[A-Za-z0-9_-]{43}$/);
+        assert.equal(
+          (recovered[1]!.data as { csrfToken: string }).csrfToken,
+          recoveredToken,
+        );
+        const secondLogin = await call('/auth/login', 'POST', {
+          email,
+          password: 'correct-long-password',
+        });
+        const secondCookie = secondLogin.headers
+          .get('set-cookie')!
+          .split(';')[0]!;
+        const secondRecovery = await call(
+          '/auth/csrf',
+          'GET',
+          undefined,
+          undefined,
+          undefined,
+          { Cookie: secondCookie },
+        );
+        const secondToken = (secondRecovery.data as { csrfToken: string })
+          .csrfToken;
+        assert.notEqual(secondToken, recoveredToken);
+        assert.equal((await call('/auth/csrf', 'GET')).status, 401);
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Authorization: 'Bearer ' + secondCookie.split('=')[1]!,
+            })
+          ).status,
+          401,
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: 'https://attacker.test',
+            })
+          ).status,
+          403,
+        );
+        const secondHash = hash(secondCookie.split('=')[1]!);
+        await db.rows(
+          "UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE token_hash=$1",
+          [secondHash],
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+            })
+          ).status,
+          401,
+        );
+        await db.rows(
+          "UPDATE sessions SET expires_at=now()+interval '1 day' WHERE token_hash=$1",
+          [secondHash],
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: process.env.WEB_ORIGIN!,
+              'X-CSRF-Token': recoveredToken,
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: 'https://attacker.test',
+              'X-CSRF-Token': secondToken,
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: process.env.WEB_ORIGIN!,
+              'X-CSRF-Token': secondToken,
+            })
+          ).status,
+          201,
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+            })
+          ).status,
+          401,
+        );
         const csrf = (login.data as { csrfToken: string }).csrfToken;
         assert.equal(
           (
@@ -1430,7 +1537,9 @@ patch /v1/commerce/promotions/{code}/{version}`.split('\n'),
               ? []
               : partner.has(id)
                 ? [{ partner: [] }]
-                : [{ bearer: [] }, { cookie: [] }],
+                : id === 'get /v1/auth/csrf'
+                  ? [{ cookie: [] }]
+                  : [{ bearer: [] }, { cookie: [] }],
             id,
           );
           const headers = (operation.parameters ?? []).filter(

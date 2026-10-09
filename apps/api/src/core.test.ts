@@ -219,3 +219,17 @@ test('module boundaries prevent controllers from executing SQL and media from de
       );
   }
 });
+
+test('CSRF recovery OpenAPI requires cookie authentication and exposes only the token schema', async () => {
+  const { enrichOpenApi } = await import('./common/openapi.js');
+  const document: import('@nestjs/swagger').OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: { '/v1/auth/csrf': { get: { responses: {} } } },
+  };
+  enrichOpenApi(document);
+  const operation = document.paths['/v1/auth/csrf']!.get!;
+  assert.deepEqual(operation.security, [{ cookie: [] }]);
+  assert.ok(operation.responses['200']);
+  assert.ok(operation.responses['401']);
+});
