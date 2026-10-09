@@ -74,6 +74,7 @@ jobs:
           pnpm smoke:search
       - name: Prepare accepted local runtime image
         run: |
+          set -o pipefail
           RUNTIME_IMAGE_ID=$(cat .cache/runtime-image-id)
           docker save "$RUNTIME_IMAGE_ID" | gzip > .cache/runtime-image.tar.gz
           node --input-type=module <<'JS'
