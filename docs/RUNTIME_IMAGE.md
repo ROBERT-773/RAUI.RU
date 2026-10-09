@@ -14,7 +14,14 @@ CI builds the exact committed source and checks the immutable image ID offline,
 including non-root identity, native dependencies, regional catalogue and migration
 checksums. This contract is distinct from the full service/worker image smoke.
 The historical PR62 image receipt does not certify this new source revision.
-Full image service smoke and external staging acceptance require new receipts.
+CI also runs all service/worker roles from that same image ID against a task-owned
+local database, search alias and private mount, then removes its resources. Only
+the private fixture mount is assigned to UID1000 using a network-disabled root
+helper; API/web/workers remain non-root. Ownership is restored before host cleanup.
+After all required gates pass, CI retains the saved image archive, SHA256 checksums
+and a sanitized source/image receipt for 14 days under `raui-runtime-<source-sha>`.
+This is local development-adapter acceptance; external staging acceptance remains
+not executed. It does not authorize deployment or registry publication.
 Rollback must preserve the current account policies in `RELEASE_ROLLBACK.md`;
 an older readable schema alone does not establish policy compatibility.
 
@@ -108,3 +115,13 @@ unchanged. Validate real pnpm targets/native execution rather than package names
 Rollback uses a reviewed policy-compatible accepted image ID and its matching public configuration;
 it does not reverse database migrations. Forward fixes build and recheck a new
 artifact, applying only new reviewed migrations when needed. This task adds none.
+
+## Retained local artifact
+
+Download the artifact from the exact successful CI run. In its extracted directory,
+verify `sha256sum -c runtime-image-sha256.txt` before loading the archive. Load with
+`gunzip -c runtime-image.tar.gz | docker load`, then inspect the receipt's immutable
+image ID and source labels. The receipt and SHA256 files provide integrity and
+identity evidence, not a registry signature or external attestation. The build
+origin remains `http://127.0.0.1:3000`; production requires its own public build
+configuration, policy-compatible artifact and separately authorized acceptance.

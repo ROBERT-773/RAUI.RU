@@ -40,6 +40,7 @@ const envFile = resolve(temporary, 'runtime.env');
 const admin = new Pool({ connectionString: database.toString() });
 const containers = [];
 let created = false;
+let privateCreated = false;
 const docker = (...args) =>
   execFileSync('docker', args, { encoding: 'utf8', timeout: 90000 });
 const target = new URL(database);
@@ -67,6 +68,26 @@ const flags = [
   '--mount',
   `type=bind,src=${privateDir},dst=/runtime-private`,
 ];
+// Only this task-owned bind mount changes ownership; service processes remain UID 1000.
+function privateMountOwner(uid, gid) {
+  assert.ok(Number.isSafeInteger(uid) && uid >= 0);
+  assert.ok(Number.isSafeInteger(gid) && gid >= 0);
+  docker(
+    'run',
+    '--rm',
+    '--network=none',
+    '--user',
+    '0',
+    '--entrypoint',
+    'chown',
+    '--mount',
+    `type=bind,src=${privateDir},dst=/runtime-private`,
+    image,
+    '-R',
+    `${uid}:${gid}`,
+    '/runtime-private',
+  );
+}
 function ownedListener(container, port) {
   assert.equal(
     docker('inspect', '--format', '{{.State.Running}}', container).trim(),
@@ -101,6 +122,8 @@ try {
   await import('node:fs/promises').then(({ mkdir }) =>
     mkdir(privateDir, { mode: 0o700 }),
   );
+  privateCreated = true;
+  privateMountOwner(1000, 1000);
   await writeFile(
     envFile,
     Object.entries(env)
@@ -259,6 +282,11 @@ try {
       async () => admin.query(`DROP DATABASE "${name}" WITH (FORCE)`),
     ]);
   actions.push(['admin connection', async () => admin.end()]);
+  if (privateCreated)
+    actions.push([
+      'private mount ownership',
+      async () => privateMountOwner(process.getuid(), process.getgid()),
+    ]);
   actions.push([
     'private scratch',
     async () => rm(temporary, { recursive: true, force: true }),
