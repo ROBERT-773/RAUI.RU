@@ -24,6 +24,7 @@ import {
   verified,
 } from '../../common/security';
 import { loadConfig } from '../../config';
+import { listingSubscriptionConsentVersion } from '../product/subscription-contract';
 import { publicIPv4 } from '../../common/outbound-policy';
 export interface DeliveryEnvelope {
   channel: 'email' | 'push' | 'sms';
@@ -188,12 +189,13 @@ export class NotificationWorker {
         const [subscription] = await this.db.rows(
           `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
            AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
-           AND $4=ANY(events) AND frequency='immediate'`,
+           AND $4=ANY(events) AND frequency='immediate' AND consent_version=$5`,
           [
             job.user_id,
             payload.data.listingId,
             payload.data.subscriptionVersion,
             payload.data.event.kind,
+            listingSubscriptionConsentVersion,
           ],
         );
         if (!subscription) {

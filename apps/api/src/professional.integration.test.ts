@@ -12,6 +12,8 @@ import { Actor, hash, token } from './common/security';
 import { ProfessionalFeeds } from './modules/professional/feeds';
 import { ProfessionalImports } from './modules/professional/imports';
 import { ProfessionalPlatform } from './modules/professional/platform';
+import { enqueueImmediateListingEmails } from './modules/product/subscription-outbox';
+import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 import { Structures } from './modules/properties/structures';
 import { Properties } from './modules/properties/properties';
 import { FeedFetcher } from './modules/professional/feed-fetch';
@@ -1224,6 +1226,144 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         ])
           assert.ok(actions.includes(action), action);
         await assert.rejects(pool.query('DELETE FROM audit_events'));
+      },
+    );
+    await t.test(
+      'Listing email enqueue and transport independently require current consent',
+      async () => {
+        const userId = actors[0]!.id;
+        adapter.fail = false;
+        adapter.enabled = true;
+        await pool.query(
+          'UPDATE notification_preferences SET email=true WHERE user_id=$1',
+          [userId],
+        );
+        await pool.query(
+          `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+           VALUES($1,$2,ARRAY['price_drop'],ARRAY['email'],'immediate',$3)`,
+          [userId, listingId, listingSubscriptionConsentVersion],
+        );
+        let eventVersion = 5000;
+        const change = () => ({
+          listingId,
+          version: ++eventVersion,
+          publicBefore: true,
+          publicAfter: true,
+          previousPrice: '100',
+          price: '99',
+        });
+        const enqueue = async () => {
+          const event = change();
+          await db.transaction((sql) =>
+            enqueueImmediateListingEmails(sql, event),
+          );
+          return `listing:${listingId}:${event.version}:price_drop`;
+        };
+        const count = async (key: string) =>
+          Number(
+            (
+              await db.rows<{ count: string }>(
+                'SELECT count(*) FROM notification_deliveries WHERE user_id=$1 AND dedupe_key=$2',
+                [userId, key],
+              )
+            )[0]!.count,
+          );
+        const subscriptionCalls = () =>
+          adapter.calls.filter(
+            (call) =>
+              call.kind === 'subscription.listing.price_drop' &&
+              call.userId === userId,
+          );
+        const drain = async (id: string) => {
+          for (let attempt = 0; attempt < 100; attempt++) {
+            const [job] = await db.rows<{ status: string }>(
+              'SELECT status FROM notification_deliveries WHERE id=$1',
+              [id],
+            );
+            if (job!.status !== 'pending' && job!.status !== 'running')
+              return job!.status;
+            assert.equal(await delivery.once(), true);
+          }
+          throw new Error(
+            'Subscription delivery did not reach a terminal state',
+          );
+        };
+        for (const consent of [
+          '',
+          'listing-updates-v0',
+          'listing-updates-v-next',
+        ]) {
+          // Unknown consent stays persisted; neither gate may silently upgrade it.
+          await pool.query(
+            'UPDATE listing_subscriptions SET consent_version=$3 WHERE user_id=$1 AND listing_id=$2',
+            [userId, listingId, consent],
+          );
+          assert.equal(await count(await enqueue()), 0);
+          const [job] = await db.rows<{ id: string }>(
+            `INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
+             VALUES($1,'email','subscription.listing.price_drop',$2,$3::jsonb) RETURNING id`,
+            [
+              userId,
+              `consent-test:${randomUUID()}`,
+              JSON.stringify({
+                listingId,
+                subscriptionVersion: 1,
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 10000,
+                  priceMinor: 9900,
+                },
+              }),
+            ],
+          );
+          const sends = subscriptionCalls().length;
+          assert.equal(await drain(job!.id), 'skipped');
+          assert.equal(subscriptionCalls().length, sends);
+          assert.deepEqual(
+            (
+              await db.rows(
+                'SELECT consent_version,version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2',
+                [userId, listingId],
+              )
+            )[0],
+            { consent_version: consent, version: 1 },
+          );
+        }
+        await pool.query(
+          'UPDATE listing_subscriptions SET consent_version=$3 WHERE user_id=$1 AND listing_id=$2',
+          [userId, listingId, listingSubscriptionConsentVersion],
+        );
+        const currentKey = await enqueue();
+        assert.equal(await count(currentKey), 1);
+        const [current] = await db.rows<{ id: string }>(
+          'SELECT id FROM notification_deliveries WHERE user_id=$1 AND dedupe_key=$2',
+          [userId, currentKey],
+        );
+        const sends = subscriptionCalls().length;
+        assert.equal(await drain(current!.id), 'sent');
+        assert.equal(subscriptionCalls().length, sends + 1);
+        const queuedKey = await enqueue();
+        assert.equal(await count(queuedKey), 1);
+        const [queued] = await db.rows<{ id: string }>(
+          'SELECT id FROM notification_deliveries WHERE user_id=$1 AND dedupe_key=$2',
+          [userId, queuedKey],
+        );
+        // Keep subscriptionVersion unchanged: consent gate must work independently.
+        await pool.query(
+          "UPDATE listing_subscriptions SET consent_version='listing-updates-v0' WHERE user_id=$1 AND listing_id=$2",
+          [userId, listingId],
+        );
+        assert.equal(await drain(queued!.id), 'skipped');
+        assert.equal(subscriptionCalls().length, sends + 1);
+        assert.equal(
+          (
+            await db.rows(
+              'SELECT version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2',
+              [userId, listingId],
+            )
+          )[0]!.version,
+          1,
+        );
       },
     );
   } finally {

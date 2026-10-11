@@ -6,6 +6,7 @@ import {
   NotificationWorker,
   NotificationAdapter,
 } from './modules/professional/notifications';
+import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 import { Audit } from './modules/audit/audit';
 
 test('unchanged public listing produces no queued price notifications', async () => {
@@ -65,4 +66,84 @@ test('worker suppresses queued email after unsubscribe before invoking transport
   };
   assert.equal(await worker.once(), true);
   assert.equal(result, 'skipped');
+});
+
+test('enqueue binds the current server-owned consent version as a SQL parameter', async () => {
+  let checked = false;
+  const sql = {
+    query: async (query: string, values: unknown[]) => {
+      assert.match(query, /s\.consent_version\s*=\s*\$5/);
+      assert.equal(values[4], listingSubscriptionConsentVersion);
+      checked = true;
+      return { rows: [] };
+    },
+  } as unknown as Sql;
+  await enqueueImmediateListingEmails(sql, {
+    listingId: '12345678-1234-4234-8234-123456789abc',
+    version: 1,
+    publicBefore: true,
+    publicAfter: true,
+    previousPrice: '100',
+    price: '99',
+  });
+  assert.equal(checked, true);
+});
+
+test('worker binds current consent version before allowing subscription transport', async () => {
+  const listingId = '12345678-1234-4234-8234-123456789abc';
+  const job = {
+    id: 'job',
+    user_id: 'user',
+    channel: 'email',
+    kind: 'subscription.listing.price_drop',
+    payload: {
+      listingId,
+      subscriptionVersion: 1,
+      event: { kind: 'price_drop' },
+    },
+    dedupe_key: 'event',
+    attempts: 0,
+  };
+  const sql = { query: async () => ({ rows: [] }) };
+  const db = {
+    pool: sql,
+    transaction: async (work: (value: unknown) => Promise<unknown>) =>
+      work(sql),
+    rows: async (query: string, values: unknown[]) => {
+      if (query.includes('FOR UPDATE SKIP LOCKED')) return [job];
+      if (query.includes('FROM users'))
+        return [
+          {
+            active: true,
+            email: 'user@example.test',
+            email_enabled: true,
+            email_verified_at: 'now',
+          },
+        ];
+      assert.match(query, /consent_version\s*=\s*\$5/);
+      assert.deepEqual(values, [
+        'user',
+        listingId,
+        1,
+        'price_drop',
+        listingSubscriptionConsentVersion,
+      ]);
+      return [{}];
+    },
+  } as unknown as Database;
+  let sends = 0;
+  let result = '';
+  const adapter = {
+    configured: true,
+    send: async () => {
+      sends++;
+    },
+  } as NotificationAdapter;
+  const worker = new NotificationWorker(db, adapter, {} as Audit);
+  worker.finish = async (_job, state) => {
+    result = state;
+  };
+  await worker.once();
+  assert.equal(result, 'sent');
+  assert.equal(sends, 1);
 });
