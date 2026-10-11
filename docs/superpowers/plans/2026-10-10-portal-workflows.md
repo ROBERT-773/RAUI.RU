@@ -30,9 +30,12 @@
 
 **Files:** `apps/web/components/account.tsx`, `account.test.tsx`; `apps/api/src/modules/auth/auth.ts`, `apps/api/src/core.test.ts`, integration registration fixtures; `apps/api/src/common/openapi.ts`.
 
-**Interfaces:** register request role is explicitly owner/agent/agency; historical public user responses remain compatible until migration.
+**Interfaces:** public registration requires an explicit
+buyer/owner/agent/agency/developer role; omitted and staff roles are rejected.
+Historical public user responses remain compatible until a separately approved
+remediation contract exists.
 
-- [x] Add required blank role selection with exactly owner/agent/agency; verify existing registration test fails before implementation.
+- [x] Add a required blank role selection for buyer/owner/agent/agency/developer; verify omitted and staff roles fail.
 - [x] Implement form and verify account tests.
 - [x] API contract: explicit buyer/owner/agent/agency/developer accepted; omitted and staff roles rejected.
 - [x] Remove registration schema default and expose developer in registration; accepted by RAUI CI #192.
@@ -42,7 +45,12 @@
 
 **Files:** new versioned API migration, `modules/auth/auth.ts`, `common/security.ts`, `components/account-profile.tsx`, auth/profile/integration tests.
 
-**Interfaces:** authenticated role selection for legacy buyer accepts only three public roles, checks active/approval, locks user transactionally, audits and revokes previous sessions. Contacts and collections persist. Staff privileges and organization ownership are unchanged.
+**Interfaces:** historical-role remediation is not yet specified: the eligible
+cohort, allowed target roles and treatment of the current and other sessions
+remain design decisions. Any eventual authenticated flow must check
+active/approval state, lock the user transactionally, audit the change, apply the
+approved session-revocation policy and preserve contacts and collections. Staff
+privileges and organization ownership remain unchanged.
 
 **Design blocker:** existing rows do not record whether `buyer` was explicitly
 selected or supplied by the historical registration default. Do not infer the
@@ -51,8 +59,8 @@ v1.1 buyer/developer roles and define current-session revocation before designin
 the additive migration or endpoint.
 
 - [ ] Test unauthorized/cross-account/repeated/concurrent selection and preserved contact verification.
-- [ ] Add expand migration and endpoint; show explicit selection to legacy accounts.
-- [ ] Update master plan/TZ public-role section to point to revised specification.
+- [ ] After resolving the design blocker, add any required expand migration and endpoint; expose explicit selection only to the defined remediation cohort.
+- [ ] After approval, record the remediation contract in the authoritative specification and align the master plan and derived public-role documentation.
 - [ ] Verify migration, authorization, profile and generated API contract.
 
 ## Task 3 — Agency employees and CRM

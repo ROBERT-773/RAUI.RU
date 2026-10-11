@@ -67,7 +67,9 @@ Required:
 - protected admin baseline;
 - safe migrations and automated tests.
 
-Authoritative detailed requirements: docs/RAUI_TZ_v1.0.md and GitHub Issue #2.
+Historical Phase 2 inputs: `docs/RAUI_TZ_v1.0.md` and GitHub Issue #2.
+Current reconciliation and release acceptance are governed by
+`docs/RAUI_TZ_v1.1.md`.
 
 Exit gate:
 
