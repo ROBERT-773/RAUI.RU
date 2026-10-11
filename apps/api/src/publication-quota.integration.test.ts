@@ -164,7 +164,14 @@ test(
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
         const rows = await pool.query(
-          "SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)) AND state='active'",
+          `WITH RECURSIVE waiting(pid) AS (
+             SELECT activity.pid FROM pg_stat_activity activity
+             WHERE $1=ANY(pg_blocking_pids(activity.pid)) AND activity.state='active'
+             UNION
+             SELECT activity.pid FROM pg_stat_activity activity
+             JOIN waiting blocker ON blocker.pid=ANY(pg_blocking_pids(activity.pid))
+             WHERE activity.state='active'
+           ) SELECT 1 FROM waiting`,
           [pid],
         );
         if ((rows.rowCount ?? 0) >= minimum) return;
@@ -532,8 +539,22 @@ test(
         'same Property is counted independently for each original seller',
         async () => {
           const first = await account(),
-            second = await account();
+            second = await account(),
+            organization = randomUUID();
           const [shared] = await seed(first, 1);
+          await pool.query(
+            "INSERT INTO organizations(id,name,kind,created_by) VALUES($1,'Shared property agency','agency',$2)",
+            [organization, first.id],
+          );
+          for (const actor of [first, second])
+            await pool.query(
+              "INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'member')",
+              [organization, actor.id],
+            );
+          await pool.query(
+            'UPDATE properties SET organization_id=$2 WHERE id=$1',
+            [shared!.property, organization],
+          );
           const pending = await offer(second, 'moderation', shared!.property);
           assert.equal((await approve(pending)).status, 201);
           await snapshot(first, 1);
