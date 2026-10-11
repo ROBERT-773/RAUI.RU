@@ -84,7 +84,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -155,12 +155,16 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
           .digest('hex'),
       );
     }
-    for (const table of ['phone_otp_challenges', 'phone_otp_send_events']) {
+    for (const table of [
+      'phone_otp_challenges',
+      'phone_otp_send_events',
+      'listing_subscriptions',
+    ]) {
       assert.equal(
         (await pool.query(`SELECT count(*)::int AS count FROM ${quote(table)}`))
           .rows[0].count,
         0,
-        `Additive OTP table ${table} starts empty`,
+        `Additive table ${table} starts empty`,
       );
     }
     const identity = (
