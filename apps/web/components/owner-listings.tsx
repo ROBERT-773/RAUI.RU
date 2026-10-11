@@ -300,8 +300,8 @@ export default function OwnerListings() {
               {quotaLoading && <p role="status">Загружаем лимит публикации…</p>}
               {quota?.applies && (
                 <p>
-                  Опубликовано объектов: {quota.publishedObjects} из{' '}
-                  {quota.limit}. Свободных мест: {quota.remaining}.
+                  Активных объявлений: {quota.publishedObjects} из {quota.limit}
+                  . Свободных мест: {quota.remaining}.
                 </p>
               )}
               {quota?.applies && quota.publishedObjects! >= quota.limit! && (
@@ -316,9 +316,9 @@ export default function OwnerListings() {
                 </p>
               )}
               <p>
-                Несколько опубликованных объявлений одного объекта занимают одно
-                место. Чтобы освободить место, приостановите все опубликованные
-                объявления одного объекта.
+                Разрешено одно активное объявление и три публикации в
+                календарный месяц. Чтобы освободить место, приостановите
+                действующее объявление.
               </p>
               <p>
                 Если одобрение не прошло из-за лимита, заявка остаётся на

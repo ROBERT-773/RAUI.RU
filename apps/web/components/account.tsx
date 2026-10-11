@@ -8,6 +8,7 @@ import { attributeLabels } from '../lib/labels';
 import { savedSearchSummary } from '../lib/saved-search-summary';
 import { Card } from './card';
 import AccountProfile from './account-profile';
+import AccountSubscriptions from './account-subscriptions';
 interface AccountUser {
   display_name: string;
   public_id: string;
@@ -20,7 +21,13 @@ const approved = (user: AccountUser) =>
   !user.registration_approval_state ||
   user.registration_approval_state === 'approved';
 type Tab =
-  'favorite' | 'compare' | 'recent' | 'saved' | 'messages' | 'notifications';
+  | 'favorite'
+  | 'compare'
+  | 'recent'
+  | 'saved'
+  | 'messages'
+  | 'notifications'
+  | 'subscriptions';
 interface Saved {
   id: string;
   name: string;
@@ -107,6 +114,7 @@ export default function Account() {
     };
   }, []);
   async function load(t: Tab, after?: string) {
+    if (t === 'subscriptions') return;
     const epoch = identityEpoch.current;
     const request = ++collectionRequest.current;
     try {
@@ -296,10 +304,16 @@ export default function Account() {
           {register && (
             <>
               <label>
-                Тип аккаунта
-                <select name="role" defaultValue="buyer">
-                  <option value="buyer">Покупатель или арендатор</option>
+                Кто вы?
+                <select name="role" defaultValue="" required>
+                  <option value="" disabled>
+                    Выберите роль
+                  </option>
+                  <option value="buyer">Ищу недвижимость</option>
                   <option value="owner">Собственник</option>
+                  <option value="agent">Агент</option>
+                  <option value="agency">Агентство</option>
+                  <option value="developer">Застройщик</option>
                 </select>
               </label>
               <label>
@@ -402,6 +416,7 @@ export default function Account() {
             ['saved', 'Сохранённые поиски'],
             ['messages', 'Сообщения'],
             ['notifications', 'Уведомления'],
+            ['subscriptions', 'Подписки'],
           ] as const
         ).map(([key, label]) => (
           <Button
@@ -654,6 +669,7 @@ export default function Account() {
           )}
         </>
       )}
+      {tab === 'subscriptions' && <AccountSubscriptions key={user.public_id} />}
       {tab === 'notifications' && (
         <>
           <label>

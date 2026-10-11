@@ -154,7 +154,7 @@ try {
     assert.equal(
       (await db.query('SELECT count(*)::int AS count FROM schema_migrations'))
         .rows[0].count,
-      17,
+      18,
     );
     docker(
       'run',

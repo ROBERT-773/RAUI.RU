@@ -1,3 +1,4 @@
+import { ListingSubscriptions } from './subscriptions';
 import {
   Body,
   Controller,
@@ -302,7 +303,27 @@ export class ProductController {
   constructor(
     readonly product: Product,
     readonly quotas: PublicationQuotas,
+    readonly subscriptions: ListingSubscriptions,
   ) {}
+  @Get('listing-subscriptions') listingSubscriptions(
+    @CurrentActor() actor: Actor,
+  ) {
+    return this.subscriptions.list(actor);
+  }
+  @Post('listing-subscriptions/:id') subscribe(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.subscriptions.subscribe(actor, id, body);
+  }
+  @Post('listing-subscriptions/:id/disable') disableSubscription(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.subscriptions.disable(actor, id, body);
+  }
   @Get('publication-quota') publicationQuota(@CurrentActor() actor: Actor) {
     return this.quotas.own(actor);
   }
@@ -394,6 +415,7 @@ export class ProductController {
   controllers: [ProductController],
   providers: [
     Product,
+    ListingSubscriptions,
     {
       provide: NotificationTransport,
       useClass: UnconfiguredNotificationTransport,

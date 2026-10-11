@@ -1,3 +1,7 @@
+import {
+  listingSubscriptionSchema,
+  listingSubscriptionDisableSchema,
+} from '../modules/product/subscription-contract';
 import { aiRequest, flagRequest } from '../modules/ai/contracts';
 import { trustDecision, duplicateDecision } from '../modules/trust/trust';
 import { analyticsEvent } from '../modules/analytics/analytics';
@@ -116,6 +120,9 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/account/threads/{id}/messages': object({
     body: z.string().min(1).max(4000),
   }),
+  'post /v1/account/listing-subscriptions/{id}': listingSubscriptionSchema,
+  'post /v1/account/listing-subscriptions/{id}/disable':
+    listingSubscriptionDisableSchema,
   'patch /v1/account/preferences': object({
     in_app: z.boolean(),
     email: z.boolean(),
@@ -488,10 +495,45 @@ export function enrichOpenApi(document: OpenAPIObject) {
           };
         }
       }
+      if (path.startsWith('/v1/account/listing-subscriptions')) {
+        operation.description =
+          'Own-account listing subscriptions. Favorites do not imply consent. Saving preferences does not establish delivery; worker/channel configuration and current preferences govern notifications.';
+        if (path.includes('{id}')) {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Listing unavailable for subscription, or subscription not owned by current account',
+          };
+        }
+        if (path.endsWith('/disable')) {
+          operation.responses['409'] = {
+            description:
+              'Stale subscription version; reload current preferences',
+          };
+          operation.responses['201'] = {
+            description: 'Subscription disabled for current account',
+          };
+        }
+      }
       if (operationId === 'get /v1/account/publication-quota') {
         const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
         operation.description =
-          'Own-account informational capacity. Owners count distinct published Property IDs, across all sources; drafts and nonpublic offers consume no slots. Multiple offers for one Property count once. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
+          'Own-account informational capacity. Owners may have one published listing across all sources; drafts and nonpublic offers consume no active slot. Each transition into publication counts toward three publications per Moscow calendar month. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
         operation.responses['200'] = {
           description:
             'Current owner capacity, or null quota fields for other roles',
@@ -505,9 +547,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
                     required,
                     properties: {
                       applies: { type: 'boolean', enum: [true] },
-                      limit: { type: 'integer', enum: [6] },
+                      limit: { type: 'integer', enum: [1] },
                       publishedObjects: { type: 'integer', minimum: 0 },
-                      remaining: { type: 'integer', minimum: 0, maximum: 6 },
+                      remaining: { type: 'integer', minimum: 0, maximum: 1 },
                     },
                   },
                   {

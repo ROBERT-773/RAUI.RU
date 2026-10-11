@@ -572,7 +572,18 @@ test('Owner registration survives unavailable verification delivery and opens on
   });
   render(<Account />);
   fireEvent.click(await screen.findByRole('button', { name: 'Регистрация' }));
-  fireEvent.change(screen.getByLabelText('Тип аккаунта'), {
+  const role = screen.getByLabelText('Кто вы?') as HTMLSelectElement;
+  expect(role.value).toBe('');
+  expect(role.required).toBe(true);
+  expect(Array.from(role.options).map((option) => option.value)).toEqual([
+    '',
+    'buyer',
+    'owner',
+    'agent',
+    'agency',
+    'developer',
+  ]);
+  fireEvent.change(screen.getByLabelText('Кто вы?'), {
     target: { value: 'owner' },
   });
   fireEvent.change(screen.getByLabelText('Имя'), {

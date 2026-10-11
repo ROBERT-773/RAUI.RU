@@ -21,7 +21,7 @@ export type PublicationSeller = Pick<
   active: boolean;
   registration_approval_state: 'pending' | 'approved' | 'rejected';
 };
-const limit = 6;
+const limit = 1;
 
 @Injectable()
 export class PublicationQuotas {
@@ -34,7 +34,7 @@ export class PublicationQuotas {
     >(
       `SELECT u.id,u.role,u.active,u.registration_approval_state,
         CASE WHEN u.role='owner' THEN
-          (SELECT COUNT(DISTINCT l.property_id) FROM listings l
+          (SELECT COUNT(*) FROM listings l
            WHERE l.seller_id=u.id AND l.status='published')
         ELSE NULL END AS published_objects
        FROM users u WHERE u.id=$1`,
@@ -78,27 +78,43 @@ export class PublicationQuotas {
   async assertCapacity(
     sql: Sql,
     current: PublicationSeller,
-    propertyId: string,
+    listingId: string,
+    decisionAt: Date,
   ): Promise<void> {
     if (current.role !== 'owner') return;
     const [count] = await this.db.rows<{
       published_objects: string;
       already_published: boolean;
+      monthly_publications: string;
     }>(
-      `SELECT COUNT(DISTINCT property_id) AS published_objects,
-        COALESCE(bool_or(property_id=$2::uuid),false) AS already_published
+      `SELECT COUNT(*) AS published_objects,
+        COALESCE(bool_or(id=$2::uuid),false) AS already_published,
+        (SELECT COUNT(*) FROM listing_history h
+         JOIN listings historical ON historical.id=h.listing_id
+         WHERE historical.seller_id=$1
+           AND h.after_data->>'status'='published'
+           AND h.before_data->>'status' IS DISTINCT FROM 'published'
+           AND h.created_at >= (date_trunc('month',$3::timestamptz AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow')
+           AND h.created_at < (date_trunc('month',$3::timestamptz AT TIME ZONE 'Europe/Moscow') + interval '1 month') AT TIME ZONE 'Europe/Moscow'
+        ) AS monthly_publications
        FROM listings WHERE seller_id=$1 AND status='published'`,
-      [current.id, propertyId],
+      [current.id, listingId, decisionAt],
       sql,
     );
-    if (count!.already_published || Number(count!.published_objects) < limit)
-      return;
-    throw new ConflictException({
-      statusCode: 409,
-      code: 'OWNER_PUBLICATION_QUOTA_EXCEEDED',
-      message:
-        'Достигнут лимит: 6 объектов одновременно. Чтобы освободить место, приостановите все опубликованные объявления одного объекта. После освобождения места сотрудник может повторить одобрение текущей заявки.',
-    });
+    if (count!.already_published) return;
+    if (Number(count!.published_objects) >= limit)
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'OWNER_PUBLICATION_QUOTA_EXCEEDED',
+        message:
+          'Разрешено одно активное объявление. Приостановите действующее объявление перед новой публикацией.',
+      });
+    if (Number(count!.monthly_publications) >= 3)
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED',
+        message: 'Достигнут лимит: три публикации в календарный месяц.',
+      });
   }
 }
 

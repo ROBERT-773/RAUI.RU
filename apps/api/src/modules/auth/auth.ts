@@ -60,9 +60,7 @@ export const registerSchema = z
     email: emailSchema,
     password: passwordSchema,
     displayName: z.string().trim().min(1).max(100),
-    role: z
-      .enum(['buyer', 'owner', 'agent', 'agency', 'developer'])
-      .default('buyer'),
+    role: z.enum(['buyer', 'owner', 'agent', 'agency', 'developer']),
   })
   .strict();
 export const loginSchema = z

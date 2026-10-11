@@ -9,6 +9,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
@@ -170,6 +171,36 @@ export class NotificationWorker {
         `SELECT u.active,u.email,u.phone,u.email_verified_at,u.phone_verified_at,COALESCE(p.email,false) AS email_enabled,COALESCE(p.sms,false) AS sms_enabled,COALESCE(p.push,false) AS push_enabled,COALESCE(p.transactional,true) AS transactional FROM users u LEFT JOIN notification_preferences p ON p.user_id=u.id WHERE u.id=$1`,
         [job.user_id],
       );
+      if (job.kind.startsWith('subscription.listing.')) {
+        const payload = z
+          .object({
+            listingId: z.uuid(),
+            subscriptionVersion: z.number().int().positive(),
+            event: z
+              .object({ kind: z.enum(['price_drop', 'availability']) })
+              .passthrough(),
+          })
+          .safeParse(job.payload);
+        if (!payload.success || job.channel !== 'email') {
+          await this.finish(job, 'skipped');
+          return true;
+        }
+        const [subscription] = await this.db.rows(
+          `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
+           AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
+           AND $4=ANY(events) AND frequency='immediate'`,
+          [
+            job.user_id,
+            payload.data.listingId,
+            payload.data.subscriptionVersion,
+            payload.data.event.kind,
+          ],
+        );
+        if (!subscription) {
+          await this.finish(job, 'skipped');
+          return true;
+        }
+      }
       const enabled =
         recipient?.active &&
         (!job.kind.startsWith('transactional.') || recipient.transactional) &&

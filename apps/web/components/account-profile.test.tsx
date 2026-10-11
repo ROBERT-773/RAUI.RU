@@ -324,3 +324,10 @@ test('late capability for old identity cannot replace new identity fallback', as
     screen.getByText('Подтверждение коротким кодом пока недоступно.'),
   ).toBeTruthy();
 });
+
+test('seeker profile uses approved role wording and explains available actions', async () => {
+  vi.mocked(api).mockResolvedValue({ ...user, role: 'buyer' });
+  render(<AccountProfile />);
+  expect(await screen.findByText('Роль: Ищу недвижимость')).toBeTruthy();
+  expect(screen.getByText(/Сохраняйте интересные объекты/)).toBeTruthy();
+});

@@ -17,7 +17,11 @@ import { RegionCatalogue, loadRegionDocuments } from './modules/geo/regions';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AuthController, AuthService } from './modules/auth/auth';
+import {
+  AuthController,
+  AuthService,
+  registerSchema,
+} from './modules/auth/auth';
 import { VerificationDelivery } from './modules/auth/delivery';
 import { PhoneOtpService } from './modules/auth/phone-otp';
 import { Audit } from './modules/audit/audit';
@@ -577,4 +581,19 @@ test('phone OTP OpenAPI is authenticated, strict and keeps legacy confirmation s
     legacy.content['application/json'].schema.properties.token!.pattern,
     '^[A-Za-z0-9_-]{43}$',
   );
+});
+
+test('public registration requires an explicit supported role', () => {
+  const input = {
+    email: 'role@example.test',
+    password: 'long-enough-password',
+    displayName: 'Role fixture',
+  };
+  assert.equal(registerSchema.safeParse(input).success, false);
+  for (const role of ['buyer', 'owner', 'agent', 'agency', 'developer']) {
+    assert.equal(registerSchema.safeParse({ ...input, role }).success, true);
+  }
+  for (const role of ['admin', 'moderator', 'advertiser', '', 'unknown']) {
+    assert.equal(registerSchema.safeParse({ ...input, role }).success, false);
+  }
 });
