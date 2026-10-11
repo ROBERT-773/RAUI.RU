@@ -7,8 +7,8 @@ staging smoke remain pending in issue #40 and the launch evidence report.
 
 ## Current candidate evidence
 
-This packaging is integrated with the account/search candidate after PR92.
-The required migration package is 001–017. Regional YAML assets enter the
+This packaging is integrated with the current account/search candidate.
+The required migration package is 001–018. Regional YAML assets enter the
 allowlisted build context and the validated catalogue is copied into API dist.
 CI builds the exact committed source and checks the immutable image ID offline,
 including non-root identity, native dependencies, regional catalogue and migration
@@ -22,8 +22,9 @@ After all required gates pass, CI retains the saved image archive, SHA256 checks
 and a sanitized source/image receipt for 14 days under `raui-runtime-<source-sha>`.
 This is local development-adapter acceptance; external staging acceptance remains
 not executed. It does not authorize deployment or registry publication.
-Rollback must preserve the current account policies in `RELEASE_ROLLBACK.md`;
-an older readable schema alone does not establish policy compatibility.
+Rollback must preserve the current account policies and the migration-018
+subscription-delivery guard in `RELEASE_ROLLBACK.md`; an older readable schema
+alone does not establish policy compatibility.
 
 ## Build and identity
 
@@ -114,7 +115,8 @@ unchanged. Validate real pnpm targets/native execution rather than package names
 
 Rollback uses a reviewed policy-compatible accepted image ID and its matching public configuration;
 it does not reverse database migrations. Forward fixes build and recheck a new
-artifact, applying only new reviewed migrations when needed. This task adds none.
+artifact, applying only new reviewed migrations when needed. Migration 018 remains
+applied during application rollback.
 
 ## Retained local artifact
 
