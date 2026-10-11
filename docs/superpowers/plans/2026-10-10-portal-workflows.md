@@ -35,14 +35,20 @@
 - [x] Add required blank role selection with exactly owner/agent/agency; verify existing registration test fails before implementation.
 - [x] Implement form and verify account tests.
 - [x] API contract: explicit buyer/owner/agent/agency/developer accepted; omitted and staff roles rejected.
-- [x] Remove registration schema default and expose developer in registration. Full integration acceptance remains pending.
-- [ ] Run lint/typecheck/test/build and affected API/integration/E2E checks, then commit API change separately.
+- [x] Remove registration schema default and expose developer in registration; accepted by RAUI CI #192.
+- [x] Run lint/typecheck/test/build and affected API/integration/E2E checks, then commit API change separately.
 
 ## Task 2 — Historical roles and profile
 
 **Files:** new versioned API migration, `modules/auth/auth.ts`, `common/security.ts`, `components/account-profile.tsx`, auth/profile/integration tests.
 
 **Interfaces:** authenticated role selection for legacy buyer accepts only three public roles, checks active/approval, locks user transactionally, audits and revokes previous sessions. Contacts and collections persist. Staff privileges and organization ownership are unchanged.
+
+**Design blocker:** existing rows do not record whether `buyer` was explicitly
+selected or supplied by the historical registration default. Do not infer the
+remediation cohort from `role='buyer'`. Reconcile the allowed targets with the
+v1.1 buyer/developer roles and define current-session revocation before designing
+the additive migration or endpoint.
 
 - [ ] Test unauthorized/cross-account/repeated/concurrent selection and preserved contact verification.
 - [ ] Add expand migration and endpoint; show explicit selection to legacy accounts.
@@ -63,9 +69,9 @@
 
 **Files:** `modules/listings/publication-quota.ts`, `modules/commerce/commerce.ts`, new entitlement migration/service, commerce cabinet, search-ranking integration.
 
-**Interfaces:** immutable server-priced quote produces publication entitlement with expiry; promotion is additive and does not grant publication rights. Owner free quota counts six distinct active objects, separate from paid rights.
+**Interfaces:** immutable server-priced quote produces publication entitlement with expiry; promotion is additive and does not grant publication rights. Without a paid entitlement, an owner may have one active listing and make three genuine publications per Europe/Moscow calendar month.
 
-- [ ] Verify one active listing and three publications per Moscow calendar month with real PostgreSQL, concurrent approvals, month boundary and idempotency replay.
+- [x] Verify one active listing and three publications per Moscow calendar month with real PostgreSQL, concurrent approvals, month boundary and idempotency replay.
 - [ ] Implement role/region/deal tariffs and expiry-aware entitlement consumption.
 - [ ] Implement Standard/Premium/Top ranking integration, atomic auction budgets and capped autobroker strategy.
 - [ ] Verify no charge or promotion activates without confirmed provider event.
@@ -124,9 +130,9 @@
 
 - Preserved source specification: `docs/RAUI_TZ_v1.1.md`, commit e3a63e2.
 - Registration alignment: a9d3c0f; owner quota implementation: 096b777; updated PostgreSQL acceptance scenarios: eac4dc5.
-- PostgreSQL acceptance is NOT passed: local PostgreSQL/container execution is unavailable in the current environment. Existing unit/typecheck/build results do not replace database concurrency evidence.
-- Release remains blocked until runtime service acceptance, migrations, authorization, quota race tests and built-artifact journeys pass on an isolated environment.
+- GitHub Actions RAUI CI #192 passed on candidate head `ce88d669fd0f2a1df7279c2b57b93b9b6e8ced69`, including PostgreSQL integration, concurrent quota acceptance, complete browser E2E, repeated migrations, runtime service smoke, encrypted recovery, production smoke, accepted-image restore and release/rollback artifact verification.
+- This verifies the current registration/quota candidate; it does not complete the remaining v1.1 portal tasks or external staging/provider acceptance.
 - MVP advertising is managed by administrators; advertiser self-service is second wave, threshold more than 20 active advertisers.
 - Exclusive promotion is scoped to a residential complex page and Similar block for 7/30/90 days. General search and map visibility must be preserved.
 - Paid publication exception requires an actual publication entitlement; existing Standard ranking promotion is not an entitlement.
-- Next implementation sections after the current acceptance gate: staff 2FA, complete notification event wiring/delivery, admin advertising, provider-backed payments and legal consent surfaces.
+- Next implementation sections after the current acceptance gate: resolve the historical-role provenance/design blocker; staff 2FA; complete notification event wiring/delivery with consent, unsubscribe-race and visibility guarantees; admin advertising; provider-backed payments; and legal consent surfaces.
