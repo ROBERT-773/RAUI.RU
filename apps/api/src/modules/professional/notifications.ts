@@ -14,7 +14,7 @@ import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { Audit, AuditModule } from '../audit/audit';
-import { Database } from '../database/database';
+import { Database, Sql } from '../database/database';
 import {
   Actor,
   AdminOnly,
@@ -158,114 +158,158 @@ export class NotificationWorker {
     });
     if (!job) return false;
     try {
-      const [recipient] = await this.db.rows<{
-        active: boolean;
-        email: string;
-        phone: string | null;
-        email_verified_at: string | null;
-        phone_verified_at: string | null;
-        email_enabled: boolean;
-        sms_enabled: boolean;
-        push_enabled: boolean;
-        transactional: boolean;
-      }>(
-        `SELECT u.active,u.email,u.phone,u.email_verified_at,u.phone_verified_at,COALESCE(p.email,false) AS email_enabled,COALESCE(p.sms,false) AS sms_enabled,COALESCE(p.push,false) AS push_enabled,COALESCE(p.transactional,true) AS transactional FROM users u LEFT JOIN notification_preferences p ON p.user_id=u.id WHERE u.id=$1`,
-        [job.user_id],
-      );
       if (job.kind.startsWith('subscription.listing.')) {
-        const payload = z
-          .object({
-            listingId: z.uuid(),
-            subscriptionVersion: z.number().int().positive(),
-            event: z
-              .object({ kind: z.enum(['price_drop', 'availability']) })
-              .passthrough(),
-          })
-          .safeParse(job.payload);
-        if (!payload.success || job.channel !== 'email') {
-          await this.finish(job, 'skipped');
-          return true;
-        }
-        const [subscription] = await this.db.rows(
-          `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
-           AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
-           AND $4=ANY(events) AND frequency='immediate' AND consent_version=$5`,
-          [
-            job.user_id,
-            payload.data.listingId,
-            payload.data.subscriptionVersion,
-            payload.data.event.kind,
-            listingSubscriptionConsentVersion,
-          ],
-        );
-        if (!subscription) {
-          await this.finish(job, 'skipped');
-          return true;
-        }
+        // Serialize the final consent gate and transport with disable's row lock.
+        await this.db.transaction((sql) => this.deliver(job, sql));
+      } else {
+        await this.deliver(job);
       }
-      const enabled =
-        recipient?.active &&
-        (!job.kind.startsWith('transactional.') || recipient.transactional) &&
-        (job.channel === 'email'
-          ? recipient.email_enabled && recipient.email_verified_at
-          : job.channel === 'sms'
-            ? recipient.sms_enabled &&
-              recipient.phone_verified_at &&
-              recipient.phone
-            : recipient.push_enabled);
-      if (!enabled) {
-        await this.finish(job, 'skipped');
-        return true;
-      }
-      if (!this.adapter.configured) {
-        await this.finish(job, 'deferred');
-        return true;
-      }
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          this.adapter.send(
-            {
-              channel: job.channel,
-              userId: job.user_id,
-              kind: job.kind,
-              payload: job.payload,
-              idempotencyKey: `notification:${job.id}`,
-              destination:
-                job.channel === 'email'
-                  ? recipient!.email
-                  : job.channel === 'sms'
-                    ? recipient!.phone!
-                    : job.user_id,
-            },
-            controller.signal,
-          ),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => {
-              controller.abort();
-              reject(new Error('delivery_deadline'));
-            }, 5000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-        controller.abort();
-      }
-      await this.finish(job, 'sent');
     } catch {
+      // SQL errors roll the delivery transaction back before retry finalization.
       await this.finish(job, 'failed');
     }
     return true;
   }
-  async finish(job: Job, result: 'sent' | 'skipped' | 'deferred' | 'failed') {
-    await this.db.transaction(async (sql) => {
+  private async deliver(job: Job, sql?: Sql) {
+    if (job.kind.startsWith('subscription.listing.')) {
+      const payload = z
+        .object({
+          listingId: z.uuid(),
+          subscriptionVersion: z.number().int().positive(),
+          event: z
+            .object({ kind: z.enum(['price_drop', 'availability']) })
+            .passthrough(),
+        })
+        .safeParse(job.payload);
+      if (!payload.success || job.channel !== 'email') {
+        await this.finish(job, 'skipped', sql);
+        return;
+      }
+      const [subscription] = await this.db.rows(
+        `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
+           AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
+           AND $4=ANY(events) AND frequency='immediate' AND consent_version=$5 FOR UPDATE`,
+        [
+          job.user_id,
+          payload.data.listingId,
+          payload.data.subscriptionVersion,
+          payload.data.event.kind,
+          listingSubscriptionConsentVersion,
+        ],
+        sql,
+      );
+      if (!subscription) {
+        await this.finish(job, 'skipped', sql);
+        return;
+      }
+    }
+    const [recipient] = await this.db.rows<{
+      active: boolean;
+      email: string;
+      phone: string | null;
+      email_verified_at: string | null;
+      phone_verified_at: string | null;
+      email_enabled: boolean;
+      sms_enabled: boolean;
+      push_enabled: boolean;
+      transactional: boolean;
+    }>(
+      `SELECT u.active,u.email,u.phone,u.email_verified_at,u.phone_verified_at,COALESCE(p.email,false) AS email_enabled,COALESCE(p.sms,false) AS sms_enabled,COALESCE(p.push,false) AS push_enabled,COALESCE(p.transactional,true) AS transactional FROM users u LEFT JOIN notification_preferences p ON p.user_id=u.id WHERE u.id=$1`,
+      [job.user_id],
+      sql,
+    );
+    const enabled =
+      recipient?.active &&
+      (!job.kind.startsWith('transactional.') || recipient.transactional) &&
+      (job.channel === 'email'
+        ? recipient.email_enabled && recipient.email_verified_at
+        : job.channel === 'sms'
+          ? recipient.sms_enabled &&
+            recipient.phone_verified_at &&
+            recipient.phone
+          : recipient.push_enabled);
+    if (!enabled) {
+      await this.finish(job, 'skipped', sql);
+      return;
+    }
+    if (!this.adapter.configured) {
+      await this.finish(job, 'deferred', sql);
+      return;
+    }
+    if (sql) {
+      // Consent -> job is the shared lock order. Claim committed before this gate.
       const [held] = await this.db.rows(
-        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND lease_until>now() AND status='running' FOR UPDATE",
+        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' FOR UPDATE",
         [job.id, job.lease_token],
         sql,
       );
       if (!held) return;
+      // Evaluate time AFTER acquiring the job lock, never before a lock wait.
+      const [valid] = await this.db.rows(
+        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>clock_timestamp()+interval '4 seconds'",
+        [job.id, job.lease_token],
+        sql,
+      );
+      if (!valid) return;
+    }
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.adapter.send(
+          {
+            channel: job.channel,
+            userId: job.user_id,
+            kind: job.kind,
+            payload: job.payload,
+            idempotencyKey: `notification:${job.id}`,
+            destination:
+              job.channel === 'email'
+                ? recipient!.email
+                : job.channel === 'sms'
+                  ? recipient!.phone!
+                  : job.user_id,
+          },
+          controller.signal,
+        ),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => {
+              controller.abort();
+              reject(new Error('delivery_deadline'));
+            },
+            sql ? 3000 : 5000,
+          );
+        }),
+      ]);
+    } catch {
+      await this.finish(job, 'failed', sql);
+      return;
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+    await this.finish(job, 'sent', sql);
+  }
+
+  async finish(
+    job: Job,
+    result: 'sent' | 'skipped' | 'deferred' | 'failed',
+    sql?: Sql,
+  ) {
+    const complete = async (sql: Sql) => {
+      const [held] = await this.db.rows(
+        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' FOR UPDATE",
+        [job.id, job.lease_token],
+        sql,
+      );
+      if (!held) return;
+      const [valid] = await this.db.rows(
+        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>clock_timestamp()",
+        [job.id, job.lease_token],
+        sql,
+      );
+      if (!valid) return;
       if (result === 'deferred') {
         await sql.query(
           "UPDATE notification_deliveries SET status='pending',attempts=attempts-1,available_at=now()+interval '1 hour',lease_token=NULL,lease_until=NULL,last_error='transport_unconfigured' WHERE id=$1",
@@ -292,7 +336,9 @@ export class NotificationWorker {
         job.id,
         { channel: job.channel, kind: job.kind, attempt: job.attempts },
       );
-    });
+    };
+    if (sql) await complete(sql);
+    else await this.db.transaction(complete);
   }
   async retry(actor: Actor, id: string) {
     verified(actor);

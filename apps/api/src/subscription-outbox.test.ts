@@ -120,6 +120,8 @@ test('worker binds current consent version before allowing subscription transpor
             email_verified_at: 'now',
           },
         ];
+      if (query.includes('FROM notification_deliveries'))
+        return [{ id: job.id }];
       assert.match(query, /consent_version\s*=\s*\$5/);
       assert.deepEqual(values, [
         'user',
@@ -145,5 +147,83 @@ test('worker binds current consent version before allowing subscription transpor
   };
   await worker.once();
   assert.equal(result, 'sent');
+  assert.equal(sends, 1);
+});
+
+test('subscription transport stays in the transaction that locks its consent row', async () => {
+  const job = {
+    id: 'job',
+    user_id: 'user',
+    channel: 'email',
+    kind: 'subscription.listing.price_drop',
+    dedupe_key: 'event',
+    attempts: 0,
+    payload: {
+      listingId: '12345678-1234-4234-8234-123456789abc',
+      subscriptionVersion: 1,
+      event: { kind: 'price_drop' },
+    },
+  };
+  const sql = { query: async () => ({ rows: [] }) };
+  let inTransaction = false;
+  let consentLocked = false;
+  let leaseLocked = false;
+  const db = {
+    pool: sql,
+    transaction: async (work: (value: unknown) => Promise<unknown>) => {
+      assert.equal(inTransaction, false, 'must not nest transactions');
+      inTransaction = true;
+      try {
+        return await work(sql);
+      } finally {
+        inTransaction = false;
+      }
+    },
+    rows: async (query: string, _values: unknown[], client: unknown) => {
+      if (query.includes('FOR UPDATE SKIP LOCKED')) return [job];
+      if (query.includes('FROM users'))
+        return [
+          {
+            active: true,
+            email: 'user@example.test',
+            email_enabled: true,
+            email_verified_at: 'now',
+          },
+        ];
+      if (query.includes('FROM listing_subscriptions')) {
+        assert.equal(inTransaction, true);
+        assert.equal(client, sql);
+        assert.match(query, /FOR UPDATE/);
+        consentLocked = true;
+        return [{}];
+      }
+      assert.equal(consentLocked, true);
+      assert.equal(client, sql);
+      if (query.includes('FOR UPDATE')) {
+        leaseLocked = true;
+      } else {
+        assert.equal(
+          leaseLocked,
+          true,
+          'check clock after acquiring the job lock',
+        );
+        assert.match(query, /clock_timestamp\(\)/);
+      }
+      return [{ id: job.id }];
+    },
+  } as unknown as Database;
+  let sends = 0;
+  const adapter = {
+    configured: true,
+    send: async () => {
+      assert.equal(inTransaction, true);
+      assert.equal(consentLocked && leaseLocked, true);
+      sends++;
+    },
+  } as NotificationAdapter;
+  const worker = new NotificationWorker(db, adapter, {
+    record: async () => {},
+  } as unknown as Audit);
+  await worker.once();
   assert.equal(sends, 1);
 });

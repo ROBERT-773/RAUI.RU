@@ -526,7 +526,8 @@ export function enrichOpenApi(document: OpenAPIObject) {
               'Stale subscription version; reload current preferences',
           };
           operation.responses['201'] = {
-            description: 'Subscription disabled for current account',
+            description:
+              'Subscription disabled for current account. After successful disable, no new transport attempts for the previous subscription start. Messages already accepted by the provider cannot be recalled.',
           };
         }
       }

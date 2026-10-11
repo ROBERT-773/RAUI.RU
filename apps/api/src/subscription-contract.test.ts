@@ -77,4 +77,12 @@ test('OpenAPI exposes explicit subscription consent and version-protected disabl
   assert.ok(subscribe.security?.length);
   assert.ok(disable.responses['409']);
   assert.match(JSON.stringify(disable.requestBody), /version/);
+  assert.match(
+    JSON.stringify(disable.responses['201']),
+    /no new transport attempts for the previous subscription/,
+  );
+  assert.match(
+    JSON.stringify(disable.responses['201']),
+    /already accepted by the provider cannot be recalled/,
+  );
 });

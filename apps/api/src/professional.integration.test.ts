@@ -12,6 +12,7 @@ import { Actor, hash, token } from './common/security';
 import { ProfessionalFeeds } from './modules/professional/feeds';
 import { ProfessionalImports } from './modules/professional/imports';
 import { ProfessionalPlatform } from './modules/professional/platform';
+import { ListingSubscriptions } from './modules/product/subscriptions';
 import { enqueueImmediateListingEmails } from './modules/product/subscription-outbox';
 import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 import { Structures } from './modules/properties/structures';
@@ -30,8 +31,10 @@ class TestAdapter extends NotificationAdapter {
   get configured() {
     return this.enabled;
   }
-  async send(e: DeliveryEnvelope) {
+  onSend?: (e: DeliveryEnvelope, signal: AbortSignal) => Promise<void>;
+  async send(e: DeliveryEnvelope, signal: AbortSignal) {
     this.calls.push(e);
+    await this.onSend?.(e, signal);
     if (this.fail) throw new Error('provider-secret');
     this.delivered.add(e.idempotencyKey);
   }
@@ -1364,6 +1367,231 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           )[0]!.version,
           1,
         );
+      },
+    );
+    await t.test(
+      'Unsubscribe serializes final subscription gate and bounded transport',
+      async () => {
+        const actor = actors[0]!;
+        const subscriptions = app.get(ListingSubscriptions);
+        const setup = async () => {
+          const [row] = await db.rows<{ version: number }>(
+            `UPDATE listing_subscriptions SET disabled_at=NULL,consent_version=$3,version=version+1
+           WHERE user_id=$1 AND listing_id=$2 RETURNING version`,
+            [actor.id, listingId, listingSubscriptionConsentVersion],
+          );
+          const [job] = await db.rows<{ id: string }>(
+            `INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
+           VALUES($1,'email','subscription.listing.price_drop',$2,$3::jsonb) RETURNING id`,
+            [
+              actor.id,
+              `unsubscribe-test:${randomUUID()}`,
+              JSON.stringify({
+                listingId,
+                subscriptionVersion: row!.version,
+                event: { kind: 'price_drop' },
+              }),
+            ],
+          );
+          return { id: job!.id, version: row!.version };
+        };
+        const status = async (id: string) =>
+          (
+            await db.rows<{ status: string }>(
+              'SELECT status FROM notification_deliveries WHERE id=$1',
+              [id],
+            )
+          )[0]!.status;
+        const waitFor = async (check: () => boolean | Promise<boolean>) => {
+          const deadline = performance.now() + 4000;
+          while (performance.now() < deadline) {
+            if (await check()) return;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          assert.fail('Expected race barrier was not reached');
+        };
+        const lockWait = async (part: string, blocker?: number) =>
+          Boolean(
+            (
+              await pool.query(
+                `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+         AND wait_event_type='Lock' AND position($1 in query)>0
+         AND ($2::integer IS NULL OR $2=ANY(pg_blocking_pids(pid)))) AS waiting`,
+                [part, blocker ?? null],
+              )
+            ).rows[0].waiting,
+          );
+        const sends = () =>
+          adapter.calls.filter(
+            (call) => call.kind === 'subscription.listing.price_drop',
+          ).length;
+
+        // A committed disable wins before the worker reaches its final consent gate.
+        const before = await setup();
+        await subscriptions.disable(actor, listingId, {
+          version: before.version,
+        });
+        const beforeCalls = sends();
+        await delivery.once();
+        assert.equal(await status(before.id), 'skipped');
+        assert.equal(sends(), beforeCalls);
+
+        // Transport wins the lock; disable cannot acknowledge until the attempt ends.
+        for (const outcome of ['ack', 'error', 'timeout'] as const) {
+          const job = await setup();
+          let entered = false;
+          let release!: () => void;
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          let aborted = false;
+          adapter.onSend = async (_envelope, signal) => {
+            entered = true;
+            if (outcome === 'timeout') {
+              await new Promise<void>((_resolve, reject) =>
+                signal.addEventListener(
+                  'abort',
+                  () => {
+                    aborted = true;
+                    reject(new Error('Test transport aborted'));
+                  },
+                  { once: true },
+                ),
+              );
+            } else {
+              await gate;
+              if (outcome === 'error')
+                throw new Error('Test transport failure');
+            }
+          };
+          const working = delivery.once();
+          let disabling: Promise<unknown> | undefined;
+          let disableDone = false;
+          let disableError: unknown;
+          try {
+            await waitFor(() => entered);
+            disabling = subscriptions
+              .disable(actor, listingId, { version: job.version })
+              .then(() => {
+                disableDone = true;
+              })
+              .catch((error: unknown) => {
+                disableError = error;
+              });
+            await waitFor(() =>
+              lockWait('SELECT version FROM listing_subscriptions'),
+            );
+            assert.equal(disableDone, false);
+            release();
+            await working;
+            await disabling;
+            assert.equal(disableError, undefined);
+            assert.equal(disableDone, true);
+            assert.equal(
+              await status(job.id),
+              outcome === 'ack' ? 'sent' : 'pending',
+            );
+            if (outcome === 'timeout') assert.equal(aborted, true);
+            // Retry an old job after successful disable: no transport invocation.
+            await pool.query(
+              "UPDATE notification_deliveries SET status='pending',available_at=now() WHERE id=$1",
+              [job.id],
+            );
+            const calls = sends();
+            await delivery.once();
+            assert.equal(await status(job.id), 'skipped');
+            assert.equal(sends(), calls);
+          } finally {
+            release();
+            await working;
+            if (disabling) await disabling;
+            delete adapter.onSend;
+          }
+        }
+
+        // A lease may expire while either lock is held without that row changing.
+        for (const lockedTable of [
+          'listing_subscriptions',
+          'notification_deliveries',
+        ] as const) {
+          const job = await setup();
+          const holder = await pool.connect();
+          let working: Promise<boolean> | undefined;
+          try {
+            await holder.query('BEGIN');
+            const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+              .rows[0].pid as number;
+            if (lockedTable === 'listing_subscriptions') {
+              await holder.query(
+                'SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
+                [actor.id, listingId],
+              );
+              working = delivery.once();
+              await waitFor(() =>
+                lockWait('SELECT 1 FROM listing_subscriptions', pid),
+              );
+              // Claim has committed. Shorten lease before releasing consent lock.
+              await pool.query(
+                "UPDATE notification_deliveries SET lease_until=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",
+                [job.id],
+              );
+            } else {
+              // Stop before the subscription gate so the claim can finish first.
+              const consentHolder = await pool.connect();
+              try {
+                await consentHolder.query('BEGIN');
+                await consentHolder.query(
+                  'SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
+                  [actor.id, listingId],
+                );
+                working = delivery.once();
+                await waitFor(() =>
+                  lockWait('SELECT 1 FROM listing_subscriptions'),
+                );
+                await pool.query(
+                  "UPDATE notification_deliveries SET lease_until=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",
+                  [job.id],
+                );
+                await holder.query(
+                  'SELECT id FROM notification_deliveries WHERE id=$1 FOR UPDATE',
+                  [job.id],
+                );
+                await consentHolder.query('COMMIT');
+              } finally {
+                await consentHolder.query('ROLLBACK');
+                consentHolder.release();
+              }
+              await waitFor(() =>
+                lockWait('SELECT id FROM notification_deliveries', pid),
+              );
+            }
+            // DB clock is the proof; no fixed sleep substitutes for expiry.
+            await waitFor(async () =>
+              Boolean(
+                (
+                  await holder.query(
+                    'SELECT lease_until<=clock_timestamp() AS expired FROM notification_deliveries WHERE id=$1',
+                    [job.id],
+                  )
+                ).rows[0].expired,
+              ),
+            );
+            const calls = sends();
+            await holder.query('COMMIT');
+            await working;
+            assert.equal(sends(), calls);
+            assert.equal(await status(job.id), 'running');
+            // Prevent this deliberately expired fixture from being reclaimed later.
+            await pool.query(
+              "UPDATE notification_deliveries SET status='skipped',lease_token=NULL,lease_until=NULL WHERE id=$1",
+              [job.id],
+            );
+          } finally {
+            await holder.query('ROLLBACK');
+            holder.release();
+            if (working) await working;
+          }
+        }
       },
     );
   } finally {
