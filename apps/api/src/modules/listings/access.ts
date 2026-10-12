@@ -25,6 +25,8 @@ export interface Listing {
   version: number;
   description: string;
 }
+// One authoritative predicate for public data and neutral visibility snapshots.
+const publicEligibility = `l.status='published' AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('owner','agent','agency','developer','admin') AND (l.organization_id IS NULL OR EXISTS(SELECT 1 FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=l.organization_id AND o.active AND m.user_id=l.seller_id AND m.active))`;
 @Injectable()
 export class ListingAccess {
   constructor(
@@ -33,11 +35,21 @@ export class ListingAccess {
   ) {}
   async visible(id: string, sql: Sql = this.db.pool) {
     const [listing] = await this.db.rows<Listing>(
-      `SELECT l.* FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND l.status='published' AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('owner','agent','agency','developer','admin') AND (l.organization_id IS NULL OR EXISTS(SELECT 1 FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=l.organization_id AND o.active AND m.user_id=l.seller_id AND m.active))`,
+      `SELECT l.* FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND ${publicEligibility}`,
       [parse(uuid, id)],
       sql,
     );
     return listing;
+  }
+  /** Version and eligibility share one DB snapshot; never returns private listing fields. */
+  async currentVisibility(id: string, sql: Sql = this.db.pool) {
+    const [current] = await this.db.rows<{ version: number; visible: boolean }>(
+      `SELECT l.version,(${publicEligibility}) AS visible FROM listings l
+       JOIN users u ON u.id=l.seller_id WHERE l.id=$1`,
+      [parse(uuid, id)],
+      sql,
+    );
+    return current;
   }
   async get(
     actor: Actor,

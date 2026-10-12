@@ -36,6 +36,14 @@ readability alone does not establish policy compatibility.
   such rows through old code, delete queue/history, or start old workers merely
   because migration 018 is readable. If the queue cannot reach only `sent`/`skipped`
   states, retain compatible workers or deploy a reviewed forward fix.
+- Preserve `listing_history` JSON, including schema-1 `publicPriceSnapshot`
+  markers, and the complete migration 001–018 ledger. Snapshot capture adds no
+  migration. Before enabling baseline-dependent listing events, require every
+  rollback API to retain qualifying approval capture and a compatible snapshot
+  reader. If capture is unavailable, suspend baseline-dependent event generation
+  and delivery. Treat prices across a capture gap as unknown; do not infer the
+  last public price from older snapshots, drafts or legacy history. Current
+  production listing-event wiring remains disabled.
 - Verify the chosen immutable artifact preserves these policies and security fixes.
   Run staging checks for pending/rejected denial, concurrent active-listing quota,
   Europe/Moscow monthly publication quota and OTP-disabled fallback before traffic

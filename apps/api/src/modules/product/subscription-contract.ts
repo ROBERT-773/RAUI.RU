@@ -31,3 +31,29 @@ export const listingSubscriptionDisableSchema = z
   .strict();
 
 export const listingSubscriptionConsentVersion = 'listing-updates-v1';
+
+/** Internal server-owned envelope; never accepted from a public job-creation API. */
+export const listingSubscriptionDeliverySchema = z
+  .object({
+    listingId: z.uuid(),
+    listingVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    subscriptionVersion: z.number().int().positive(),
+    event: z.discriminatedUnion('kind', [
+      z
+        .object({
+          kind: z.literal('price_drop'),
+          previousPriceMinor: z
+            .number()
+            .int()
+            .positive()
+            .max(Number.MAX_SAFE_INTEGER),
+          priceMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        })
+        .strict()
+        .refine((event) => event.priceMinor < event.previousPriceMinor),
+      z
+        .object({ kind: z.literal('availability'), available: z.boolean() })
+        .strict(),
+    ]),
+  })
+  .strict();

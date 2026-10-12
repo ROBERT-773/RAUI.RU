@@ -24,7 +24,12 @@ import {
   verified,
 } from '../../common/security';
 import { loadConfig } from '../../config';
-import { listingSubscriptionConsentVersion } from '../product/subscription-contract';
+import { ListingAccess, ListingAccessModule } from '../listings/access';
+import { priceMinor } from '../product/subscription-events';
+import {
+  listingSubscriptionDeliverySchema,
+  listingSubscriptionConsentVersion,
+} from '../product/subscription-contract';
 import { publicIPv4 } from '../../common/outbound-policy';
 export interface DeliveryEnvelope {
   channel: 'email' | 'push' | 'sms';
@@ -130,6 +135,7 @@ export class NotificationWorker {
     private readonly db: Database,
     private readonly adapter: NotificationAdapter,
     private readonly audit: Audit,
+    private readonly access: ListingAccess,
   ) {}
   // Bridge the existing product outbox; dedupe key remains stable across workers/restarts.
   async bridge() {
@@ -171,20 +177,19 @@ export class NotificationWorker {
     return true;
   }
   private async deliver(job: Job, sql?: Sql) {
+    let subscriptionPayload:
+      z.infer<typeof listingSubscriptionDeliverySchema> | undefined;
     if (job.kind.startsWith('subscription.listing.')) {
-      const payload = z
-        .object({
-          listingId: z.uuid(),
-          subscriptionVersion: z.number().int().positive(),
-          event: z
-            .object({ kind: z.enum(['price_drop', 'availability']) })
-            .passthrough(),
-        })
-        .safeParse(job.payload);
-      if (!payload.success || job.channel !== 'email') {
+      const payload = listingSubscriptionDeliverySchema.safeParse(job.payload);
+      if (
+        !payload.success ||
+        job.channel !== 'email' ||
+        job.kind !== `subscription.listing.${payload.data.event.kind}`
+      ) {
         await this.finish(job, 'skipped', sql);
         return;
       }
+      subscriptionPayload = payload.data;
       const [subscription] = await this.db.rows(
         `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
            AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
@@ -245,6 +250,49 @@ export class NotificationWorker {
       );
       if (!held) return;
       // Evaluate time AFTER acquiring the job lock, never before a lock wait.
+      const [valid] = await this.db.rows(
+        "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>clock_timestamp()+interval '4 seconds'",
+        [job.id, job.lease_token],
+        sql,
+      );
+      if (!valid) return;
+    }
+    if (subscriptionPayload) {
+      const event = subscriptionPayload.event;
+      let eligible = false;
+      if (event.kind === 'availability' && !event.available) {
+        // A single snapshot prevents eligibility/version reads observing different states.
+        const current = await this.access.currentVisibility(
+          subscriptionPayload.listingId,
+          sql,
+        );
+        eligible =
+          current !== undefined &&
+          !current.visible &&
+          current.version === subscriptionPayload.listingVersion;
+      } else {
+        const visible = await this.access.visible(
+          subscriptionPayload.listingId,
+          sql,
+        );
+        if (visible?.version === subscriptionPayload.listingVersion) {
+          if (event.kind === 'availability') eligible = true;
+          else {
+            try {
+              eligible =
+                visible.price !== null &&
+                priceMinor(visible.price) === event.priceMinor;
+            } catch {
+              eligible = false;
+            }
+          }
+        }
+      }
+      if (!eligible) {
+        await this.finish(job, 'skipped', sql);
+        return;
+      }
+      // Visibility queries can wait: refresh remaining lease immediately before invoke.
       const [valid] = await this.db.rows(
         "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_until>clock_timestamp()+interval '4 seconds'",
         [job.id, job.lease_token],
@@ -380,7 +428,7 @@ export class NotificationAdminController {
   }
 }
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, ListingAccessModule],
   controllers: [NotificationAdminController],
   providers: [
     NotificationWorker,

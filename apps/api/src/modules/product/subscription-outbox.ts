@@ -14,7 +14,7 @@ export async function enqueueImmediateListingEmails(
     await sql.query(
       `INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
        SELECT s.user_id,'email','subscription.listing.'||$2,$3,
-         jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'event',$4::jsonb)
+         jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb)
        FROM listing_subscriptions s JOIN users u ON u.id=s.user_id
        WHERE s.listing_id=$1 AND s.disabled_at IS NULL AND s.frequency='immediate'
          AND s.consent_version=$5 AND 'email'=ANY(s.channels) AND $2=ANY(s.events) AND u.active
@@ -25,6 +25,7 @@ export async function enqueueImmediateListingEmails(
         key,
         JSON.stringify(event),
         listingSubscriptionConsentVersion,
+        change.version,
       ],
     );
   }

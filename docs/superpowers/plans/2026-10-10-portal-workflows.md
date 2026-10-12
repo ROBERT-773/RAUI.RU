@@ -200,3 +200,25 @@ the previous snapshot before recording the new one, enqueue in that same
 transaction, and apply the separately agreed visibility/history policy before
 disclosure. Current snapshot capture does not automatically enable notifications
 or solve seller/organization visibility changes outside listing publication.
+
+## Latest-current-state notification gate — owner decision 2026-10-12
+
+The owner agreed to send only the latest current state. Internal queued envelopes
+now carry server-owned listingVersion and strict event fields. Price drops and
+available-again events require the full public eligibility predicate and matching
+current version; price drops must also match the current exact public price.
+Unavailable notices require a matching version and a nonpublic current state,
+queried atomically with no private title, price, description or reason returned.
+Missing/invalid old envelopes and superseded events are skipped, not sent.
+
+Visibility is evidence at the final authorization query, not an assurance of
+continued visibility or provider delivery later. The worker rechecks its lease
+after visibility queries, retaining subscription/disabling serialization and
+provider idempotency keys. Generic notifications remain separate.
+
+Real PostgreSQL tests cover seller verification/role/activity and organization or
+membership changes without listing-version increments, stale prices/versions,
+neutral unavailable events and strict payload rejection. Production event
+generation remains unwired; defining and recording authoritative public-to-private
+event sources is still required before enabling delivery. Daily and in-app
+channels remain outside this implemented email groundwork.

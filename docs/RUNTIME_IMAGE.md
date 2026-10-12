@@ -25,6 +25,9 @@ not executed. It does not authorize deployment or registry publication.
 Rollback must preserve the current account policies and the migration-018
 subscription-delivery guard in `RELEASE_ROLLBACK.md`; an older readable schema
 alone does not establish policy compatibility.
+Preserve public-price snapshot JSON and continuous qualifying approval capture
+before enabling baseline-dependent events. Follow the capture-gap and compatible
+reader requirements in RELEASE_ROLLBACK.md.
 
 ## Build and identity
 

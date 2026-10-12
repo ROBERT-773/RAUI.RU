@@ -12,6 +12,7 @@ import { Actor, hash, token } from './common/security';
 import { ProfessionalFeeds } from './modules/professional/feeds';
 import { ProfessionalImports } from './modules/professional/imports';
 import { ProfessionalPlatform } from './modules/professional/platform';
+import { ListingAccess } from './modules/listings/access';
 import { ListingSubscriptions } from './modules/product/subscriptions';
 import { enqueueImmediateListingEmails } from './modules/product/subscription-outbox';
 import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
@@ -1257,6 +1258,11 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         });
         const enqueue = async () => {
           const event = change();
+          // Eligibility/current state must be valid so consent tests are not masked.
+          await pool.query(
+            "UPDATE listings SET status='published',price=99,version=$2 WHERE id=$1",
+            [listingId, event.version],
+          );
           await db.transaction((sql) =>
             enqueueImmediateListingEmails(sql, event),
           );
@@ -1311,6 +1317,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               JSON.stringify({
                 listingId,
                 subscriptionVersion: 1,
+                listingVersion: eventVersion,
                 event: {
                   kind: 'price_drop',
                   previousPriceMinor: 10000,
@@ -1389,7 +1396,17 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               JSON.stringify({
                 listingId,
                 subscriptionVersion: row!.version,
-                event: { kind: 'price_drop' },
+                listingVersion: (
+                  await db.rows<{ version: number }>(
+                    'SELECT version FROM listings WHERE id=$1',
+                    [listingId],
+                  )
+                )[0]!.version,
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 10000,
+                  priceMinor: 9900,
+                },
               }),
             ],
           );
@@ -1592,6 +1609,205 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             if (working) await working;
           }
         }
+      },
+    );
+    await t.test(
+      'Listing deliveries require latest full-public state or a neutral current unavailable event',
+      async () => {
+        const access = app.get(ListingAccess);
+        const recipient = actors[1]!.id;
+        const seller = actors[0]!.id;
+        await pool.query(
+          `INSERT INTO notification_preferences(user_id,email) VALUES($1,true)
+        ON CONFLICT(user_id) DO UPDATE SET email=true`,
+          [recipient],
+        );
+        const [subscription] = await db.rows<{ version: number }>(
+          `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+         VALUES($1,$2,ARRAY['price_drop','availability'],ARRAY['email'],'immediate',$3)
+         ON CONFLICT(user_id,listing_id) DO UPDATE SET disabled_at=NULL,events=EXCLUDED.events,
+           channels=EXCLUDED.channels,frequency=EXCLUDED.frequency,consent_version=EXCLUDED.consent_version
+         RETURNING version`,
+          [recipient, listingId, listingSubscriptionConsentVersion],
+        );
+        const originalSeller = (
+          await pool.query(
+            'SELECT role,active,email_verified_at,phone_verified_at FROM users WHERE id=$1',
+            [seller],
+          )
+        ).rows[0];
+        const restore = async () => {
+          await pool.query(
+            'UPDATE users SET role=$2,active=$3,email_verified_at=$4,phone_verified_at=$5 WHERE id=$1',
+            [
+              seller,
+              originalSeller.role,
+              originalSeller.active,
+              originalSeller.email_verified_at,
+              originalSeller.phone_verified_at,
+            ],
+          );
+          await pool.query('UPDATE organizations SET active=true WHERE id=$1', [
+            org,
+          ]);
+          await pool.query(
+            `INSERT INTO memberships(organization_id,user_id,role,active) VALUES($1,$2,'owner',true)
+          ON CONFLICT(organization_id,user_id) DO UPDATE SET active=true`,
+            [org, seller],
+          );
+          await pool.query(
+            "UPDATE listings SET status='published',price=99,version=7000 WHERE id=$1",
+            [listingId],
+          );
+        };
+        const payload = (
+          event: unknown = {
+            kind: 'price_drop',
+            previousPriceMinor: 10000,
+            priceMinor: 9900,
+          },
+        ) => ({
+          listingId,
+          listingVersion: 7000,
+          subscriptionVersion: subscription!.version,
+          event,
+        });
+        const calls = () =>
+          adapter.calls.filter(
+            (call) =>
+              call.userId === recipient &&
+              call.kind.startsWith('subscription.listing.'),
+          );
+        const run = async (
+          body: unknown,
+          expected: 'sent' | 'skipped',
+          kind = 'subscription.listing.price_drop',
+        ) => {
+          const [job] = await db.rows<{ id: string }>(
+            `INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
+          VALUES($1,'email',$2,$3,$4::jsonb) RETURNING id`,
+            [recipient, kind, `state:${randomUUID()}`, JSON.stringify(body)],
+          );
+          const before = calls().length;
+          await delivery.once();
+          assert.equal(
+            (
+              await db.rows(
+                'SELECT status FROM notification_deliveries WHERE id=$1',
+                [job!.id],
+              )
+            )[0]!.status,
+            expected,
+          );
+          assert.equal(calls().length, before + (expected === 'sent' ? 1 : 0));
+          if (expected === 'sent')
+            assert.deepEqual(calls().at(-1)!.payload, body);
+        };
+        await restore();
+        assert.equal(
+          (await access.currentVisibility(listingId))!.visible,
+          true,
+        );
+        assert.ok(await access.visible(listingId));
+        await run(payload(), 'sent');
+        await run(
+          payload({ kind: 'availability', available: true }),
+          'sent',
+          'subscription.listing.availability',
+        );
+        // Same version with a different live price cannot deliver a stale price event.
+        await pool.query('UPDATE listings SET price=98 WHERE id=$1', [
+          listingId,
+        ]);
+        await run(payload(), 'skipped');
+        await restore();
+        await run({ ...payload(), listingVersion: 6999 }, 'skipped');
+        for (const mutation of [
+          {
+            sql: "UPDATE listings SET status='paused' WHERE id=$1",
+            args: [listingId],
+          },
+          { sql: 'UPDATE users SET active=false WHERE id=$1', args: [seller] },
+          { sql: "UPDATE users SET role='buyer' WHERE id=$1", args: [seller] },
+          {
+            sql: 'UPDATE users SET email_verified_at=NULL WHERE id=$1',
+            args: [seller],
+          },
+          {
+            sql: 'UPDATE users SET phone_verified_at=NULL WHERE id=$1',
+            args: [seller],
+          },
+          {
+            sql: 'UPDATE organizations SET active=false WHERE id=$1',
+            args: [org],
+          },
+          {
+            sql: 'UPDATE memberships SET active=false WHERE organization_id=$1 AND user_id=$2',
+            args: [org, seller],
+          },
+          {
+            sql: 'DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2',
+            args: [org, seller],
+          },
+        ]) {
+          await restore();
+          await pool.query(mutation.sql, mutation.args);
+          assert.equal(
+            (
+              await db.rows('SELECT version FROM listings WHERE id=$1', [
+                listingId,
+              ])
+            )[0]!.version,
+            7000,
+          );
+          assert.equal(
+            (await access.currentVisibility(listingId))!.visible,
+            false,
+          );
+          assert.equal(await access.visible(listingId), undefined);
+          await run(payload(), 'skipped');
+          await run(
+            payload({ kind: 'availability', available: true }),
+            'skipped',
+            'subscription.listing.availability',
+          );
+        }
+        await restore();
+        await pool.query(
+          "UPDATE listings SET status='paused',title='PRIVATE TITLE',price=1 WHERE id=$1",
+          [listingId],
+        );
+        const unavailable = payload({ kind: 'availability', available: false });
+        await run(unavailable, 'sent', 'subscription.listing.availability');
+        // Neutral envelope contains no current hidden title, price or cause.
+        assert.deepEqual(calls().at(-1)!.payload, unavailable);
+        await run(
+          { ...unavailable, listingVersion: 6999 },
+          'skipped',
+          'subscription.listing.availability',
+        );
+        await restore();
+        await run(unavailable, 'skipped', 'subscription.listing.availability');
+        await pool.query(
+          "UPDATE listings SET status='paused',version=7001 WHERE id=$1",
+          [listingId],
+        );
+        await run(unavailable, 'skipped', 'subscription.listing.availability');
+        await restore();
+        const missing = payload() as Record<string, unknown>;
+        delete missing.listingVersion;
+        await run(missing, 'skipped');
+        await run({ ...payload(), privateReason: 'hidden' }, 'skipped');
+        await run(
+          payload({
+            kind: 'price_drop',
+            previousPriceMinor: 10000,
+            priceMinor: 9900,
+            title: 'hidden',
+          }),
+          'skipped',
+        );
+        await run(payload(), 'skipped', 'subscription.listing.availability');
       },
     );
   } finally {

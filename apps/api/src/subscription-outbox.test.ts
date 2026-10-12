@@ -7,6 +7,7 @@ import {
   NotificationAdapter,
 } from './modules/professional/notifications';
 import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
+import { ListingAccess } from './modules/listings/access';
 import { Audit } from './modules/audit/audit';
 
 test('unchanged public listing produces no queued price notifications', async () => {
@@ -36,7 +37,12 @@ test('worker suppresses queued email after unsubscribe before invoking transport
     payload: {
       listingId: '12345678-1234-4234-8234-123456789abc',
       subscriptionVersion: 1,
-      event: { kind: 'price_drop' },
+      listingVersion: 8,
+      event: {
+        kind: 'price_drop',
+        previousPriceMinor: 10000,
+        priceMinor: 9900,
+      },
     },
     dedupe_key: 'event',
     attempts: 0,
@@ -60,7 +66,14 @@ test('worker suppresses queued email after unsubscribe before invoking transport
       throw new Error('Transport must not be invoked');
     },
   } as NotificationAdapter;
-  const worker = new NotificationWorker(db, adapter, {} as Audit);
+  const worker = new NotificationWorker(
+    db,
+    adapter,
+    {} as Audit,
+    {
+      visible: async () => ({ version: 8, price: '99' }),
+    } as unknown as ListingAccess,
+  );
   worker.finish = async (_job, state) => {
     result = state;
   };
@@ -99,7 +112,12 @@ test('worker binds current consent version before allowing subscription transpor
     payload: {
       listingId,
       subscriptionVersion: 1,
-      event: { kind: 'price_drop' },
+      listingVersion: 8,
+      event: {
+        kind: 'price_drop',
+        previousPriceMinor: 10000,
+        priceMinor: 9900,
+      },
     },
     dedupe_key: 'event',
     attempts: 0,
@@ -141,7 +159,14 @@ test('worker binds current consent version before allowing subscription transpor
       sends++;
     },
   } as NotificationAdapter;
-  const worker = new NotificationWorker(db, adapter, {} as Audit);
+  const worker = new NotificationWorker(
+    db,
+    adapter,
+    {} as Audit,
+    {
+      visible: async () => ({ version: 8, price: '99' }),
+    } as unknown as ListingAccess,
+  );
   worker.finish = async (_job, state) => {
     result = state;
   };
@@ -161,7 +186,12 @@ test('subscription transport stays in the transaction that locks its consent row
     payload: {
       listingId: '12345678-1234-4234-8234-123456789abc',
       subscriptionVersion: 1,
-      event: { kind: 'price_drop' },
+      listingVersion: 8,
+      event: {
+        kind: 'price_drop',
+        previousPriceMinor: 10000,
+        priceMinor: 9900,
+      },
     },
   };
   const sql = { query: async () => ({ rows: [] }) };
@@ -221,9 +251,16 @@ test('subscription transport stays in the transaction that locks its consent row
       sends++;
     },
   } as NotificationAdapter;
-  const worker = new NotificationWorker(db, adapter, {
-    record: async () => {},
-  } as unknown as Audit);
+  const worker = new NotificationWorker(
+    db,
+    adapter,
+    {
+      record: async () => {},
+    } as unknown as Audit,
+    {
+      visible: async () => ({ version: 8, price: '99' }),
+    } as unknown as ListingAccess,
+  );
   await worker.once();
   assert.equal(sends, 1);
 });
@@ -253,6 +290,7 @@ test('republish serializes availability and price drop using only last public ba
       `listing:${change.listingId}:12:availability`,
       JSON.stringify({ kind: 'availability', available: true }),
       listingSubscriptionConsentVersion,
+      12,
     ],
     [
       change.listingId,
@@ -264,6 +302,220 @@ test('republish serializes availability and price drop using only last public ba
         priceMinor: 9999,
       }),
       listingSubscriptionConsentVersion,
+      12,
     ],
   ]);
+});
+
+test('worker suppresses stale or nonpublic subscription events and forwards only current strict payload', async () => {
+  const Worker = NotificationWorker as unknown as new (
+    ...args: unknown[]
+  ) => NotificationWorker;
+  const current = {
+    listingId: '12345678-1234-4234-8234-123456789abc',
+    listingVersion: 8,
+    subscriptionVersion: 1,
+    event: { kind: 'price_drop', previousPriceMinor: 10000, priceMinor: 9900 },
+  };
+  for (const scenario of [
+    { payload: current, visible: { version: 8, price: '99' }, allow: true },
+    { payload: current, visible: { version: 9, price: '99' }, allow: false },
+    { payload: current, visible: undefined, allow: false },
+    { payload: current, visible: { version: 8, price: '98' }, allow: false },
+    {
+      payload: {
+        ...current,
+        event: { ...current.event, privateReason: 'secret' },
+      },
+      visible: { version: 8, price: '99' },
+      allow: false,
+    },
+    {
+      payload: {
+        listingId: current.listingId,
+        subscriptionVersion: 1,
+        event: current.event,
+      },
+      visible: { version: 8, price: '99' },
+      allow: false,
+    },
+  ]) {
+    const job = {
+      id: 'job',
+      user_id: 'user',
+      channel: 'email',
+      kind: 'subscription.listing.price_drop',
+      payload: scenario.payload,
+      dedupe_key: 'event',
+      attempts: 0,
+    };
+    const sql = { query: async () => ({ rows: [] }) };
+    const db = {
+      pool: sql,
+      transaction: async (work: (value: unknown) => Promise<unknown>) =>
+        work(sql),
+      rows: async (query: string) =>
+        query.includes('FOR UPDATE SKIP LOCKED')
+          ? [job]
+          : query.includes('FROM users')
+            ? [
+                {
+                  active: true,
+                  email: 'subscriber@example.test',
+                  email_enabled: true,
+                  email_verified_at: 'now',
+                },
+              ]
+            : [{}],
+    } as unknown as Database;
+    let sends = 0;
+    const worker = new Worker(
+      db,
+      {
+        configured: true,
+        send: async () => {
+          sends++;
+        },
+      },
+      {} as Audit,
+      {
+        visible: async (_id: string, client: Sql) => {
+          assert.equal(client, sql);
+          return scenario.visible;
+        },
+      },
+    );
+    let result = '';
+    worker.finish = async (_job, state) => {
+      result = state;
+    };
+    await worker.once();
+    assert.equal(sends, scenario.allow ? 1 : 0);
+    assert.equal(result, scenario.allow ? 'sent' : 'skipped');
+  }
+});
+
+test('worker refreshes lease after final visibility query before transport', async () => {
+  const job = {
+    id: 'job',
+    user_id: 'user',
+    channel: 'email',
+    kind: 'subscription.listing.availability',
+    attempts: 0,
+    payload: {
+      listingId: '12345678-1234-4234-8234-123456789abc',
+      listingVersion: 8,
+      subscriptionVersion: 1,
+      event: { kind: 'availability', available: true },
+    },
+    dedupe_key: 'event',
+  };
+  const sql = { query: async () => ({ rows: [] }) };
+  let visibilityRead = false;
+  const db = {
+    pool: sql,
+    transaction: async (work: (client: unknown) => Promise<unknown>) =>
+      work(sql),
+    rows: async (query: string) => {
+      if (query.includes('FOR UPDATE SKIP LOCKED')) return [job];
+      if (query.includes('FROM users'))
+        return [
+          { active: true, email_enabled: true, email_verified_at: 'now' },
+        ];
+      if (query.includes('clock_timestamp()') && visibilityRead) return [];
+      return [{}];
+    },
+  } as unknown as Database;
+  let sends = 0;
+  const worker = new NotificationWorker(
+    db,
+    {
+      configured: true,
+      send: async () => {
+        sends++;
+      },
+    } as NotificationAdapter,
+    {} as Audit,
+    {
+      visible: async () => {
+        visibilityRead = true;
+        return { version: 8, price: '99' };
+      },
+    } as unknown as ListingAccess,
+  );
+  worker.finish = async () => {
+    throw new Error('Expired lease must remain recoverable, not finalized');
+  };
+  await worker.once();
+  assert.equal(visibilityRead, true);
+  assert.equal(sends, 0);
+});
+
+test('unavailable events use one neutral authoritative state snapshot without loading listing fields', async () => {
+  for (const state of [
+    { version: 8, visible: false },
+    { version: 8, visible: true },
+    { version: 9, visible: false },
+  ]) {
+    const payload = {
+      listingId: '12345678-1234-4234-8234-123456789abc',
+      listingVersion: 8,
+      subscriptionVersion: 1,
+      event: { kind: 'availability', available: false },
+    };
+    const job = {
+      id: 'job',
+      user_id: 'user',
+      channel: 'email',
+      kind: 'subscription.listing.availability',
+      attempts: 0,
+      dedupe_key: 'event',
+      payload,
+    };
+    const sql = { query: async () => ({ rows: [] }) };
+    const db = {
+      pool: sql,
+      transaction: async (work: (client: unknown) => Promise<unknown>) =>
+        work(sql),
+      rows: async (query: string) =>
+        query.includes('FOR UPDATE SKIP LOCKED')
+          ? [job]
+          : query.includes('FROM users')
+            ? [{ active: true, email_enabled: true, email_verified_at: 'now' }]
+            : [{}],
+    } as unknown as Database;
+    let sends = 0;
+    const access = {
+      visible: async () => {
+        throw new Error('Must not fetch listing fields for unavailable notice');
+      },
+      currentVisibility: async (id: string, client: Sql) => {
+        assert.equal(id, payload.listingId);
+        assert.equal(client, sql);
+        return state;
+      },
+    } as unknown as ListingAccess;
+    const worker = new NotificationWorker(
+      db,
+      {
+        configured: true,
+        send: async (envelope) => {
+          sends++;
+          assert.deepEqual(envelope.payload, payload);
+        },
+      } as NotificationAdapter,
+      {} as Audit,
+      access,
+    );
+    let result = '';
+    worker.finish = async (_job, outcome) => {
+      result = outcome;
+    };
+    await worker.once();
+    assert.equal(sends, state.version === 8 && !state.visible ? 1 : 0);
+    assert.equal(
+      result,
+      state.version === 8 && !state.visible ? 'sent' : 'skipped',
+    );
+  }
 });

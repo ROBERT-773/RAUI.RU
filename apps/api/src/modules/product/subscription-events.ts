@@ -1,6 +1,6 @@
 import type { ListingEmailEvent } from '../professional/email-templates';
 
-function priceMinor(value: string): number {
+export function priceMinor(value: string): number {
   if (!/^[0-9]{1,14}(?:\.[0-9]{1,2})?$/.test(value))
     throw new Error('Invalid subscription price');
   const [whole, fraction = ''] = value.split('.');

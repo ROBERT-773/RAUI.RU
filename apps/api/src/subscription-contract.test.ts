@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   listingSubscriptionSchema,
+  listingSubscriptionDeliverySchema,
   listingSubscriptionDisableSchema,
 } from './modules/product/subscription-contract';
 
@@ -84,5 +85,59 @@ test('OpenAPI exposes explicit subscription consent and version-protected disabl
   assert.match(
     JSON.stringify(disable.responses['201']),
     /already accepted by the provider cannot be recalled/,
+  );
+});
+
+test('internal delivery envelope requires strict current-state provenance and safe exact event values', () => {
+  const base = {
+    listingId: '12345678-1234-4234-8234-123456789abc',
+    listingVersion: 8,
+    subscriptionVersion: 1,
+    event: {
+      kind: 'price_drop',
+      previousPriceMinor: Number.MAX_SAFE_INTEGER,
+      priceMinor: Number.MAX_SAFE_INTEGER - 1,
+    },
+  };
+  assert.equal(listingSubscriptionDeliverySchema.safeParse(base).success, true);
+  for (const listingVersion of [
+    undefined,
+    null,
+    0,
+    -1,
+    1.5,
+    '8',
+    Number.MAX_SAFE_INTEGER + 1,
+  ])
+    assert.equal(
+      listingSubscriptionDeliverySchema.safeParse({ ...base, listingVersion })
+        .success,
+      false,
+    );
+  for (const event of [
+    { ...base.event, priceMinor: 0 },
+    { ...base.event, priceMinor: 1.001 },
+    { ...base.event, priceMinor: '1e2' },
+    { ...base.event, previousPriceMinor: Number.MAX_SAFE_INTEGER + 1 },
+    { ...base.event, priceMinor: Number.MAX_SAFE_INTEGER },
+    { ...base.event, privateReason: 'hidden' },
+    { kind: 'availability', available: 'false' },
+    { kind: 'availability', available: false, title: 'hidden' },
+  ])
+    assert.equal(
+      listingSubscriptionDeliverySchema.safeParse({ ...base, event }).success,
+      false,
+    );
+  assert.equal(
+    listingSubscriptionDeliverySchema.safeParse({ ...base, title: 'hidden' })
+      .success,
+    false,
+  );
+  assert.equal(
+    listingSubscriptionDeliverySchema.safeParse({
+      ...base,
+      event: { kind: 'availability', available: false },
+    }).success,
+    true,
   );
 });
