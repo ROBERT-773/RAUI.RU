@@ -422,6 +422,15 @@ test('pausing a published offer refreshes authoritative quota without assuming a
   fireEvent.click(screen.getByRole('button', { name: listing.title }));
   fireEvent.click(await screen.findByRole('button', { name: 'Приостановить' }));
   await screen.findByText('Размещение приостановлено.');
+  const monthlyHelp = screen.getByText(
+    /Приостановка не уменьшает число публикаций за месяц/,
+  );
+  expect(monthlyHelp.textContent).toMatch(
+    /Повторная\s+публикация тоже учитывается в лимите/,
+  );
+  expect(monthlyHelp.textContent).toMatch(
+    /Календарный месяц\s+считается по московскому времени/,
+  );
   expect(
     screen.getByText('Активных объявлений: 1 из 1. Свободных мест: 0.'),
   ).toBeTruthy();

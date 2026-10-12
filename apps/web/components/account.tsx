@@ -305,7 +305,12 @@ export default function Account() {
             <>
               <label>
                 Кто вы?
-                <select name="role" defaultValue="" required>
+                <select
+                  name="role"
+                  defaultValue=""
+                  required
+                  aria-describedby="registration-role-help"
+                >
                   <option value="" disabled>
                     Выберите роль
                   </option>
@@ -316,6 +321,12 @@ export default function Account() {
                   <option value="developer">Застройщик</option>
                 </select>
               </label>
+              <p id="registration-role-help">
+                Покупаете или арендуете — «Ищу недвижимость». Размещаете свой
+                объект — «Собственник». Работаете риелтором — «Агент».
+                Представляете агентство — «Агентство», строительную компанию —
+                «Застройщик».
+              </p>
               <label>
                 Имя
                 <input

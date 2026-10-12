@@ -575,6 +575,18 @@ test('Owner registration survives unavailable verification delivery and opens on
   const role = screen.getByLabelText('Кто вы?') as HTMLSelectElement;
   expect(role.value).toBe('');
   expect(role.required).toBe(true);
+  const roleHelp = screen.getByText(/Покупаете или арендуете/);
+  expect(role.getAttribute('aria-describedby')).toBe(roleHelp.id);
+  expect(roleHelp.textContent).toMatch(
+    /Размещаете свой\s+объект — «Собственник»/,
+  );
+  expect(roleHelp.textContent).toContain('Работаете риелтором — «Агент»');
+  expect(roleHelp.textContent).toContain(
+    'Представляете агентство — «Агентство»',
+  );
+  expect(roleHelp.textContent).toMatch(
+    /строительную компанию —\s+«Застройщик»/,
+  );
   expect(Array.from(role.options).map((option) => option.value)).toEqual([
     '',
     'buyer',
