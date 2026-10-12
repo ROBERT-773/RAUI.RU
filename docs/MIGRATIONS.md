@@ -34,9 +34,11 @@ locking schema operations. Перед production migrations нужны backup/re
 
 Phase 3 adds expand-only `002_search_product.sql`; see [search/product rollout](PHASE_3_SEARCH_PRODUCT.md). Migration 001 remains immutable. Integration suites use separate temporary databases and verify repeat execution.
 
-Account launch foundation adds014_user_public_id.sql (unique immutable positive
-numeric ID, existing UUIDs retained) and015_staff_permissions.sql (initially empty
-named grants). Auth returns public_id as a decimal string. The upgrade fixture
-compares legacy facts separately from these additive fields/tables and verifies
-backfill; recovery and release contracts require15 migrations. Keep these columns
-and sequence on application rollback; never reset identifiers to reuse them.
+Account launch foundation adds `014_user_public_id.sql` (unique immutable positive
+numeric ID, existing UUIDs retained), `015_staff_permissions.sql` (initially empty
+named grants), `016_registration_approval.sql`, `017_phone_otp.sql` and
+`018_listing_subscriptions.sql`. Auth returns `public_id` as a decimal string. The
+upgrade fixture compares legacy facts separately from these additive fields/tables
+and verifies backfill; recovery and release contracts require 18 migrations. Keep
+these columns, tables and sequence on application rollback; never reset identifiers
+to reuse them.

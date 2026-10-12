@@ -299,8 +299,16 @@ export class Listings {
           actor.id,
           id,
           'listing.status.changed',
-          { status: listing.status, version: listing.version },
-          { status: input.status, version: updated!.version },
+          {
+            status: listing.status,
+            version: listing.version,
+            price: listing.price,
+          },
+          {
+            status: input.status,
+            version: updated!.version,
+            price: updated!.price,
+          },
         );
         return updated!;
       },

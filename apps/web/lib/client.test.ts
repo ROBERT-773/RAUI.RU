@@ -45,7 +45,7 @@ test('known publication quota conflict uses safe guidance instead of backend det
   ).rejects.toMatchObject({
     status: 409,
     message:
-      'Достигнут лимит: 6 объектов одновременно. Приостановите все опубликованные объявления одного объекта; сотрудник сможет повторить проверку текущей заявки.',
+      'Разрешено одно активное объявление. Приостановите действующее объявление; сотрудник сможет повторить проверку текущей заявки.',
   });
 });
 
@@ -246,3 +246,25 @@ for (const seconds of [0, -1, 1.2, '12', 10000000])
       retryAfterSeconds: undefined,
     });
   });
+
+test('monthly quota conflict explains calendar limit without leaking backend details', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      reply(
+        {
+          code: 'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED',
+          message: 'private details',
+        },
+        409,
+      ),
+    ),
+  );
+  const { api } = await import('./client');
+  await expect(
+    api('v1/admin/moderation/example/decision'),
+  ).rejects.toMatchObject({
+    status: 409,
+    message: 'Достигнут лимит: три публикации в календарный месяц.',
+  });
+});

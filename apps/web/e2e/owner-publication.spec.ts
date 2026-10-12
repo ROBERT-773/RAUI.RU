@@ -38,7 +38,7 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
   const staffContext = await browser.newContext();
   const staff = await staffContext.newPage();
   try {
-    await login(page, 'seller@e2e.test');
+    await login(page, `quota-${info.project.name}@e2e.test`);
     await page.goto('/account/listings');
     const baselineResponse = await page.request.get(
       '/api/v1/account/publication-quota',
@@ -49,15 +49,18 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       limit: number;
       publishedObjects: number;
       remaining: number;
+      monthlyPublications: number;
+      monthlyRemaining: number;
+      monthlyResetAt: string;
     };
     expect(baseline.applies).toBe(true);
-    expect(baseline.limit).toBe(6);
+    expect(baseline.limit).toBe(1);
     expect(baseline.publishedObjects).toBeLessThan(baseline.limit);
     const quotaPanel = page.getByRole('region', {
       name: 'Лимит публикации объектов',
     });
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
     const creation = page.locator('form').filter({
       has: page.getByRole('heading', {
@@ -198,6 +201,76 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
     ).toBeVisible();
+    // Real browser requests: supported preferences and stale-tab protection.
+    await page.goto(`/listings/${listingId}`);
+    await page
+      .getByRole('button', { name: 'Подписаться на изменения' })
+      .click();
+    await expect(
+      page.getByRole('option', { name: 'Ежедневная подборка' }),
+    ).toHaveCount(0);
+    await expect(page.getByLabel('В аккаунте', { exact: true })).toHaveCount(0);
+    await page
+      .getByLabel('Согласен получать выбранные уведомления об этом объявлении')
+      .check();
+    const subscription = page.waitForResponse((value) =>
+      endpoint(
+        value,
+        'POST',
+        `/api/v1/account/listing-subscriptions/${listingId}`,
+      ),
+    );
+    await page.getByRole('button', { name: 'Сохранить подписку' }).click();
+    expect((await subscription).status()).toBe(201);
+    const staleTab = await page.context().newPage();
+    try {
+      await staleTab.goto(`/listings/${listingId}`);
+      await staleTab
+        .getByRole('button', { name: 'Подписаться на изменения' })
+        .click();
+      await expect(
+        staleTab.getByRole('button', { name: 'Сохранить подписку' }),
+      ).toBeEnabled();
+      const csrfResponse = await page.request.get('/api/v1/auth/csrf');
+      const { csrfToken } = await csrfResponse.json();
+      const disable = await page.request.post(
+        `/api/v1/account/listing-subscriptions/${listingId}/disable`,
+        {
+          data: { version: 1 },
+          headers: {
+            Origin: new URL(page.url()).origin,
+            'X-CSRF-Token': csrfToken,
+          },
+        },
+      );
+      expect(disable.status()).toBe(201);
+      await staleTab
+        .getByLabel(
+          'Согласен получать выбранные уведомления об этом объявлении',
+        )
+        .check();
+      const stale = staleTab.waitForResponse((value) =>
+        endpoint(
+          value,
+          'POST',
+          `/api/v1/account/listing-subscriptions/${listingId}`,
+        ),
+      );
+      await staleTab
+        .getByRole('button', { name: 'Сохранить подписку' })
+        .click();
+      expect((await stale).status()).toBe(409);
+      await expect(staleTab.getByRole('status')).toContainText(
+        'Настройки подписки изменились',
+      );
+      const ownSubscriptions = await page.request.get(
+        '/api/v1/account/listing-subscriptions',
+      );
+      expect(await ownSubscriptions.json()).toEqual([]);
+    } finally {
+      await staleTab.close();
+    }
+    await page.goto('/account/listings');
     const publishedQuota = await page.request.get(
       '/api/v1/account/publication-quota',
     );
@@ -206,10 +279,12 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       ...baseline,
       publishedObjects: baseline.publishedObjects + 1,
       remaining: baseline.remaining - 1,
+      monthlyPublications: baseline.monthlyPublications + 1,
+      monthlyRemaining: baseline.monthlyRemaining - 1,
     });
     await page.reload();
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects + 1} из 6. Свободных мест: ${baseline.remaining - 1}.`,
+      `Активных объявлений: ${baseline.publishedObjects + 1} из 1. Свободных мест: ${baseline.remaining - 1}.`,
     );
     await page.getByRole('button', { name: title, exact: true }).click();
     await expect(
@@ -232,12 +307,16 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       '/api/v1/account/publication-quota',
     );
     expect(releasedQuota.status()).toBe(200);
-    expect(await releasedQuota.json()).toEqual(baseline);
+    expect(await releasedQuota.json()).toEqual({
+      ...baseline,
+      monthlyPublications: baseline.monthlyPublications + 1,
+      monthlyRemaining: baseline.monthlyRemaining - 1,
+    });
     await quotaPanel
       .getByRole('button', { name: 'Обновить лимит публикации', exact: true })
       .click();
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
     // Reload cleared the new-listing form; supply valid fields before checking
     // draft availability, so category-loading validation is not mistaken for quota.
@@ -282,9 +361,13 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       '/api/v1/account/publication-quota',
     );
     expect(finalQuota.status()).toBe(200);
-    expect(await finalQuota.json()).toEqual(baseline);
+    expect(await finalQuota.json()).toEqual({
+      ...baseline,
+      monthlyPublications: baseline.monthlyPublications + 1,
+      monthlyRemaining: baseline.monthlyRemaining - 1,
+    });
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
   } finally {
     if (listingId) {

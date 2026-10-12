@@ -384,15 +384,23 @@ export class Administration {
           throw new ConflictException('Stale moderation case');
         if (listing!.seller_id === actor.id)
           throw new ForbiddenException('Cannot moderate own listing');
+        let decisionAt: Date | undefined;
         // Eligibility is checked against the original seller, not reviewer privileges.
         if (input.decision === 'approve') {
           const sellerActor: Actor = { ...publicationSeller!, session_id: '' };
           await this.listings.validate(sql, listing!, sellerActor);
           await this.trust.checkPublication(sql, listing!.id);
+          const [decisionClock] = await this.db.rows<{ decision_at: Date }>(
+            'SELECT clock_timestamp() AS decision_at',
+            [],
+            sql,
+          );
+          decisionAt = decisionClock!.decision_at;
           await this.quotas.assertCapacity(
             sql,
             publicationSeller!,
-            listing!.property_id,
+            listing!.id,
+            decisionAt,
           );
         } else {
           const [sellerActor] = await this.db.rows<Actor>(
@@ -413,16 +421,27 @@ export class Administration {
           ],
         );
         await sql.query(
-          "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN now() ELSE published_at END,updated_at=now() WHERE id=$1",
-          [listing!.id, status],
+          "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN $3::timestamptz ELSE published_at END,updated_at=now() WHERE id=$1",
+          [listing!.id, status, decisionAt ?? null],
         );
         await this.audit.history(
           sql,
           actor.id,
           listing!.id,
           'moderation.decided',
-          { status: listing!.status },
-          { status, caseId: id, reason: input.reason },
+          {
+            status: listing!.status,
+            version: listing!.version,
+            price: listing!.price,
+          },
+          {
+            status,
+            caseId: id,
+            reason: input.reason,
+            version: listing!.version + 1,
+            price: listing!.price,
+          },
+          decisionAt,
         );
         return { listingId: listing!.id, status };
       },

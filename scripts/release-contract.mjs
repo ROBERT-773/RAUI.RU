@@ -52,7 +52,7 @@ export function validateRuntimeReceipt(receipt, expectedSha, expectedRunId) {
     receipt.sourceState !== 'committed' ||
     receipt.contract !== 'passed' ||
     receipt.serviceSmoke !== 'passed' ||
-    receipt.migrationCount !== 17 ||
+    receipt.migrationCount !== 18 ||
     receipt.siteUrl !== 'http://127.0.0.1:3000' ||
     receipt.deploymentEnvironment !== 'staging' ||
     receipt.network !== 'linux-host' ||
@@ -83,7 +83,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
     (expectedRunId !== undefined && manifest.runId !== expectedRunId) ||
     !/^[a-f0-9]{40}$/.test(expectedSha) ||
     manifest.sha !== expectedSha ||
-    manifest.migrations !== 17 ||
+    manifest.migrations !== 18 ||
     manifest.riskyDefaults !== 'off' ||
     !Array.isArray(manifest.gates) ||
     gates.some((gate) => !manifest.gates.includes(gate)) ||
@@ -124,6 +124,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
     'apps/api/migrations/015_staff_permissions.sql',
     'apps/api/migrations/016_registration_approval.sql',
     'apps/api/migrations/017_phone_otp.sql',
+    'apps/api/migrations/018_listing_subscriptions.sql',
     'pnpm-lock.yaml',
     'package.json',
     'infra/observability/alerts.yml',
@@ -237,7 +238,7 @@ export async function verifyFiles(manifest, root) {
     recovery.sourceUntouched !== true ||
     recovery.databaseRestore !== 'verified' ||
     recovery.objectFixtureRestore !== 'verified' ||
-    recovery.migrationsVerified !== 17 ||
+    recovery.migrationsVerified !== 18 ||
     !Number.isInteger(recovery.tablesVerified) ||
     recovery.tablesVerified < 1 ||
     recovery.cipher !== 'AES-256-GCM' ||
@@ -300,7 +301,7 @@ async function main() {
     const manifest = {
       version: 1,
       sha: expectedSha,
-      migrations: 17,
+      migrations: 18,
       riskyDefaults: 'off',
       gates,
       runId: process.env.GITHUB_RUN_ID,

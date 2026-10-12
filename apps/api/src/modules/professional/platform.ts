@@ -169,8 +169,13 @@ export class ProfessionalPlatform {
       input,
       async (sql) => {
         await this.organizations.permission(actor, organization, true, sql);
-        const rows = await this.db.rows<{ id: string; status: string }>(
-          `SELECT id,status FROM listings
+        const rows = await this.db.rows<{
+          id: string;
+          status: string;
+          price: string | null;
+          version: number;
+        }>(
+          `SELECT id,status,price,version FROM listings
          WHERE id=ANY($1::uuid[]) AND organization_id=$2
          ORDER BY id FOR UPDATE`,
           [input.listingIds, organization],
@@ -196,8 +201,8 @@ export class ProfessionalPlatform {
             actor.id,
             row.id,
             'listing.status.changed',
-            { status: row.status },
-            { status: 'paused' },
+            { status: row.status, price: row.price, version: row.version },
+            { status: 'paused', price: row.price, version: row.version + 1 },
           );
           await this.audit.record(
             sql,

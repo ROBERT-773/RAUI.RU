@@ -4,7 +4,9 @@ Version: 1.0
 Repository: RAUI.RU
 Default branch: master
 
-This file is the authoritative staged implementation plan for Codex.
+This file is the staged implementation plan for Codex.
+
+Current product specification: [RAUI_TZ_v1.1.md](RAUI_TZ_v1.1.md), received from the owner on 2026-10-10. Version 1.1 takes precedence over v1.0 and earlier workflow documents wherever requirements conflict. Historical phase completion does not establish acceptance against v1.1; reconcile existing implementation before release.
 
 ## Global working rules
 
@@ -65,7 +67,9 @@ Required:
 - protected admin baseline;
 - safe migrations and automated tests.
 
-Authoritative detailed requirements: docs/RAUI_TZ_v1.0.md and GitHub Issue #2.
+Historical Phase 2 inputs: `docs/RAUI_TZ_v1.0.md` and GitHub Issue #2.
+Current reconciliation and release acceptance are governed by
+`docs/RAUI_TZ_v1.1.md`.
 
 Exit gate:
 

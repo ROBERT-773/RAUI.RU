@@ -1,3 +1,6 @@
+import { lockListingSubscription } from '../product/subscription-lock';
+import { listingSubscriptionConsentVersion } from '../product/subscription-contract';
+import { listingPublicEligibility } from '../listings/public-policy';
 import {
   Injectable,
   Module,
@@ -9,11 +12,12 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { Audit, AuditModule } from '../audit/audit';
-import { Database } from '../database/database';
+import { Database, type Sql } from '../database/database';
 import {
   Actor,
   AdminOnly,
@@ -156,77 +160,177 @@ export class NotificationWorker {
     });
     if (!job) return false;
     try {
-      const [recipient] = await this.db.rows<{
-        active: boolean;
-        email: string;
-        phone: string | null;
-        email_verified_at: string | null;
-        phone_verified_at: string | null;
-        email_enabled: boolean;
-        sms_enabled: boolean;
-        push_enabled: boolean;
-        transactional: boolean;
-      }>(
-        `SELECT u.active,u.email,u.phone,u.email_verified_at,u.phone_verified_at,COALESCE(p.email,false) AS email_enabled,COALESCE(p.sms,false) AS sms_enabled,COALESCE(p.push,false) AS push_enabled,COALESCE(p.transactional,true) AS transactional FROM users u LEFT JOIN notification_preferences p ON p.user_id=u.id WHERE u.id=$1`,
-        [job.user_id],
-      );
-      const enabled =
-        recipient?.active &&
-        (!job.kind.startsWith('transactional.') || recipient.transactional) &&
-        (job.channel === 'email'
-          ? recipient.email_enabled && recipient.email_verified_at
-          : job.channel === 'sms'
-            ? recipient.sms_enabled &&
-              recipient.phone_verified_at &&
-              recipient.phone
-            : recipient.push_enabled);
-      if (!enabled) {
-        await this.finish(job, 'skipped');
-        return true;
-      }
-      if (!this.adapter.configured) {
-        await this.finish(job, 'deferred');
-        return true;
-      }
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          this.adapter.send(
-            {
-              channel: job.channel,
-              userId: job.user_id,
-              kind: job.kind,
-              payload: job.payload,
-              idempotencyKey: `notification:${job.id}`,
-              destination:
-                job.channel === 'email'
-                  ? recipient!.email
-                  : job.channel === 'sms'
-                    ? recipient!.phone!
-                    : job.user_id,
-            },
-            controller.signal,
-          ),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => {
-              controller.abort();
-              reject(new Error('delivery_deadline'));
-            }, 5000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-        controller.abort();
-      }
-      await this.finish(job, 'sent');
+      await this.db.transaction(async (deliverySql) => {
+        if (job.kind.startsWith('subscription.listing.')) {
+          const key = z.object({ listingId: z.uuid() }).safeParse(job.payload);
+          if (!key.success) {
+            await this.finish(job, 'skipped', deliverySql);
+            return;
+          }
+          await lockListingSubscription(
+            deliverySql,
+            job.user_id,
+            key.data.listingId,
+          );
+        }
+        if (job.kind.startsWith('subscription.listing.')) {
+          const listingId = (job.payload as { listingId: string }).listingId;
+          await deliverySql.query(
+            'SELECT id FROM users WHERE id=$1 OR id=(SELECT seller_id FROM listings WHERE id=$2) ORDER BY id FOR SHARE',
+            [job.user_id, listingId],
+          );
+          await deliverySql.query(
+            'SELECT user_id FROM notification_preferences WHERE user_id=$1 FOR SHARE',
+            [job.user_id],
+          );
+        }
+        const [recipient] = await this.db.rows<{
+          active: boolean;
+          email: string;
+          phone: string | null;
+          email_verified_at: string | null;
+          phone_verified_at: string | null;
+          email_enabled: boolean;
+          sms_enabled: boolean;
+          push_enabled: boolean;
+          transactional: boolean;
+        }>(
+          `SELECT u.active,u.email,u.phone,u.email_verified_at,u.phone_verified_at,COALESCE(p.email,false) AS email_enabled,COALESCE(p.sms,false) AS sms_enabled,COALESCE(p.push,false) AS push_enabled,COALESCE(p.transactional,true) AS transactional FROM users u LEFT JOIN notification_preferences p ON p.user_id=u.id WHERE u.id=$1`,
+          [job.user_id],
+          deliverySql,
+        );
+        if (job.kind.startsWith('subscription.listing.')) {
+          const payload = z
+            .object({
+              listingId: z.uuid(),
+              subscriptionVersion: z.number().int().positive(),
+              event: z
+                .object({ kind: z.enum(['price_drop', 'availability']) })
+                .passthrough(),
+            })
+            .safeParse(job.payload);
+          if (!payload.success || job.channel !== 'email') {
+            await this.finish(job, 'skipped', deliverySql);
+            return true;
+          }
+          const [subscription] = await this.db.rows(
+            `SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2
+           AND disabled_at IS NULL AND version=$3 AND 'email'=ANY(channels)
+           AND $4=ANY(events) AND frequency='immediate' AND consent_version=$5`,
+            [
+              job.user_id,
+              payload.data.listingId,
+              payload.data.subscriptionVersion,
+              payload.data.event.kind,
+              listingSubscriptionConsentVersion,
+            ],
+            deliverySql,
+          );
+          // Hold eligibility rows through the bounded transport operation. This
+          // serializes withdrawal/deactivation with sending, not just checking.
+          const [seller] = await this.db.rows<{ id: string }>(
+            'SELECT u.id FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 FOR SHARE OF u',
+            [payload.data.listingId],
+            deliverySql,
+          );
+          const [lockedListing] = await this.db.rows<{
+            seller_id: string;
+            organization_id: string | null;
+          }>(
+            'SELECT seller_id,organization_id FROM listings WHERE id=$1 FOR SHARE',
+            [payload.data.listingId],
+            deliverySql,
+          );
+          if (!seller || lockedListing?.seller_id !== seller.id) {
+            await this.finish(job, 'skipped', deliverySql);
+            return;
+          }
+          if (lockedListing.organization_id)
+            await deliverySql.query(
+              'SELECT o.id FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=$1 AND m.user_id=$2 FOR SHARE OF o,m',
+              [lockedListing.organization_id, seller.id],
+            );
+          const [listing] = await this.db.rows<{ status: string }>(
+            `SELECT l.status FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND ${listingPublicEligibility}`,
+            [payload.data.listingId],
+            deliverySql,
+          );
+          const available = (payload.data.event as { available?: unknown })
+            .available;
+          if (
+            !subscription ||
+            !listing ||
+            (payload.data.event.kind === 'price_drop' &&
+              listing.status !== 'published') ||
+            (payload.data.event.kind === 'availability' &&
+              available !== (listing.status === 'published'))
+          ) {
+            await this.finish(job, 'skipped', deliverySql);
+            return true;
+          }
+        }
+        const enabled =
+          recipient?.active &&
+          (!job.kind.startsWith('transactional.') || recipient.transactional) &&
+          (job.channel === 'email'
+            ? recipient.email_enabled && recipient.email_verified_at
+            : job.channel === 'sms'
+              ? recipient.sms_enabled &&
+                recipient.phone_verified_at &&
+                recipient.phone
+              : recipient.push_enabled);
+        if (!enabled) {
+          await this.finish(job, 'skipped', deliverySql);
+          return true;
+        }
+        if (!this.adapter.configured) {
+          await this.finish(job, 'deferred', deliverySql);
+          return true;
+        }
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            this.adapter.send(
+              {
+                channel: job.channel,
+                userId: job.user_id,
+                kind: job.kind,
+                payload: job.payload,
+                idempotencyKey: `notification:${job.id}`,
+                destination:
+                  job.channel === 'email'
+                    ? recipient!.email
+                    : job.channel === 'sms'
+                      ? recipient!.phone!
+                      : job.user_id,
+              },
+              controller.signal,
+            ),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => {
+                controller.abort();
+                reject(new Error('delivery_deadline'));
+              }, 5000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          controller.abort();
+        }
+        await this.finish(job, 'sent', deliverySql);
+      });
     } catch {
       await this.finish(job, 'failed');
     }
     return true;
   }
-  async finish(job: Job, result: 'sent' | 'skipped' | 'deferred' | 'failed') {
-    await this.db.transaction(async (sql) => {
+  async finish(
+    job: Job,
+    result: 'sent' | 'skipped' | 'deferred' | 'failed',
+    current?: Sql,
+  ) {
+    const complete = async (sql: Sql) => {
       const [held] = await this.db.rows(
         "SELECT id FROM notification_deliveries WHERE id=$1 AND lease_token=$2 AND lease_until>now() AND status='running' FOR UPDATE",
         [job.id, job.lease_token],
@@ -259,7 +363,9 @@ export class NotificationWorker {
         job.id,
         { channel: job.channel, kind: job.kind, attempt: job.attempts },
       );
-    });
+    };
+    if (current) await complete(current);
+    else await this.db.transaction(complete);
   }
   async retry(actor: Actor, id: string) {
     verified(actor);
