@@ -11,7 +11,8 @@ const id = '22345678-1234-4234-8234-123456789abc';
 const preferences = {
   events: ['price_drop'],
   channels: ['email'],
-  frequency: 'daily',
+  frequency: 'immediate',
+  version: 0,
   consent: true,
 };
 test('private listing subscription is rejected before database writes', async () => {
@@ -32,10 +33,13 @@ test('subscription writes bind ownership to actor and persist explicit consent',
   let values: unknown[] = [];
   const service = new ListingSubscriptions(
     {
-      rows: async (_query: string, args: unknown[]) => {
+      rows: async (query: string, args: unknown[]) => {
+        if (query.startsWith('SELECT version')) return [];
         values = args;
         return [{ version: 1 }];
       },
+      transaction: async (work: (sql: unknown) => Promise<unknown>) =>
+        work({ query: async () => ({ rows: [] }) }),
     } as unknown as Database,
     { visible: async () => true } as unknown as ListingAccess,
   );
@@ -45,7 +49,7 @@ test('subscription writes bind ownership to actor and persist explicit consent',
     id,
     ['price_drop'],
     ['email'],
-    'daily',
+    'immediate',
     'listing-updates-v1',
   ]);
 });
@@ -58,7 +62,8 @@ test('disable rejects another account and stale versions without mutation', asyn
       },
       transaction: async (work: (sql: unknown) => Promise<unknown>) =>
         work({
-          query: async () => {
+          query: async (text: string) => {
+            if (text.startsWith('SELECT pg_advisory')) return { rows: [] };
             throw new Error('Unexpected mutation');
           },
         }),

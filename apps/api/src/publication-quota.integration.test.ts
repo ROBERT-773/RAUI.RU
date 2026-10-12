@@ -8,7 +8,10 @@ import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
 import { hash, token, type Actor } from './common/security';
-import { PublicationQuotas } from './modules/listings/publication-quota';
+import {
+  PublicationQuotas,
+  type PublicationQuota,
+} from './modules/listings/publication-quota';
 
 type Account = { id: string; secret: string };
 type Offer = { property: string; listing: string; caseId: string };
@@ -108,7 +111,21 @@ test(
     async function snapshot(actor: Account, n: number) {
       const response = await call('/account/publication-quota', actor);
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), {
+      const actual = (await response.json()) as PublicationQuota;
+      assert.equal(actual.monthlyLimit, 3);
+      assert.ok(actual.monthlyPublications! >= 0);
+      assert.equal(
+        actual.monthlyRemaining,
+        Math.max(0, 3 - actual.monthlyPublications!),
+      );
+      assert.ok(Number.isFinite(Date.parse(actual.monthlyResetAt!)));
+      const capacity = {
+        applies: actual.applies,
+        limit: actual.limit,
+        publishedObjects: actual.publishedObjects,
+        remaining: actual.remaining,
+      };
+      assert.deepEqual(capacity, {
         applies: true,
         limit: 1,
         publishedObjects: n,
@@ -219,6 +236,10 @@ test(
               limit: null,
               publishedObjects: null,
               remaining: null,
+              monthlyLimit: null,
+              monthlyPublications: null,
+              monthlyRemaining: null,
+              monthlyResetAt: null,
             });
           }
         },
@@ -653,6 +674,17 @@ test(
             assert.equal((await approve(item, key)).status, 201);
           }
           await snapshot(owner, 0);
+          const monthly = (await (
+            await call('/account/publication-quota', owner)
+          ).json()) as PublicationQuota;
+          assert.equal(monthly.monthlyPublications, 3);
+          assert.equal(monthly.monthlyRemaining, 0);
+          const expectedReset = (
+            await pool.query(
+              "SELECT ((date_trunc('month',now() AT TIME ZONE 'Europe/Moscow') + interval '1 month') AT TIME ZONE 'Europe/Moscow') AS reset",
+            )
+          ).rows[0].reset.toISOString();
+          assert.equal(monthly.monthlyResetAt, expectedReset);
           const fourth = await offer(owner),
             before = await state(fourth);
           const response = await approve(fourth);
@@ -810,6 +842,10 @@ test(
             limit: null,
             publishedObjects: null,
             remaining: null,
+            monthlyLimit: null,
+            monthlyPublications: null,
+            monthlyRemaining: null,
+            monthlyResetAt: null,
           });
           await pool.query(
             "UPDATE users SET registration_approval_state='rejected' WHERE id=$1",

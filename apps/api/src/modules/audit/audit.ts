@@ -1,3 +1,6 @@
+import { listingPublicEligibility } from '../listings/public-policy';
+import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
+import { z } from 'zod';
 import { Global, Injectable, Module } from '@nestjs/common';
 import { Database, Sql } from '../database/database';
 @Injectable()
@@ -37,6 +40,35 @@ export class Audit {
       ],
     );
     await this.record(sql, actor, event, 'listing', listing, after);
+    const shape = z.object({
+      status: z.string(),
+      price: z.string().nullable(),
+      version: z.number().int().positive(),
+    });
+    const prior = shape.safeParse(before),
+      next = shape.safeParse(after);
+    if (prior.success && next.success) {
+      const [eligible] = await this.db.rows(
+        `SELECT 1 FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND ${listingPublicEligibility}`,
+        [listing],
+        sql,
+      );
+      if (
+        prior.data.status === 'published' &&
+        next.data.status === 'published' &&
+        (!prior.data.price || !next.data.price)
+      )
+        return;
+      if (eligible)
+        await enqueueImmediateListingEmails(sql, {
+          listingId: listing,
+          version: next.data.version,
+          publicBefore: prior.data.status === 'published',
+          publicAfter: next.data.status === 'published',
+          previousPrice: prior.data.price ?? '0',
+          price: next.data.price ?? '0',
+        });
+    }
   }
 }
 @Global()

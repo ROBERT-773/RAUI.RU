@@ -94,6 +94,13 @@ export default function AccountSubscriptions() {
               ? 'ежедневная подборка'
               : 'по мере изменений'}
           </p>
+          {(item.frequency !== 'immediate' ||
+            item.channels.some((channel) => channel !== 'email')) && (
+            <p>
+              Этот режим пока не поддерживается. Откройте объявление и выберите
+              email по мере изменений или отключите подписку.
+            </p>
+          )}
           <Button disabled={Boolean(busy)} onClick={() => void disable(item)}>
             {busy === item.listing_id ? 'Отключаем…' : 'Отключить подписку'}
           </Button>

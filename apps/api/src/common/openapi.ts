@@ -520,7 +520,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
               'Listing unavailable for subscription, or subscription not owned by current account',
           };
         }
-        if (path.endsWith('/disable')) {
+        if (method === 'post') {
           operation.responses['409'] = {
             description:
               'Stale subscription version; reload current preferences',
@@ -531,7 +531,16 @@ export function enrichOpenApi(document: OpenAPIObject) {
         }
       }
       if (operationId === 'get /v1/account/publication-quota') {
-        const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
+        const required = [
+          'applies',
+          'limit',
+          'publishedObjects',
+          'remaining',
+          'monthlyLimit',
+          'monthlyPublications',
+          'monthlyRemaining',
+          'monthlyResetAt',
+        ];
         operation.description =
           'Own-account informational capacity. Owners may have one published listing across all sources; drafts and nonpublic offers consume no active slot. Each transition into publication counts toward three publications per Moscow calendar month. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
         operation.responses['200'] = {
@@ -550,6 +559,14 @@ export function enrichOpenApi(document: OpenAPIObject) {
                       limit: { type: 'integer', enum: [1] },
                       publishedObjects: { type: 'integer', minimum: 0 },
                       remaining: { type: 'integer', minimum: 0, maximum: 1 },
+                      monthlyLimit: { type: 'integer', enum: [3] },
+                      monthlyPublications: { type: 'integer', minimum: 0 },
+                      monthlyRemaining: {
+                        type: 'integer',
+                        minimum: 0,
+                        maximum: 3,
+                      },
+                      monthlyResetAt: { type: 'string', format: 'date-time' },
                     },
                   },
                   {
@@ -558,6 +575,26 @@ export function enrichOpenApi(document: OpenAPIObject) {
                     required,
                     properties: {
                       applies: { type: 'boolean', enum: [false] },
+                      monthlyLimit: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                      monthlyPublications: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                      monthlyRemaining: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                      monthlyResetAt: {
+                        type: 'string',
+                        nullable: true,
+                        enum: [null],
+                      },
                       limit: { type: 'integer', nullable: true, enum: [null] },
                       publishedObjects: {
                         type: 'integer',
@@ -580,7 +617,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
       if (operationId === 'post /v1/admin/moderation/{id}/decision') {
         operation.responses['409'] = {
           description:
-            'Stale case/version or owner publication quota exceeded. A quota denial leaves the current case pending; staff may retry after capacity is released.',
+            'Stale case/version or owner publication quota exceeded. A quota denial leaves the current case pending; staff may retry after an active slot is released and the Moscow monthly publication allowance is available.',
           content: {
             'application/json': {
               schema: {

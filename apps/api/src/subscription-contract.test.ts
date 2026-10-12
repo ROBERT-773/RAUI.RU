@@ -10,7 +10,8 @@ import {
 const preference = {
   events: ['price_drop'],
   channels: ['email'],
-  frequency: 'daily',
+  frequency: 'immediate',
+  version: 0,
   consent: true,
 };
 test('listing subscription requires explicit consent, events, channel and frequency', () => {
@@ -77,4 +78,20 @@ test('OpenAPI exposes explicit subscription consent and version-protected disabl
   assert.ok(subscribe.security?.length);
   assert.ok(disable.responses['409']);
   assert.match(JSON.stringify(disable.requestBody), /version/);
+});
+
+test('unsupported channels/frequency and missing update version fail closed', () => {
+  for (const override of [
+    { channels: ['in_app'] },
+    { frequency: 'daily' },
+    { version: -1 },
+  ])
+    assert.equal(
+      listingSubscriptionSchema.safeParse({ ...preference, ...override })
+        .success,
+      false,
+    );
+  const unversioned: Record<string, unknown> = { ...preference };
+  delete unversioned.version;
+  assert.equal(listingSubscriptionSchema.safeParse(unversioned).success, false);
 });

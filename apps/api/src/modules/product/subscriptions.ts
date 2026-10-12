@@ -1,3 +1,4 @@
+import { lockListingSubscription } from './subscription-lock';
 import {
   ConflictException,
   Injectable,
@@ -30,27 +31,50 @@ export class ListingSubscriptions {
     const listingId = parse(uuid, id);
     const input = parse(listingSubscriptionSchema, body);
     if (!(await this.access.visible(listingId))) throw new NotFoundException();
+    return this.db.transaction(async (sql) => {
+      await lockListingSubscription(sql, actor.id, listingId);
+      const [current] = await this.db.rows<{ version: number }>(
+        'SELECT version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
+        [actor.id, listingId],
+        sql,
+      );
+      if ((current?.version ?? 0) !== input.version)
+        throw new ConflictException('Stale subscription version');
+      if (!(await this.access.visible(listingId, sql)))
+        throw new NotFoundException();
+      const [row] = await this.db.rows(
+        `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+         VALUES($1,$2,$3,$4,$5,$6)
+         ON CONFLICT(user_id,listing_id) DO UPDATE SET events=EXCLUDED.events,channels=EXCLUDED.channels,frequency=EXCLUDED.frequency,consent_version=EXCLUDED.consent_version,consented_at=now(),disabled_at=NULL,version=listing_subscriptions.version+1,updated_at=now()
+         RETURNING listing_id,events,channels,frequency,version,consented_at`,
+        [
+          actor.id,
+          listingId,
+          input.events,
+          input.channels,
+          input.frequency,
+          listingSubscriptionConsentVersion,
+        ],
+        sql,
+      );
+      return row;
+    });
+  }
+  async get(actor: Actor, id: unknown) {
+    const listingId = parse(uuid, id);
+    if (!(await this.access.visible(listingId))) throw new NotFoundException();
     const [row] = await this.db.rows(
-      `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(user_id,listing_id) DO UPDATE SET events=EXCLUDED.events,channels=EXCLUDED.channels,frequency=EXCLUDED.frequency,consent_version=EXCLUDED.consent_version,consented_at=now(),disabled_at=NULL,version=listing_subscriptions.version+1,updated_at=now()
-       RETURNING listing_id,events,channels,frequency,version,consented_at`,
-      [
-        actor.id,
-        listingId,
-        input.events,
-        input.channels,
-        input.frequency,
-        listingSubscriptionConsentVersion,
-      ],
+      'SELECT version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2',
+      [actor.id, listingId],
     );
-    return row;
+    return row ?? { version: 0 };
   }
 
   async disable(actor: Actor, id: unknown, body: unknown) {
     const listingId = parse(uuid, id);
     const input = parse(listingSubscriptionDisableSchema, body);
     return this.db.transaction(async (sql) => {
+      await lockListingSubscription(sql, actor.id, listingId);
       const [current] = await this.db.rows<{ version: number }>(
         'SELECT version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
         [actor.id, listingId],

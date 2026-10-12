@@ -429,8 +429,18 @@ export class Administration {
           actor.id,
           listing!.id,
           'moderation.decided',
-          { status: listing!.status },
-          { status, caseId: id, reason: input.reason },
+          {
+            status: listing!.status,
+            version: listing!.version,
+            price: listing!.price,
+          },
+          {
+            status,
+            caseId: id,
+            reason: input.reason,
+            version: listing!.version + 1,
+            price: listing!.price,
+          },
           decisionAt,
         );
         return { listingId: listing!.id, status };

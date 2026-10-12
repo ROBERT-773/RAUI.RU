@@ -18,6 +18,10 @@ interface PublicationQuota {
   limit: number | null;
   publishedObjects: number | null;
   remaining: number | null;
+  monthlyLimit: number | null;
+  monthlyPublications: number | null;
+  monthlyRemaining: number | null;
+  monthlyResetAt: string | null;
 }
 interface Media {
   id: string;
@@ -304,6 +308,23 @@ export default function OwnerListings() {
                   . Свободных мест: {quota.remaining}.
                 </p>
               )}
+              {quota?.applies && quota.monthlyResetAt && (
+                <p>
+                  Публикаций в этом месяце: {quota.monthlyPublications} из{' '}
+                  {quota.monthlyLimit}. Осталось публикаций:{' '}
+                  {quota.monthlyRemaining}. Сброс лимита:{' '}
+                  {new Date(quota.monthlyResetAt).toLocaleString('ru-RU', {
+                    timeZone: 'Europe/Moscow',
+                  })}{' '}
+                  (Москва).
+                </p>
+              )}
+              {quota?.applies && quota.monthlyRemaining === 0 && (
+                <p>
+                  Месячный лимит исчерпан. Приостановка объявления не сбрасывает
+                  месячный лимит. Повторное одобрение возможно после его сброса.
+                </p>
+              )}
               {quota?.applies && quota.publishedObjects! >= quota.limit! && (
                 <p>
                   Лимит новых объектов достигнут. Уже опубликованные объявления
@@ -322,8 +343,10 @@ export default function OwnerListings() {
               </p>
               <p>
                 Если одобрение не прошло из-за лимита, заявка остаётся на
-                модерации. После освобождения места сотрудник может повторить
-                одобрение той же заявки. Отправлять её заново не нужно.
+                модерации. При достижении лимита активных объявлений после
+                освобождения места сотрудник может повторить одобрение той же
+                заявки, если месячный лимит не исчерпан. Отправлять её заново не
+                нужно.
               </p>
               <p>
                 Создавать и редактировать черновики, добавлять фотографии и

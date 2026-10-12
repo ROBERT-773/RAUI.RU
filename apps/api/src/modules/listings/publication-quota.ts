@@ -13,6 +13,10 @@ export type PublicationQuota = {
   limit: number | null;
   publishedObjects: number | null;
   remaining: number | null;
+  monthlyLimit: number | null;
+  monthlyPublications: number | null;
+  monthlyRemaining: number | null;
+  monthlyResetAt: string | null;
 };
 export type PublicationSeller = Pick<
   Actor,
@@ -30,13 +34,23 @@ export class PublicationQuotas {
   async own(actor: Actor): Promise<PublicationQuota> {
     // Account eligibility and the informational count share one fresh snapshot.
     const [current] = await this.db.rows<
-      PublicationSeller & { published_objects: string | null }
+      PublicationSeller & {
+        published_objects: string | null;
+        monthly_publications: string;
+        monthly_reset_at: Date;
+      }
     >(
       `SELECT u.id,u.role,u.active,u.registration_approval_state,
         CASE WHEN u.role='owner' THEN
           (SELECT COUNT(*) FROM listings l
            WHERE l.seller_id=u.id AND l.status='published')
         ELSE NULL END AS published_objects
+        , (SELECT COUNT(*) FROM listing_history h JOIN listings historical ON historical.id=h.listing_id
+          WHERE historical.seller_id=u.id AND h.after_data->>'status'='published'
+          AND h.before_data->>'status' IS DISTINCT FROM 'published'
+          AND h.created_at >= (date_trunc('month',now() AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow')
+          AND h.created_at < ((date_trunc('month',now() AT TIME ZONE 'Europe/Moscow') + interval '1 month') AT TIME ZONE 'Europe/Moscow')) AS monthly_publications,
+          ((date_trunc('month',now() AT TIME ZONE 'Europe/Moscow') + interval '1 month') AT TIME ZONE 'Europe/Moscow') AS monthly_reset_at
        FROM users u WHERE u.id=$1`,
       [actor.id],
     );
@@ -49,6 +63,10 @@ export class PublicationQuotas {
         limit: null,
         publishedObjects: null,
         remaining: null,
+        monthlyLimit: null,
+        monthlyPublications: null,
+        monthlyRemaining: null,
+        monthlyResetAt: null,
       };
     const publishedObjects = Number(current.published_objects);
     return {
@@ -56,6 +74,10 @@ export class PublicationQuotas {
       limit,
       publishedObjects,
       remaining: Math.max(0, limit - publishedObjects),
+      monthlyLimit: 3,
+      monthlyPublications: Number(current.monthly_publications),
+      monthlyRemaining: Math.max(0, 3 - Number(current.monthly_publications)),
+      monthlyResetAt: current.monthly_reset_at.toISOString(),
     };
   }
 

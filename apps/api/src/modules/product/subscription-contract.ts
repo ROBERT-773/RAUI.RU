@@ -7,11 +7,9 @@ export const listingSubscriptionSchema = z
       .array(z.enum(['price_drop', 'availability']))
       .min(1)
       .max(2),
-    channels: z
-      .array(z.enum(['in_app', 'email']))
-      .min(1)
-      .max(2),
-    frequency: z.enum(['immediate', 'daily']),
+    channels: z.array(z.literal('email')).min(1).max(2),
+    frequency: z.literal('immediate'),
+    version: z.number().int().nonnegative(),
     consent: z.literal(true),
   })
   .strict()

@@ -25,6 +25,9 @@ readability alone does not establish policy compatibility.
   API replica for the full one-hour quota window. Setting `PHONE_OTP_ENABLED=false`
   alone is insufficient because legacy phone routes remain available.
 - Keep migration 018 and all listing-subscription and notification-delivery rows.
+  Issue107 additionally requires expected-version subscription writes and locked
+  delivery eligibility/finalization; do not roll back to PR98 API/worker binaries
+  merely because they understand the schema. See ISSUE_107_SUBSCRIPTIONS.md.
   Before rolling back any API or notification worker that lacks
   `subscription.listing.*` consent/version revalidation, pause every producer that
   can enqueue those deliveries and stop new notification-worker claims on every

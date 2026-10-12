@@ -495,3 +495,27 @@ test('fresh non-applicable quota hides owner panel after a role change', async (
   );
   expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
 });
+
+test('monthly exhaustion remains visible after freeing the active slot', async () => {
+  setup();
+  const previous = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, ...args) =>
+    path === 'v1/account/publication-quota'
+      ? {
+          applies: true,
+          limit: 1,
+          publishedObjects: 0,
+          remaining: 1,
+          monthlyLimit: 3,
+          monthlyPublications: 3,
+          monthlyRemaining: 0,
+          monthlyResetAt: '2026-10-31T21:00:00.000Z',
+        }
+      : previous(path, ...args),
+  );
+  render(<OwnerListings />);
+  await screen.findByText(/Публикаций в этом месяце: 3 из 3/);
+  expect(
+    screen.getByText(/Приостановка объявления не сбрасывает месячный лимит/),
+  ).toBeTruthy();
+});

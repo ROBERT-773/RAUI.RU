@@ -18,6 +18,13 @@ test('subscription saves explicit preferences without marketing consent', async 
       'Согласен получать выбранные уведомления об этом объявлении',
     ),
   );
+  await vi.waitFor(() =>
+    expect(
+      screen
+        .getByRole('button', { name: 'Сохранить подписку' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить подписку' }));
   await screen.findByText(/Настройки подписки сохранены/);
   expect(api).toHaveBeenCalledWith(
@@ -25,19 +32,31 @@ test('subscription saves explicit preferences without marketing consent', async 
     'POST',
     {
       events: ['price_drop', 'availability'],
-      channels: ['in_app'],
-      frequency: 'daily',
+      channels: ['email'],
+      frequency: 'immediate',
+      version: 1,
       consent: true,
     },
   );
 });
-test('missing consent prevents API request even on direct form submission', () => {
+test('missing consent prevents a preference write even on direct form submission', async () => {
+  vi.mocked(api).mockResolvedValue({ version: 0 });
   render(<ListingSubscription id="fixture-listing" />);
   fireEvent.click(
     screen.getByRole('button', { name: 'Подписаться на изменения' }),
   );
+  await vi.waitFor(() =>
+    expect(
+      screen
+        .getByRole('button', { name: 'Сохранить подписку' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  );
   fireEvent.submit(
     screen.getByRole('button', { name: 'Сохранить подписку' }).closest('form')!,
   );
-  expect(api).not.toHaveBeenCalled();
+  expect(api).toHaveBeenCalledTimes(1);
+  expect(api).toHaveBeenCalledWith(
+    'v1/account/listing-subscriptions/fixture-listing',
+  );
 });

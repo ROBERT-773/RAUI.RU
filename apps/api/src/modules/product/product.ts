@@ -310,6 +310,12 @@ export class ProductController {
   ) {
     return this.subscriptions.list(actor);
   }
+  @Get('listing-subscriptions/:id') subscriptionState(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+  ) {
+    return this.subscriptions.get(actor, id);
+  }
   @Post('listing-subscriptions/:id') subscribe(
     @CurrentActor() actor: Actor,
     @Param('id') id: string,
