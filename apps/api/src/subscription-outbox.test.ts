@@ -227,3 +227,43 @@ test('subscription transport stays in the transaction that locks its consent row
   await worker.once();
   assert.equal(sends, 1);
 });
+
+test('republish serializes availability and price drop using only last public baseline', async () => {
+  const calls: unknown[][] = [];
+  const sql = {
+    query: async (_query: string, values: unknown[]) => {
+      calls.push(values);
+      return { rows: [] };
+    },
+  } as unknown as Sql;
+  const change = {
+    listingId: '12345678-1234-4234-8234-123456789abc',
+    version: 12,
+    publicBefore: false,
+    publicAfter: true,
+    previousPrice: 'private-draft',
+    lastPublicPrice: '100.10',
+    price: '99.99',
+  };
+  assert.equal(await enqueueImmediateListingEmails(sql, change), 2);
+  assert.deepEqual(calls, [
+    [
+      change.listingId,
+      'availability',
+      `listing:${change.listingId}:12:availability`,
+      JSON.stringify({ kind: 'availability', available: true }),
+      listingSubscriptionConsentVersion,
+    ],
+    [
+      change.listingId,
+      'price_drop',
+      `listing:${change.listingId}:12:price_drop`,
+      JSON.stringify({
+        kind: 'price_drop',
+        previousPriceMinor: 10010,
+        priceMinor: 9999,
+      }),
+      listingSubscriptionConsentVersion,
+    ],
+  ]);
+});

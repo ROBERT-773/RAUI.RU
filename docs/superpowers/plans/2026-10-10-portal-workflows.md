@@ -144,3 +144,30 @@ the additive migration or endpoint.
 - Exclusive promotion is scoped to a residential complex page and Similar block for 7/30/90 days. General search and map visibility must be preserved.
 - Paid publication exception requires an actual publication entitlement; existing Standard ranking promotion is not an entitlement.
 - Next implementation sections after the current acceptance gate: resolve the historical-role provenance/design blocker; staff 2FA; complete notification event wiring/delivery with consent, unsubscribe-race and visibility guarantees; admin advertising; provider-backed payments; and legal consent surfaces.
+
+## Listing notification price baseline — owner decision 2026-10-12
+
+The owner selected the last publicly visible price of the same listing as the
+comparison baseline after editing and republishing. Do not substitute the price
+of an intermediate draft or the price at subscription time.
+
+The event helper now accepts an optional server-owned `lastPublicPrice` for a
+nonpublic-to-public transition. A lower republished price emits availability and
+price-drop events with separate stable keys; missing/null baseline (including
+first publication) emits availability only. A continuously public price change
+retains its immediately prior public price. Nonpublic after-states never parse or
+serialize prices. Tests cover exact minor units and queued event payloads.
+
+This is helper groundwork, not end-to-end delivery. Publication history currently
+records approval status without a complete price snapshot, so it cannot be
+treated as an authoritative last-public-price store. Before wiring production
+events, add a versioned transactional public snapshot, define migration/backfill
+behavior without guessing legacy public prices, and revalidate the complete
+public visibility policy before disclosure. Baseline capture must serialize with
+publication changes and enqueue events in the same transaction. No storage,
+migration, production caller or provider delivery is added by this helper change.
+
+Still unresolved: the exact sources of public-to-private availability notices,
+handling of delayed/superseded events, and visibility changes caused by seller or
+organization/membership state without a listing-version change. The price-baseline
+decision does not approve these other policies.

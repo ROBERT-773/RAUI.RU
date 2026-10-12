@@ -16,7 +16,12 @@ export function listingSubscriptionEvents(input: {
   version: number;
   publicBefore: boolean;
   publicAfter: boolean;
+  /** Immediately prior public price when publicBefore=true; never a draft fallback. */
   previousPrice: string;
+  /** Optional server-owned authoritative last publicly visible price; not client input.
+   * Supplying this value requires a trusted baseline; persistence/wiring is separate.
+   */
+  lastPublicPrice?: string | null;
   price: string;
 }) {
   if (!Number.isSafeInteger(input.version) || input.version <= 0)
@@ -27,9 +32,13 @@ export function listingSubscriptionEvents(input: {
       key: `listing:${input.listingId}:${input.version}:availability`,
       event: { kind: 'availability', available: input.publicAfter },
     });
-  // No private/draft price notifications, even if a user previously subscribed.
-  if (input.publicBefore && input.publicAfter) {
-    const before = priceMinor(input.previousPrice);
+  // Never parse prices in a nonpublic after-state. A republish may compare only
+  // against the supplied last PUBLIC baseline, never the immediately prior draft.
+  const previousPublicPrice = input.publicBefore
+    ? input.previousPrice
+    : input.lastPublicPrice;
+  if (input.publicAfter && previousPublicPrice != null) {
+    const before = priceMinor(previousPublicPrice);
     const after = priceMinor(input.price);
     if (after < before)
       events.push({
