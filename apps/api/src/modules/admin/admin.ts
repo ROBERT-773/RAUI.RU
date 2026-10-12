@@ -424,13 +424,26 @@ export class Administration {
           "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN $3::timestamptz ELSE published_at END,updated_at=now() WHERE id=$1",
           [listing!.id, status, decisionAt ?? null],
         );
+        const publicPriceSnapshot =
+          input.decision === 'approve'
+            ? await this.listings.publicPriceSnapshot(
+                listing!.id,
+                sql,
+                decisionAt!,
+              )
+            : null;
         await this.audit.history(
           sql,
           actor.id,
           listing!.id,
           'moderation.decided',
           { status: listing!.status },
-          { status, caseId: id, reason: input.reason },
+          {
+            status,
+            caseId: id,
+            reason: input.reason,
+            ...(publicPriceSnapshot ? { publicPriceSnapshot } : {}),
+          },
           decisionAt,
         );
         return { listingId: listing!.id, status };

@@ -36,6 +36,7 @@ import {
   Organizations,
   OrganizationsModule,
 } from '../organizations/organizations';
+import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
@@ -81,6 +82,19 @@ export class Listings {
     private readonly audit: Audit,
     private readonly idem: Idempotency,
   ) {}
+  /** Internal capture at the authoritative public-policy query, in caller's transaction. */
+  async publicPriceSnapshot(id: string, sql: Sql, capturedAt: Date) {
+    const listing = await this.access.visible(id, sql);
+    if (!listing) return null;
+    if (listing.price === null)
+      throw new Error('Invalid public price snapshot');
+    return buildPublicPriceSnapshot({
+      price: listing.price,
+      currency: 'RUB',
+      listingVersion: listing.version,
+      capturedAt,
+    });
+  }
   async create(actor: Actor, body: unknown, key: unknown) {
     seller(actor);
     const input = parse(

@@ -8,6 +8,8 @@ import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
 import { hash, token, type Actor } from './common/security';
+import { Audit } from './modules/audit/audit';
+import { readLastPublicPriceSnapshot } from './modules/listings/public-price-history';
 import { PublicationQuotas } from './modules/listings/publication-quota';
 
 type Account = { id: string; secret: string };
@@ -841,6 +843,158 @@ test(
               ),
             );
           }
+        },
+      );
+      await t.test(
+        'Public price capture is transactional, replay-safe and ignores hidden edits',
+        async () => {
+          const agent = await account('agent');
+          const item = await offer(agent);
+          const audit = app.get(Audit);
+          const originalHistory = audit.history.bind(audit);
+          // Fault after the actual history insert proves capture and approval roll back together.
+          audit.history = async (...args: Parameters<Audit['history']>) => {
+            await originalHistory(...args);
+            if (args[2] === item.listing && args[3] === 'moderation.decided')
+              throw new Error('Test rollback after snapshot insert');
+          };
+          const key = randomUUID();
+          try {
+            assert.equal((await approve(item, key)).status, 500);
+            assert.equal((await state(item)).status, 'moderation');
+            assert.equal(
+              await readLastPublicPriceSnapshot(pool, item.listing),
+              null,
+            );
+            assert.equal((await state(item)).history, 0);
+          } finally {
+            audit.history = originalHistory;
+          }
+          assert.equal((await approve(item, key)).status, 201);
+          const first = await readLastPublicPriceSnapshot(pool, item.listing);
+          assert.ok(first);
+          assert.equal(first.price, '1000000.00');
+          assert.equal(first.listingVersion, 2);
+          assert.equal(first.currency, 'RUB');
+          const publication = (
+            await pool.query('SELECT published_at FROM listings WHERE id=$1', [
+              item.listing,
+            ])
+          ).rows[0];
+          assert.equal(
+            first.capturedAt,
+            (publication.published_at as Date).toISOString(),
+          );
+          assert.equal((await approve(item, key)).status, 201);
+          assert.deepEqual(
+            await readLastPublicPriceSnapshot(pool, item.listing),
+            first,
+          );
+          assert.equal((await state(item)).history, 1);
+
+          await pause(agent, item);
+          const version = (
+            await pool.query('SELECT version FROM listings WHERE id=$1', [
+              item.listing,
+            ])
+          ).rows[0].version;
+          assert.equal(
+            (
+              await call(`/listings/${item.listing}`, agent, 'PATCH', {
+                version,
+                price: 900000,
+              })
+            ).status,
+            200,
+          );
+          assert.deepEqual(
+            await readLastPublicPriceSnapshot(pool, item.listing),
+            first,
+          );
+          for (const status of ['processing', 'moderation']) {
+            const current = (
+              await pool.query('SELECT version FROM listings WHERE id=$1', [
+                item.listing,
+              ])
+            ).rows[0].version;
+            assert.equal(
+              (
+                await call(
+                  `/listings/${item.listing}/transitions`,
+                  agent,
+                  'POST',
+                  { version: current, status },
+                )
+              ).status,
+              201,
+            );
+          }
+          item.caseId = (
+            await pool.query(
+              "SELECT id FROM moderation_cases WHERE listing_id=$1 AND state='pending'",
+              [item.listing],
+            )
+          ).rows[0].id;
+          const results = await Promise.all([approve(item), approve(item)]);
+          assert.deepEqual(
+            results.map((result) => result.status).sort(),
+            [201, 409],
+          );
+          const latest = await readLastPublicPriceSnapshot(pool, item.listing);
+          assert.ok(latest);
+          assert.equal(latest.price, '900000.00');
+          assert.equal(latest.listingVersion, first.listingVersion + 5);
+          assert.equal(
+            Number(
+              (
+                await pool.query(
+                  "SELECT count(*) FROM listing_history WHERE listing_id=$1 AND after_data ? 'publicPriceSnapshot'",
+                  [item.listing],
+                )
+              ).rows[0].count,
+            ),
+            2,
+          );
+
+          const rejected = await offer(agent);
+          assert.equal(
+            (
+              await call(
+                `/admin/moderation/${rejected.caseId}/decision`,
+                admin,
+                'POST',
+                { decision: 'reject', reason: 'Rejected fixture' },
+              )
+            ).status,
+            201,
+          );
+          assert.equal(
+            await readLastPublicPriceSnapshot(pool, rejected.listing),
+            null,
+          );
+          // No backfill: preexisting published rows and unmarked history are not evidence.
+          const legacy = await offer(agent, 'published');
+          await pool.query(
+            'INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,\'moderation.decided\',\'{"status":"published"}\')',
+            [legacy.listing, admin.id],
+          );
+          assert.equal(
+            await readLastPublicPriceSnapshot(pool, legacy.listing),
+            null,
+          );
+          // Latest marked corruption shadows the older valid capture, including bad outer status.
+          await pool.query(
+            "INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,'moderation.decided',$3::jsonb)",
+            [
+              item.listing,
+              admin.id,
+              JSON.stringify({ status: 'paused', publicPriceSnapshot: latest }),
+            ],
+          );
+          assert.equal(
+            await readLastPublicPriceSnapshot(pool, item.listing),
+            null,
+          );
         },
       );
     } finally {

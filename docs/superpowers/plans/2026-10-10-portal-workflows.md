@@ -158,16 +158,45 @@ first publication) emits availability only. A continuously public price change
 retains its immediately prior public price. Nonpublic after-states never parse or
 serialize prices. Tests cover exact minor units and queued event payloads.
 
-This is helper groundwork, not end-to-end delivery. Publication history currently
-records approval status without a complete price snapshot, so it cannot be
-treated as an authoritative last-public-price store. Before wiring production
-events, add a versioned transactional public snapshot, define migration/backfill
-behavior without guessing legacy public prices, and revalidate the complete
-public visibility policy before disclosure. Baseline capture must serialize with
-publication changes and enqueue events in the same transaction. No storage,
-migration, production caller or provider delivery is added by this helper change.
+This is helper groundwork, not end-to-end delivery. Legacy publication history
+records approval status without a complete price snapshot, so unmarked records
+cannot be treated as an authoritative last-public-price store. The capture
+checkpoint below adds versioned snapshots for future qualifying approvals. Before
+wiring production events, revalidate the complete public visibility policy before
+disclosure and serialize baseline capture with publication changes and event
+enqueue in the same transaction. The helper change alone adds no storage,
+migration, notification event caller or provider delivery.
 
 Still unresolved: the exact sources of public-to-private availability notices,
 handling of delayed/superseded events, and visibility changes caused by seller or
 organization/membership state without a listing-version change. The price-baseline
 decision does not approve these other policies.
+
+## Transactional public-price capture checkpoint
+
+Successful moderation approvals now append a strict `publicPriceSnapshot`
+(schemaVersion 1, exact decimal price string, RUB, post-update listingVersion and
+server decisionAt) to the existing immutable `moderation.decided` history record,
+but only when `ListingAccess.visible` confirms the full public policy in the same
+SQL transaction. Capture, status/history, audit and idempotency commit or roll
+back together. This proves public eligibility at the capture query, not continued
+visibility after commit or that a visitor actually observed the price.
+
+`readLastPublicPriceSnapshot` selects the latest marked history row. Legacy rows
+without a marker remain unknown; invalid/latest unknown-schema markers suppress
+the baseline without falling back to older data. Private edits and rejection do
+not replace the last valid capture. No backfill, new table or migration is added;
+SQL migrations 001–018 remain unchanged. The append-only history is the chosen
+versioned snapshot store, replacing the earlier proposal for separate storage.
+
+Unit checks cover exact decimals and malformed snapshot rejection. PostgreSQL
+acceptance covers rollback after insertion, idempotent replay, private editing
+followed by reapproval, competing approvals, rejection, legacy records and
+corrupt latest-marker suppression. These acceptance tests require CI because the
+local environment has no PostgreSQL.
+
+Production notification events are still not wired. When wiring is designed, read
+the previous snapshot before recording the new one, enqueue in that same
+transaction, and apply the separately agreed visibility/history policy before
+disclosure. Current snapshot capture does not automatically enable notifications
+or solve seller/organization visibility changes outside listing publication.
