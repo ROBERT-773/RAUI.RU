@@ -126,25 +126,36 @@ export class Organizations {
           (input.role === 'admin' || target?.role === 'admin'))
       )
         throw new ForbiddenException('Only owner may manage administrators');
-      const [user] = await this.db.rows(
-        'SELECT id FROM users WHERE id=$1 AND active AND email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL',
-        [input.userId],
-        sql,
-      );
-      if (!user) throw new NotFoundException('Verified user required');
-      await sql.query(
-        'INSERT INTO memberships(organization_id,user_id,role,active) VALUES($1,$2,$3,$4) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=$3,active=$4',
-        [id, input.userId, input.role, input.active],
-      );
+      if (!input.active && !target)
+        throw new NotFoundException('Membership required');
+      let effective = input;
+      if (input.active) {
+        const [user] = await this.db.rows(
+          'SELECT id FROM users WHERE id=$1 AND active AND email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL',
+          [input.userId],
+          sql,
+        );
+        if (!user) throw new NotFoundException('Verified user required');
+        await sql.query(
+          'INSERT INTO memberships(organization_id,user_id,role,active) VALUES($1,$2,$3,true) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=$3,active=true',
+          [id, input.userId, input.role],
+        );
+      } else {
+        effective = { ...input, role: target!.role as 'admin' | 'member' };
+        await sql.query(
+          'UPDATE memberships SET active=false WHERE organization_id=$1 AND user_id=$2',
+          [id, input.userId],
+        );
+      }
       await this.audit.record(
         sql,
         actor.id,
         'membership.changed',
         'organization',
         id,
-        input,
+        effective,
       );
-      return input;
+      return effective;
     });
   }
 }

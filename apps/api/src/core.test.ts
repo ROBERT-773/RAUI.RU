@@ -25,8 +25,88 @@ import {
 import { VerificationDelivery } from './modules/auth/delivery';
 import { PhoneOtpService } from './modules/auth/phone-otp';
 import { Audit } from './modules/audit/audit';
+import { Organizations } from './modules/organizations/organizations';
 import { Test } from '@nestjs/testing';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
+
+test('organization offboarding does not depend on current user eligibility', async () => {
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const ownerId = '22222222-2222-4222-8222-222222222222';
+  const memberId = '33333333-3333-4333-8333-333333333333';
+  const writes: Array<{ text: string; values: unknown[] }> = [];
+  let membershipExists = true;
+  const sql = {
+    query: async (text: string, values: unknown[] = []) => {
+      writes.push({ text, values });
+      return { rows: [] };
+    },
+  };
+  const db = {
+    pool: sql,
+    transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
+      work(sql),
+    rows: async (text: string) => {
+      if (text.includes('SELECT o.kind,m.role'))
+        return [{ kind: 'agency', role: 'owner' }];
+      if (text.includes('SELECT role FROM memberships'))
+        return membershipExists ? [{ role: 'member' }] : [];
+      if (text.includes('SELECT id FROM users')) return [];
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const organizations = new Organizations(
+    db as unknown as Database,
+    { record: async () => {} } as unknown as Audit,
+    {} as never,
+  );
+  const actor = {
+    id: ownerId,
+    role: 'agency' as const,
+    email_verified_at: 'verified',
+    phone_verified_at: 'verified',
+    session_id: 'owner-session',
+  };
+
+  assert.deepEqual(
+    await organizations.setMember(actor, organizationId, {
+      userId: memberId,
+      role: 'member',
+      active: false,
+    }),
+    { userId: memberId, role: 'member', active: false },
+  );
+  assert.ok(
+    writes.some(
+      ({ text, values }) =>
+        text.startsWith('UPDATE memberships SET active=false') &&
+        values[0] === organizationId &&
+        values[1] === memberId,
+    ),
+  );
+  assert.equal(
+    writes.some(({ text }) => text.startsWith('INSERT INTO memberships')),
+    false,
+  );
+  await assert.rejects(
+    organizations.setMember(actor, organizationId, {
+      userId: memberId,
+      role: 'member',
+      active: true,
+    }),
+    /Verified user required/,
+  );
+  membershipExists = false;
+  const writesBeforeMissingMember = writes.length;
+  await assert.rejects(
+    organizations.setMember(actor, organizationId, {
+      userId: memberId,
+      role: 'member',
+      active: false,
+    }),
+    /Membership required/,
+  );
+  assert.equal(writes.length, writesBeforeMissingMember + 1);
+});
 
 test('password reset HTTP acceptance is identical for known and unknown accounts during delivery outage', async () => {
   const knownEmail = 'known-reset@example.test';
