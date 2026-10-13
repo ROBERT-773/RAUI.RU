@@ -757,7 +757,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
     );
     await t.test(
       'advertising counters and spend are idempotent under concurrent events',
-      async () => {
+      async (advertisingTest) => {
         assert.equal(
           (
             await call(
@@ -790,7 +790,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
           'ad-campaign-001',
         );
         campaignId = String(campaign.id);
-        await t.test(
+        await advertisingTest.test(
           'enabled advertising reads campaigns and excludes unavailable placements and campaigns',
           async () => {
             assert.equal(await features.enabled('advertising'), true);
