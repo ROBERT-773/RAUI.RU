@@ -534,7 +534,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           event: { kind: 'availability', available: false },
         });
         await pool.query(
-          "UPDATE notification_deliveries SET state='skipped' WHERE user_id=$1 AND payload->>'listingId'=$2",
+          "UPDATE notification_deliveries SET status='skipped' WHERE user_id=$1 AND payload->>'listingId'=$2",
           [recipient, listingId],
         );
         // Published status alone is insufficient: unverified seller prevents disclosure.

@@ -1033,7 +1033,7 @@ test(
             (
               await pool.query(
                 `SELECT kind,dedupe_key,payload FROM notification_deliveries
-             WHERE user_id=$1 AND payload->>'listingId'=$2 ORDER BY id`,
+             WHERE user_id=$1 AND payload->>'listingId'=$2 ORDER BY (payload->>'listingVersion')::integer,kind`,
                 [recipient.id, item.listing],
               )
             ).rows;
