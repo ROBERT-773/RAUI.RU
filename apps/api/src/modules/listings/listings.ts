@@ -38,6 +38,7 @@ import {
 } from '../organizations/organizations';
 import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
+import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
   processing: ['draft', 'moderation'],
@@ -303,11 +304,25 @@ export class Listings {
             "UPDATE moderation_cases SET state='cancelled',resolved_at=now(),reason='withdrawn' WHERE listing_id=$1 AND state='pending'",
             [id],
           );
+        const publicBefore =
+          listing.status === 'published'
+            ? await this.access.visible(id, sql)
+            : null;
         const [updated] = await this.db.rows<Listing>(
           'UPDATE listings SET status=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',
           [id, input.status],
           sql,
         );
+        if (publicBefore) {
+          await enqueueImmediateListingEmails(sql, {
+            listingId: id,
+            version: updated!.version,
+            publicBefore: true,
+            publicAfter: false,
+            previousPrice: '',
+            price: '',
+          });
+        }
         await this.audit.history(
           sql,
           actor.id,

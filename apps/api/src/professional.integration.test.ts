@@ -492,6 +492,24 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         await pool.query("UPDATE listings SET status='published' WHERE id=$1", [
           listingId,
         ]);
+        const recipient = randomUUID();
+        await pool.query(
+          "INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,'fixture','Bulk notification fixture','buyer',now(),now())",
+          [recipient, recipient + '@example.test'],
+        );
+        await pool.query(
+          `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+          VALUES($1,$2,ARRAY['availability'],ARRAY['email'],'immediate',$3)`,
+          [recipient, listingId, listingSubscriptionConsentVersion],
+        );
+        assert.ok(await app.get(ListingAccess).visible(listingId));
+        const bulkQueued = async () =>
+          (
+            await pool.query(
+              "SELECT payload FROM notification_deliveries WHERE user_id=$1 AND payload->>'listingId'=$2",
+              [recipient, listingId],
+            )
+          ).rows;
         const key = token(),
           input = { listingIds: [listingId] };
         assert.equal(
@@ -502,6 +520,52 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           (await platform.bulkPause(actors[0]!, org, input, key)).paused,
           1,
         );
+        const queued = await bulkQueued();
+        assert.equal(queued.length, 1);
+        const paused = (
+          await pool.query('SELECT version FROM listings WHERE id=$1', [
+            listingId,
+          ])
+        ).rows[0];
+        assert.deepEqual(queued[0].payload, {
+          listingId,
+          listingVersion: paused.version,
+          subscriptionVersion: 1,
+          event: { kind: 'availability', available: false },
+        });
+        await pool.query(
+          "UPDATE notification_deliveries SET state='skipped' WHERE user_id=$1 AND payload->>'listingId'=$2",
+          [recipient, listingId],
+        );
+        // Published status alone is insufficient: unverified seller prevents disclosure.
+        await pool.query("UPDATE listings SET status='published' WHERE id=$1", [
+          listingId,
+        ]);
+        const seller = (
+          await pool.query('SELECT seller_id FROM listings WHERE id=$1', [
+            listingId,
+          ])
+        ).rows[0].seller_id;
+        await pool.query(
+          'UPDATE users SET email_verified_at=NULL WHERE id=$1',
+          [seller],
+        );
+        try {
+          assert.equal(
+            await app.get(ListingAccess).visible(listingId),
+            undefined,
+          );
+          assert.equal(
+            (await platform.bulkPause(actors[0]!, org, input, token())).paused,
+            1,
+          );
+          assert.equal((await bulkQueued()).length, 1);
+        } finally {
+          await pool.query(
+            'UPDATE users SET email_verified_at=now() WHERE id=$1',
+            [seller],
+          );
+        }
         await assert.rejects(
           platform.bulkPause(actors[1]!, org, input, token()),
         );

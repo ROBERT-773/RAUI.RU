@@ -30,6 +30,8 @@ import { Audit, AuditModule } from '../audit/audit';
 import { ProfessionalImports, ProfessionalImportsModule } from './imports';
 import { Structures, StructuresModule } from '../properties/structures';
 import { Database } from '../database/database';
+import { ListingAccess, ListingAccessModule } from '../listings/access';
+import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
 import {
   Organizations,
   OrganizationsModule,
@@ -44,6 +46,7 @@ export class ProfessionalPlatform {
     private readonly organizations: Organizations,
     private readonly audit: Audit,
     private readonly idem: Idempotency,
+    private readonly access: ListingAccess,
   ) {}
 
   async createPortfolio(
@@ -184,13 +187,29 @@ export class ProfessionalPlatform {
           throw new BadRequestException(
             'Bulk pause requires published listings',
           );
-        await sql.query(
+        const visible = new Set<string>();
+        for (const row of rows) {
+          if (await this.access.visible(row.id, sql)) visible.add(row.id);
+        }
+        const updated = await this.db.rows<{ id: string; version: number }>(
           `UPDATE listings
          SET status='paused',version=version+1,updated_at=now()
-         WHERE id=ANY($1::uuid[])`,
+         WHERE id=ANY($1::uuid[]) RETURNING id,version`,
           [[...new Set(input.listingIds)]],
+          sql,
         );
         for (const row of rows) {
+          if (visible.has(row.id)) {
+            const version = updated.find((item) => item.id === row.id)!.version;
+            await enqueueImmediateListingEmails(sql, {
+              listingId: row.id,
+              version,
+              publicBefore: true,
+              publicAfter: false,
+              previousPrice: '',
+              price: '',
+            });
+          }
           await this.audit.history(
             sql,
             actor.id,
@@ -613,6 +632,7 @@ export class PartnerAdminController {
 @Module({
   imports: [
     OrganizationsModule,
+    ListingAccessModule,
     ProfessionalImportsModule,
     StructuresModule,
     AuditModule,

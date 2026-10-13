@@ -23,6 +23,8 @@ export function listingSubscriptionEvents(input: {
    */
   lastPublicPrice?: string | null;
   price: string;
+  /** Internal outbox may omit monetary events outside its safe-integer envelope. */
+  omitPriceDrop?: boolean;
 }) {
   if (!Number.isSafeInteger(input.version) || input.version <= 0)
     throw new Error('Invalid listing event version');
@@ -37,7 +39,11 @@ export function listingSubscriptionEvents(input: {
   const previousPublicPrice = input.publicBefore
     ? input.previousPrice
     : input.lastPublicPrice;
-  if (input.publicAfter && previousPublicPrice != null) {
+  if (
+    input.publicAfter &&
+    previousPublicPrice != null &&
+    !input.omitPriceDrop
+  ) {
     const before = priceMinor(previousPublicPrice);
     const after = priceMinor(input.price);
     if (after < before)

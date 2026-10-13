@@ -222,3 +222,13 @@ neutral unavailable events and strict payload rejection. Production event
 generation remains unwired; defining and recording authoritative public-to-private
 event sources is still required before enabling delivery. Daily and in-app
 channels remain outside this implemented email groundwork.
+
+## Bounded listing lifecycle event wiring — 2026-10-13
+
+- [x] On approval, read the previous marked public snapshot before capturing the new one, then enqueue availability and any safe monetary event in the same transaction.
+- [x] On individual or organization bulk pause, require the full public eligibility predicate before the status change; enqueue a neutral unavailable event with the actual returned post-update version.
+- [x] Preserve exact high NUMERIC publication prices and snapshots. Omit only monetary email events whose valid positive decimal amounts exceed safe integer minor units; availability remains eligible.
+- [x] Add unit coverage for oversized monetary suppression and PostgreSQL acceptance for post-enqueue rollback, replay, concurrent approval, prior public baseline, individual/bulk pause, hidden eligibility, legacy/corrupt baseline and high NUMERIC publication.
+- [ ] Run the new PostgreSQL acceptance in CI before claiming the transactional wiring accepted.
+
+No migration or provider enablement is included. Audit.history remains a generic immutable recorder. Seller, organization and membership visibility changes outside listing lifecycle still have no global availability event producer. Daily and in-app subscription delivery remains outside this block. The delivery worker retains its latest-state, full visibility, consent and unsubscribe gates.

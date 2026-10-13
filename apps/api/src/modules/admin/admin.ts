@@ -34,6 +34,8 @@ import { Database, Sql } from '../database/database';
 import { Audit } from '../audit/audit';
 import { Listings, ListingsModule } from '../listings/listings';
 import type { Listing } from '../listings/access';
+import { readLastPublicPriceSnapshot } from '../listings/public-price-history';
+import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
 import {
   PublicationQuotaModule,
   PublicationQuotas,
@@ -410,6 +412,10 @@ export class Administration {
           );
           if (!sellerActor) throw new ConflictException('Seller inactive');
         }
+        const lastPublicPrice =
+          input.decision === 'approve'
+            ? await readLastPublicPriceSnapshot(sql, listing!.id)
+            : null;
         const status = input.decision === 'approve' ? 'published' : 'rejected';
         await sql.query(
           'UPDATE moderation_cases SET state=$2,reviewer_id=$3,reason=$4,resolved_at=now() WHERE id=$1',
@@ -432,6 +438,17 @@ export class Administration {
                 decisionAt!,
               )
             : null;
+        if (publicPriceSnapshot) {
+          await enqueueImmediateListingEmails(sql, {
+            listingId: listing!.id,
+            version: publicPriceSnapshot.listingVersion,
+            publicBefore: false,
+            publicAfter: true,
+            previousPrice: '',
+            lastPublicPrice: lastPublicPrice?.price ?? null,
+            price: publicPriceSnapshot.price,
+          });
+        }
         await this.audit.history(
           sql,
           actor.id,

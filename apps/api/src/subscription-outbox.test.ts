@@ -519,3 +519,30 @@ test('unavailable events use one neutral authoritative state snapshot without lo
     );
   }
 });
+
+test('large valid public prices preserve availability without unsafe monetary payloads', async () => {
+  const queued: unknown[][] = [];
+  const sql = {
+    query: async (_query: string, values: unknown[]) => {
+      queued.push(values);
+      return { rows: [] };
+    },
+  } as unknown as Sql;
+  assert.equal(
+    await enqueueImmediateListingEmails(sql, {
+      listingId: '12345678-1234-4234-8234-123456789abc',
+      version: 2,
+      publicBefore: false,
+      publicAfter: true,
+      previousPrice: 'private',
+      lastPublicPrice: '99999999999999.99',
+      price: '99999999999998.99',
+    }),
+    1,
+  );
+  assert.deepEqual(JSON.parse(String(queued[0]![3])), {
+    kind: 'availability',
+    available: true,
+  });
+  assert.equal(queued.length, 1);
+});

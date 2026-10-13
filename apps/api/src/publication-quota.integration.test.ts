@@ -11,6 +11,7 @@ import { hash, token, type Actor } from './common/security';
 import { Audit } from './modules/audit/audit';
 import { readLastPublicPriceSnapshot } from './modules/listings/public-price-history';
 import { PublicationQuotas } from './modules/listings/publication-quota';
+import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 
 type Account = { id: string; secret: string };
 type Offer = { property: string; listing: string; caseId: string };
@@ -846,10 +847,196 @@ test(
         },
       );
       await t.test(
+        'Publication queue rolls back after its insert and supports the same-key retry',
+        async () => {
+          const agent = await account('agent'),
+            recipient = await account('buyer');
+          const item = await offer(agent),
+            key = randomUUID();
+          await pool.query(
+            `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+          VALUES($1,$2,ARRAY['availability','price_drop'],ARRAY['email'],'immediate',$3)`,
+            [recipient.id, item.listing, listingSubscriptionConsentVersion],
+          );
+          // This trigger runs after the complete work callback, including enqueue and history.
+          await pool.query(`CREATE FUNCTION test_publication_queue_rollback() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN IF NEW.key = '${key}' THEN RAISE EXCEPTION 'Acceptance post-enqueue rollback'; END IF; RETURN NEW; END $$`);
+          await pool.query(
+            'CREATE TRIGGER test_publication_queue_rollback BEFORE INSERT ON idempotency_records FOR EACH ROW EXECUTE FUNCTION test_publication_queue_rollback()',
+          );
+          try {
+            assert.equal((await approve(item, key)).status, 500);
+            assert.equal((await state(item)).status, 'moderation');
+            assert.equal((await state(item)).history, 0);
+            assert.equal(
+              await readLastPublicPriceSnapshot(pool, item.listing),
+              null,
+            );
+            assert.equal(
+              Number(
+                (
+                  await pool.query(
+                    "SELECT count(*) FROM notification_deliveries WHERE payload->>'listingId'=$1",
+                    [item.listing],
+                  )
+                ).rows[0].count,
+              ),
+              0,
+            );
+          } finally {
+            await pool.query(
+              'DROP TRIGGER test_publication_queue_rollback ON idempotency_records',
+            );
+            await pool.query('DROP FUNCTION test_publication_queue_rollback()');
+          }
+          assert.equal((await approve(item, key)).status, 201);
+          assert.equal(
+            Number(
+              (
+                await pool.query(
+                  "SELECT count(*) FROM notification_deliveries WHERE payload->>'listingId'=$1",
+                  [item.listing],
+                )
+              ).rows[0].count,
+            ),
+            1,
+          );
+        },
+      );
+      await t.test(
+        'Legacy and corrupt latest price baselines produce availability only on approval',
+        async () => {
+          for (const corrupt of [false, true]) {
+            const agent = await account('agent'),
+              recipient = await account('buyer');
+            const item = await offer(agent);
+            const snapshot = {
+              schemaVersion: 1,
+              price: '2000000.00',
+              currency: 'RUB',
+              listingVersion: 1,
+              capturedAt: new Date().toISOString(),
+            };
+            if (corrupt)
+              await pool.query(
+                `INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,'moderation.decided',$3::jsonb)`,
+                [
+                  item.listing,
+                  admin.id,
+                  JSON.stringify({
+                    status: 'published',
+                    publicPriceSnapshot: snapshot,
+                  }),
+                ],
+              );
+            await pool.query(
+              `INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,'moderation.decided',$3::jsonb)`,
+              [
+                item.listing,
+                admin.id,
+                JSON.stringify(
+                  corrupt
+                    ? {
+                        status: 'published',
+                        publicPriceSnapshot: { ...snapshot, schemaVersion: 99 },
+                      }
+                    : { status: 'published' },
+                ),
+              ],
+            );
+            await pool.query(
+              `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+            VALUES($1,$2,ARRAY['availability','price_drop'],ARRAY['email'],'immediate',$3)`,
+              [recipient.id, item.listing, listingSubscriptionConsentVersion],
+            );
+            assert.equal((await approve(item)).status, 201);
+            const queued = (
+              await pool.query(
+                "SELECT payload FROM notification_deliveries WHERE payload->>'listingId'=$1",
+                [item.listing],
+              )
+            ).rows;
+            assert.equal(queued.length, 1);
+            assert.deepEqual(queued[0].payload.event, {
+              kind: 'availability',
+              available: true,
+            });
+            assert.equal(
+              (await readLastPublicPriceSnapshot(pool, item.listing))?.price,
+              '1000000.00',
+            );
+          }
+        },
+      );
+      await t.test(
+        'High numeric public prices remain publishable with availability-only notifications',
+        async () => {
+          const agent = await account('agent'),
+            recipient = await account('buyer');
+          const item = await offer(agent);
+          await pool.query(
+            "UPDATE listings SET price='99999999999998.99' WHERE id=$1",
+            [item.listing],
+          );
+          await pool.query(
+            `INSERT INTO listing_history(listing_id,actor_id,event,after_data) VALUES($1,$2,'moderation.decided',$3::jsonb)`,
+            [
+              item.listing,
+              admin.id,
+              JSON.stringify({
+                status: 'published',
+                publicPriceSnapshot: {
+                  schemaVersion: 1,
+                  price: '99999999999999.99',
+                  currency: 'RUB',
+                  listingVersion: 1,
+                  capturedAt: new Date().toISOString(),
+                },
+              }),
+            ],
+          );
+          await pool.query(
+            `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+          VALUES($1,$2,ARRAY['availability','price_drop'],ARRAY['email'],'immediate',$3)`,
+            [recipient.id, item.listing, listingSubscriptionConsentVersion],
+          );
+          assert.equal((await approve(item)).status, 201);
+          assert.equal(
+            (await readLastPublicPriceSnapshot(pool, item.listing))?.price,
+            '99999999999998.99',
+          );
+          const queued = (
+            await pool.query(
+              "SELECT payload FROM notification_deliveries WHERE payload->>'listingId'=$1",
+              [item.listing],
+            )
+          ).rows;
+          assert.equal(queued.length, 1);
+          assert.deepEqual(queued[0].payload.event, {
+            kind: 'availability',
+            available: true,
+          });
+        },
+      );
+      await t.test(
         'Public price capture is transactional, replay-safe and ignores hidden edits',
         async () => {
           const agent = await account('agent');
           const item = await offer(agent);
+          const recipient = await account('buyer');
+          await pool.query(
+            `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+             VALUES($1,$2,ARRAY['availability','price_drop'],ARRAY['email'],'immediate',$3)`,
+            [recipient.id, item.listing, listingSubscriptionConsentVersion],
+          );
+          const queued = async () =>
+            (
+              await pool.query(
+                `SELECT kind,dedupe_key,payload FROM notification_deliveries
+             WHERE user_id=$1 AND payload->>'listingId'=$2 ORDER BY id`,
+                [recipient.id, item.listing],
+              )
+            ).rows;
           const audit = app.get(Audit);
           const originalHistory = audit.history.bind(audit);
           // Fault after the actual history insert proves capture and approval roll back together.
@@ -867,6 +1054,7 @@ test(
               null,
             );
             assert.equal((await state(item)).history, 0);
+            assert.deepEqual(await queued(), []);
           } finally {
             audit.history = originalHistory;
           }
@@ -891,8 +1079,31 @@ test(
             first,
           );
           assert.equal((await state(item)).history, 1);
+          assert.equal((await queued()).length, 1);
+          assert.deepEqual((await queued())[0].payload.event, {
+            kind: 'availability',
+            available: true,
+          });
+          assert.equal(
+            (await queued())[0].payload.listingVersion,
+            first.listingVersion,
+          );
 
           await pause(agent, item);
+          assert.equal((await queued()).length, 2);
+          assert.deepEqual((await queued())[1].payload.event, {
+            kind: 'availability',
+            available: false,
+          });
+          const pausedVersion = (
+            await pool.query('SELECT version FROM listings WHERE id=$1', [
+              item.listing,
+            ])
+          ).rows[0].version;
+          assert.equal(
+            (await queued())[1].payload.listingVersion,
+            pausedVersion,
+          );
           const version = (
             await pool.query('SELECT version FROM listings WHERE id=$1', [
               item.listing,
@@ -944,6 +1155,21 @@ test(
           assert.ok(latest);
           assert.equal(latest.price, '900000.00');
           assert.equal(latest.listingVersion, first.listingVersion + 5);
+          const republish = (await queued()).filter(
+            (row) => row.payload.listingVersion === latest.listingVersion,
+          );
+          assert.equal(republish.length, 2);
+          assert.deepEqual(
+            republish.find(
+              (row) => row.kind === 'subscription.listing.price_drop',
+            )?.payload.event,
+            {
+              kind: 'price_drop',
+              previousPriceMinor: 100000000,
+              priceMinor: 90000000,
+            },
+          );
+          assert.equal((await queued()).length, 4);
           assert.equal(
             Number(
               (

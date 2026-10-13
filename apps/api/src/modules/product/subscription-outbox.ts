@@ -7,7 +7,28 @@ export async function enqueueImmediateListingEmails(
   sql: Sql,
   change: Parameters<typeof listingSubscriptionEvents>[0],
 ) {
-  const events = listingSubscriptionEvents(change);
+  // Valid database NUMERIC prices may exceed the monetary email envelope.
+  // Suppress that optional event only; malformed prices retain strict validation.
+  const oversized = (value: string | null | undefined) => {
+    if (value == null) return false;
+    if (!/^[0-9]{1,14}(?:\.[0-9]{1,2})?$/.test(value))
+      throw new Error('Invalid subscription price');
+    const [whole, fraction = ''] = value.split('.');
+    const minor = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, '0'));
+    if (minor <= 0n) throw new Error('Subscription price out of range');
+    return minor > BigInt(Number.MAX_SAFE_INTEGER);
+  };
+  const baseline = change.publicBefore
+    ? change.previousPrice
+    : change.lastPublicPrice;
+  const previousOversized =
+    change.publicAfter && baseline != null ? oversized(baseline) : false;
+  const currentOversized =
+    change.publicAfter && baseline != null ? oversized(change.price) : false;
+  const events = listingSubscriptionEvents({
+    ...change,
+    omitPriceDrop: previousOversized || currentOversized,
+  });
   for (const { key, event } of events) {
     const eventName = event.kind;
     if (eventName === 'subscribed') continue;
