@@ -2,7 +2,11 @@
 import { Button } from '@raui/ui';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import type { ListingCard, SearchDefinition } from '@raui/types/product';
+import type {
+  AccountNotification,
+  ListingCard,
+  SearchDefinition,
+} from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
 import { attributeLabels } from '../lib/labels';
 import { savedSearchSummary } from '../lib/saved-search-summary';
@@ -15,6 +19,10 @@ interface AccountUser {
   registration_approval_state?: 'pending' | 'approved' | 'rejected';
   registration_approval_reason?: string | null;
 }
+const inboxPrice = (minor: number) => {
+  const value = BigInt(minor);
+  return `${(value / 100n).toLocaleString('ru-RU')},${(value % 100n).toString().padStart(2, '0')} ₽`;
+};
 const sessionExpired = (error: unknown) =>
   error instanceof Error && 'status' in error && error.status === 401;
 const approved = (user: AccountUser) =>
@@ -42,11 +50,6 @@ interface Message {
   body: string;
   created_at: string;
 }
-interface Notification {
-  id: string;
-  thread_id: string;
-  read_at: string | null;
-}
 export default function Account() {
   const [user, setUser] = useState<AccountUser | null>(null),
     [profileOpen, setProfileOpen] = useState(false),
@@ -57,7 +60,7 @@ export default function Account() {
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
     [threads, setThreads] = useState<Thread[]>([]),
-    [notifications, setNotifications] = useState<Notification[]>([]),
+    [notifications, setNotifications] = useState<AccountNotification[]>([]),
     [activeThread, setActiveThread] = useState(''),
     [messages, setMessages] = useState<Message[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
@@ -152,9 +155,10 @@ export default function Account() {
         setThreads((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else {
-        const r = await api<{ items: Notification[]; cursor: string | null }>(
-          'v1/account/notifications' + (after ? '?cursor=' + after : ''),
-        );
+        const r = await api<{
+          items: AccountNotification[];
+          cursor: string | null;
+        }>('v1/account/notifications' + (after ? '?cursor=' + after : ''));
         if (
           epoch !== identityEpoch.current ||
           request !== collectionRequest.current
@@ -712,52 +716,111 @@ export default function Account() {
             />{' '}
             Получать уведомления в аккаунте
           </label>
-          {notifications.length === 0 && <p>Новых уведомлений нет.</p>}
+          {notifications.length === 0 && !cursor && (
+            <p>Новых уведомлений нет.</p>
+          )}
           {notifications.map((n) => (
             <article className="panel" key={n.id}>
-              <p>
-                Новое сообщение · {n.read_at ? 'прочитано' : 'не прочитано'}
-              </p>
-              <Button
-                onClick={async () => {
-                  const epoch = identityEpoch.current;
-                  const navigation = navigationEpoch.current;
-                  let selectedNavigation = navigation;
-                  let selectedThread = threadRequest.current;
-                  try {
-                    await api(
-                      'v1/account/notifications/' + n.id + '/read',
-                      'POST',
-                    );
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    selectedNavigation = selectTab('messages');
-                    selectedThread = threadRequest.current;
-                    await load('messages');
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    await openThread(n.thread_id);
-                  } catch (e) {
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    setNotice((e as Error).message);
-                  }
-                }}
-              >
-                Прочитать
-              </Button>
+              {n.kind === 'message' ? (
+                <>
+                  <p>
+                    Новое сообщение · {n.read_at ? 'прочитано' : 'не прочитано'}
+                  </p>
+                  <Button
+                    onClick={async () => {
+                      const epoch = identityEpoch.current;
+                      const navigation = navigationEpoch.current;
+                      let selectedNavigation = navigation;
+                      let selectedThread = threadRequest.current;
+                      try {
+                        await api(
+                          'v1/account/notifications/' + n.id + '/read',
+                          'POST',
+                        );
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        selectedNavigation = selectTab('messages');
+                        selectedThread = threadRequest.current;
+                        await load('messages');
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        await openThread(n.thread_id);
+                      } catch (e) {
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        setNotice((e as Error).message);
+                      }
+                    }}
+                  >
+                    Прочитать
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p>
+                    {n.event.kind === 'price_drop'
+                      ? `Цена снизилась до ${inboxPrice(n.event.priceMinor)}`
+                      : n.event.available
+                        ? 'Объявление снова доступно'
+                        : 'Объявление больше недоступно'}
+                  </p>
+                  <p>{n.read_at ? 'прочитано' : 'не прочитано'}</p>
+                  {(n.event.kind === 'price_drop' || n.event.available) && (
+                    <Link href={'/listings/' + n.listing_id}>
+                      Открыть объявление
+                    </Link>
+                  )}
+                  <Button
+                    disabled={Boolean(n.read_at)}
+                    onClick={async () => {
+                      const epoch = identityEpoch.current;
+                      const navigation = navigationEpoch.current;
+                      const request = collectionRequest.current;
+                      try {
+                        await api(
+                          'v1/account/notifications/' + n.id + '/read',
+                          'POST',
+                        );
+                        if (
+                          epoch !== identityEpoch.current ||
+                          navigation !== navigationEpoch.current ||
+                          request !== collectionRequest.current
+                        )
+                          return;
+                        setNotifications((previous) =>
+                          previous.map((item) =>
+                            item.id === n.id
+                              ? { ...item, read_at: new Date().toISOString() }
+                              : item,
+                          ),
+                        );
+                      } catch (error) {
+                        if (
+                          epoch !== identityEpoch.current ||
+                          navigation !== navigationEpoch.current ||
+                          request !== collectionRequest.current
+                        )
+                          return;
+                        setNotice((error as Error).message);
+                      }
+                    }}
+                  >
+                    Отметить прочитанным
+                  </Button>
+                </>
+              )}
             </article>
           ))}
         </>

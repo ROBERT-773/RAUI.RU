@@ -495,6 +495,127 @@ export function enrichOpenApi(document: OpenAPIObject) {
           };
         }
       }
+      if (
+        operationId === 'get /v1/account/notifications' ||
+        operationId === 'post /v1/account/notifications/{id}/read'
+      ) {
+        const decimalId: SchemaObject = {
+          type: 'string',
+          pattern: '^[1-9][0-9]{0,18}$',
+          description:
+            'Exact positive PostgreSQL bigint decimal string, at most 9223372036854775807; never a JavaScript number',
+        };
+        operation.description =
+          'Owned account inbox. Message behavior is preserved. Immediate in-app subscription rows require current consent/channel/preferences, subscription version and latest full-public listing state; unavailable events are neutral. Daily digest is not implemented. Authorization is point-in-time; already received content cannot be recalled.';
+        if (method === 'get') {
+          const common: Record<string, SchemaObject> = {
+            id: decimalId,
+            read_at: { type: 'string', format: 'date-time', nullable: true },
+            created_at: { type: 'string', format: 'date-time' },
+          };
+          const shape = (
+            properties: Record<string, SchemaObject>,
+          ): SchemaObject => ({
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(properties),
+            properties,
+          });
+          const priceEvent = shape({
+            kind: { type: 'string', enum: ['price_drop'] },
+            previousPriceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+            priceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+          });
+          const availabilityEvent = shape({
+            kind: { type: 'string', enum: ['availability'] },
+            available: { type: 'boolean' },
+          });
+          operation.parameters = [
+            {
+              in: 'query',
+              name: 'cursor',
+              required: false,
+              schema: decimalId,
+              description:
+                'Exclusive last scanned raw id. An empty filtered page may still have a cursor.',
+            },
+            {
+              in: 'query',
+              name: 'limit',
+              required: false,
+              schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            },
+          ];
+          operation.responses['200'] = {
+            description: 'Safe current inbox rows and advancing raw cursor',
+            content: {
+              'application/json': {
+                schema: shape({
+                  items: {
+                    type: 'array',
+                    items: {
+                      oneOf: [
+                        shape({
+                          ...common,
+                          kind: { type: 'string', enum: ['message'] },
+                          thread_id: { type: 'string', format: 'uuid' },
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.price_drop'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: priceEvent,
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.availability'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: availabilityEvent,
+                        }),
+                      ],
+                    },
+                  },
+                  cursor: { ...decimalId, nullable: true },
+                }),
+              },
+            },
+          };
+        } else {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            { name: 'id', in: 'path', required: true, schema: decimalId },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Notification not owned or no longer eligible; read state unchanged',
+          };
+          operation.responses['201'] = {
+            description:
+              'Eligible notification marked read; repeated reads are idempotent',
+          };
+        }
+      }
       if (path.startsWith('/v1/account/listing-subscriptions')) {
         operation.description =
           'Own-account listing subscriptions. Favorites do not imply consent. Saving preferences does not establish delivery; worker/channel configuration and current preferences govern notifications.';

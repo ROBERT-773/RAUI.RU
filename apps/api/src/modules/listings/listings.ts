@@ -38,7 +38,7 @@ import {
 } from '../organizations/organizations';
 import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
-import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
   processing: ['draft', 'moderation'],
@@ -314,7 +314,7 @@ export class Listings {
           sql,
         );
         if (publicBefore) {
-          await enqueueImmediateListingEmails(sql, {
+          await enqueueImmediateListingNotifications(sql, {
             listingId: id,
             version: updated!.version,
             publicBefore: true,

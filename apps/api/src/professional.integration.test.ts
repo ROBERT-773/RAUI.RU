@@ -14,8 +14,9 @@ import { ProfessionalFeeds } from './modules/professional/feeds';
 import { ProfessionalImports } from './modules/professional/imports';
 import { ProfessionalPlatform } from './modules/professional/platform';
 import { ListingAccess } from './modules/listings/access';
+import { Product } from './modules/product/product';
 import { ListingSubscriptions } from './modules/product/subscriptions';
-import { enqueueImmediateListingEmails } from './modules/product/subscription-outbox';
+import { enqueueImmediateListingNotifications } from './modules/product/subscription-outbox';
 import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 import { Structures } from './modules/properties/structures';
 import { Properties } from './modules/properties/properties';
@@ -1618,7 +1619,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             [listingId, event.version],
           );
           await db.transaction((sql) =>
-            enqueueImmediateListingEmails(sql, event),
+            enqueueImmediateListingNotifications(sql, event),
           );
           return `listing:${listingId}:${event.version}:price_drop`;
         };
@@ -2162,6 +2163,614 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           'skipped',
         );
         await run(payload(), 'skipped', 'subscription.listing.availability');
+      },
+    );
+    await t.test(
+      'Immediate subscription inbox uses current consent, safe public state and advancing raw cursors',
+      async () => {
+        const product = app.get(Product);
+        const subscriptions = app.get(ListingSubscriptions);
+        const recipient = actors[1]!;
+        const originalListing = (
+          await pool.query(
+            'SELECT status,version,price,title FROM listings WHERE id=$1',
+            [listingId],
+          )
+        ).rows[0];
+        const originalSeller = (
+          await pool.query(
+            'SELECT active,role,email_verified_at,phone_verified_at FROM users WHERE id=$1',
+            [actors[0]!.id],
+          )
+        ).rows[0];
+        await pool.query(
+          "UPDATE users SET active=true,role='agency',email_verified_at=now(),phone_verified_at=now() WHERE id=$1",
+          [actors[0]!.id],
+        );
+        await pool.query(
+          "UPDATE listings SET status='published',version=8000,price=99,title='Public inbox fixture' WHERE id=$1",
+          [listingId],
+        );
+        await pool.query(
+          'INSERT INTO notification_preferences(user_id,in_app,email) VALUES($1,true,true) ON CONFLICT(user_id) DO UPDATE SET in_app=true,email=true',
+          [recipient.id],
+        );
+        const configureSubscription = async (
+          patch: {
+            channels?: readonly string[];
+            frequency?: string;
+            consent?: string;
+            disabled?: boolean;
+          } = {},
+        ) =>
+          (
+            await pool.query(
+              `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+         VALUES($1,$2,ARRAY['price_drop','availability'],$3,$4,$5)
+         ON CONFLICT(user_id,listing_id) DO UPDATE SET events=EXCLUDED.events,channels=EXCLUDED.channels,frequency=EXCLUDED.frequency,consent_version=EXCLUDED.consent_version,disabled_at=$6,version=listing_subscriptions.version+1 RETURNING version`,
+              [
+                recipient.id,
+                listingId,
+                patch.channels ?? ['email', 'in_app'],
+                patch.frequency ?? 'immediate',
+                patch.consent ?? listingSubscriptionConsentVersion,
+                patch.disabled ? new Date() : null,
+              ],
+            )
+          ).rows[0].version as number;
+        const event = (version: number) => ({
+          listingId,
+          version,
+          publicBefore: true,
+          publicAfter: true,
+          previousPrice: '100',
+          price: '99',
+        });
+        const inbox = async (version: number) =>
+          (
+            await pool.query(
+              'SELECT id::text,payload FROM notifications WHERE user_id=$1 AND dedupe_key=$2',
+              [recipient.id, `listing:${listingId}:${version}:price_drop`],
+            )
+          ).rows;
+        const email = async (version: number) =>
+          (
+            await pool.query(
+              'SELECT id FROM notification_deliveries WHERE user_id=$1 AND dedupe_key=$2',
+              [recipient.id, `listing:${listingId}:${version}:price_drop`],
+            )
+          ).rows;
+        try {
+          const subscriptionVersion = await configureSubscription();
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8000)),
+          );
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8000)),
+          );
+          assert.equal((await inbox(8000)).length, 1);
+          assert.equal((await email(8000)).length, 1);
+          const id = (await inbox(8000))[0].id;
+          // Legacy message bridge must not relabel a subscription row and bypass its consent gate.
+          const forgedOutbox = (
+            await pool.query(
+              "INSERT INTO notification_outbox(notification_id,channel) VALUES($1,'email') RETURNING id::text",
+              [id],
+            )
+          ).rows[0].id;
+          await delivery.bridge();
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT count(*)::int AS count FROM notification_deliveries WHERE dedupe_key=$1',
+                [`notification-outbox:${forgedOutbox}`],
+              )
+            ).rows[0].count,
+            0,
+          );
+
+          const response = await call(
+            '/v1/account/notifications',
+            'GET',
+            undefined,
+            1,
+          );
+          assert.equal(response.status, 200);
+          const row = (
+            (await response.json()) as {
+              items: { id: string; created_at: string }[];
+            }
+          ).items.find((row: { id: string }) => row.id === id);
+          assert.ok(row);
+          assert.deepEqual(row, {
+            id,
+            kind: 'subscription.listing.price_drop',
+            listing_id: listingId,
+            event: {
+              kind: 'price_drop',
+              previousPriceMinor: 10000,
+              priceMinor: 9900,
+            },
+            read_at: null,
+            created_at: row.created_at,
+          });
+          const wrong = await call(
+            `/v1/account/notifications/${id}/read`,
+            'POST',
+            undefined,
+            0,
+          );
+          assert.equal(wrong.status, 404);
+          assert.equal(
+            (
+              await call(
+                `/v1/account/notifications/${id}/read`,
+                'POST',
+                undefined,
+                1,
+              )
+            ).status,
+            201,
+          );
+          assert.equal(
+            (
+              await call(
+                `/v1/account/notifications/${id}/read`,
+                'POST',
+                undefined,
+                1,
+              )
+            ).status,
+            201,
+          );
+          await pool.query('UPDATE listings SET price=98 WHERE id=$1', [
+            listingId,
+          ]);
+          assert.equal(
+            (await product.notifications(recipient, {})).items.some(
+              (row) => row.id === id,
+            ),
+            false,
+          );
+          const originalReadAt = (
+            await pool.query('SELECT read_at FROM notifications WHERE id=$1', [
+              id,
+            ])
+          ).rows[0].read_at;
+          assert.equal(
+            (
+              await call(
+                `/v1/account/notifications/${id}/read`,
+                'POST',
+                undefined,
+                1,
+              )
+            ).status,
+            404,
+          );
+          assert.deepEqual(
+            (
+              await pool.query(
+                'SELECT read_at FROM notifications WHERE id=$1',
+                [id],
+              )
+            ).rows[0].read_at,
+            originalReadAt,
+          );
+          await pool.query('UPDATE listings SET price=99 WHERE id=$1', [
+            listingId,
+          ]);
+          await subscriptions.disable(recipient, listingId, {
+            version: subscriptionVersion,
+          });
+          const filtered = await product.notifications(recipient, { limit: 1 });
+          assert.deepEqual(filtered.items, []);
+          assert.equal(filtered.cursor, id);
+          await configureSubscription();
+          assert.equal(
+            (await product.notifications(recipient, {})).items.some(
+              (row) => row.id === id,
+            ),
+            false,
+          );
+          for (const [
+            version,
+            patch,
+            enabled,
+            expectedInbox,
+            expectedEmail,
+          ] of [
+            [8001, { channels: ['in_app'] }, true, 1, 0],
+            [8002, { channels: ['email'] }, true, 0, 1],
+            [8003, {}, false, 0, 1],
+            [8004, { frequency: 'daily' }, true, 0, 0],
+            [8005, { consent: 'listing-updates-v0' }, true, 0, 0],
+            [8006, { disabled: true }, true, 0, 0],
+          ] as const) {
+            await configureSubscription({
+              ...patch,
+              ...('channels' in patch ? { channels: [...patch.channels] } : {}),
+            });
+            await pool.query(
+              'UPDATE notification_preferences SET in_app=$2 WHERE user_id=$1',
+              [recipient.id, enabled],
+            );
+            await pool.query('UPDATE listings SET version=$2 WHERE id=$1', [
+              listingId,
+              version,
+            ]);
+            await db.transaction((sql) =>
+              enqueueImmediateListingNotifications(sql, event(version)),
+            );
+            assert.equal((await inbox(version)).length, expectedInbox);
+            assert.equal((await email(version)).length, expectedEmail);
+          }
+          await configureSubscription();
+          await pool.query(
+            'UPDATE notification_preferences SET in_app=true WHERE user_id=$1',
+            [recipient.id],
+          );
+          await assert.rejects(
+            db.transaction(async (sql) => {
+              await enqueueImmediateListingNotifications(sql, event(8007));
+              throw new Error('rollback inbox');
+            }),
+            /rollback inbox/,
+          );
+          assert.equal((await inbox(8007)).length, 0);
+          assert.equal((await email(8007)).length, 0);
+          await pool.query(
+            "UPDATE listings SET status='paused',version=8008,title='PRIVATE',price=1 WHERE id=$1",
+            [listingId],
+          );
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, {
+              listingId,
+              version: 8008,
+              publicBefore: true,
+              publicAfter: false,
+              previousPrice: '',
+              price: '',
+            }),
+          );
+          const unavailable = (
+            await product.notifications(recipient, {})
+          ).items.find(
+            (row) =>
+              row.kind === 'subscription.listing.availability' &&
+              row.listing_id === listingId,
+          );
+          assert.ok(unavailable);
+          assert.deepEqual(Object.keys(unavailable).sort(), [
+            'created_at',
+            'event',
+            'id',
+            'kind',
+            'listing_id',
+            'read_at',
+          ]);
+          assert.deepEqual('event' in unavailable && unavailable.event, {
+            kind: 'availability',
+            available: false,
+          });
+          await pool.query(
+            "UPDATE listings SET status='published',version=8009,price=99 WHERE id=$1",
+            [listingId],
+          );
+          assert.equal(
+            (await product.notifications(recipient, {})).items.some(
+              (row) => row.id === unavailable.id,
+            ),
+            false,
+          );
+
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8009)),
+          );
+          const currentId = (await inbox(8009))[0].id;
+          for (const mutate of [
+            () =>
+              pool.query('UPDATE users SET active=false WHERE id=$1', [
+                actors[0]!.id,
+              ]),
+            () =>
+              pool.query('UPDATE organizations SET active=false WHERE id=$1', [
+                org,
+              ]),
+            () =>
+              pool.query(
+                'UPDATE memberships SET active=false WHERE organization_id=$1 AND user_id=$2',
+                [org, actors[0]!.id],
+              ),
+          ]) {
+            await mutate();
+            assert.equal(
+              (await product.notifications(recipient, {})).items.some(
+                (row) => row.id === currentId,
+              ),
+              false,
+            );
+            await pool.query('UPDATE users SET active=true WHERE id=$1', [
+              actors[0]!.id,
+            ]);
+            await pool.query(
+              'UPDATE organizations SET active=true WHERE id=$1',
+              [org],
+            );
+            await pool.query(
+              'UPDATE memberships SET active=true WHERE organization_id=$1 AND user_id=$2',
+              [org, actors[0]!.id],
+            );
+          }
+          const thread = (
+            await pool.query(
+              'INSERT INTO inquiry_threads(listing_id,buyer_id,seller_id) VALUES($1,$2,$3) ON CONFLICT(listing_id,buyer_id) DO UPDATE SET listing_id=EXCLUDED.listing_id RETURNING id',
+              [listingId, recipient.id, actors[0]!.id],
+            )
+          ).rows[0].id;
+          const olderMessage = (
+            await pool.query(
+              "INSERT INTO notifications(user_id,thread_id,kind) VALUES($1,$2,'message') RETURNING id::text",
+              [recipient.id, thread],
+            )
+          ).rows[0].id;
+          const pageVersion = await configureSubscription();
+          await pool.query('UPDATE listings SET version=8010 WHERE id=$1', [
+            listingId,
+          ]);
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8010)),
+          );
+          const newerStale = (await inbox(8010))[0].id;
+          await subscriptions.disable(recipient, listingId, {
+            version: pageVersion,
+          });
+          const first = await product.notifications(recipient, { limit: 1 });
+          assert.deepEqual(first, { items: [], cursor: newerStale });
+          const second = await product.notifications(recipient, {
+            limit: 1,
+            cursor: first.cursor,
+          });
+          assert.equal(second.items[0]!.id, olderMessage);
+          await configureSubscription();
+          await pool.query('UPDATE listings SET version=8011 WHERE id=$1', [
+            listingId,
+          ]);
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8011)),
+          );
+          const readId = (await inbox(8011))[0].id;
+          const readVersion = (
+            await pool.query(
+              'SELECT version FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2',
+              [recipient.id, listingId],
+            )
+          ).rows[0].version;
+          const waitForLock = async (part: string, blocker?: number) => {
+            const deadline = performance.now() + 4000;
+            while (performance.now() < deadline) {
+              const waiting = (
+                await pool.query(
+                  "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND position($1 in query)>0 AND ($2::integer IS NULL OR $2=ANY(pg_blocking_pids(pid)))) AS waiting",
+                  [part, blocker ?? null],
+                )
+              ).rows[0].waiting;
+              if (waiting) return;
+              await new Promise<void>((done) => setImmediate(done));
+            }
+            assert.fail('Inbox lock barrier was not reached');
+          };
+          const readHolder = await pool.connect();
+          let heldRead: ReturnType<Product['read']> | undefined;
+          let heldDisable:
+            ReturnType<ListingSubscriptions['disable']> | undefined;
+          let heldPrefs: ReturnType<Product['preferences']> | undefined;
+          try {
+            await readHolder.query('BEGIN');
+            await readHolder.query(
+              'SELECT id FROM notifications WHERE id=$1 FOR UPDATE',
+              [readId],
+            );
+            const pid = (
+              await readHolder.query('SELECT pg_backend_pid() AS pid')
+            ).rows[0].pid;
+            heldRead = product.read(recipient, readId);
+            await waitForLock('UPDATE notifications', pid);
+            // The blocked final UPDATE proves the real reader already holds its user and subscription locks.
+            const readerPid = (
+              await pool.query(
+                "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND position('UPDATE notifications' in query)>0 AND $1=ANY(pg_blocking_pids(pid))",
+                [pid],
+              )
+            ).rows[0].pid;
+            heldDisable = subscriptions.disable(recipient, listingId, {
+              version: readVersion,
+            });
+            await waitForLock(
+              'SELECT version FROM listing_subscriptions',
+              readerPid,
+            );
+            heldPrefs = product.preferences(recipient, {
+              in_app: false,
+              email: true,
+              sms: false,
+              push: false,
+            });
+            await waitForLock('SELECT id FROM users', readerPid);
+            await readHolder.query('COMMIT');
+            assert.deepEqual(await heldRead, { ok: true });
+            await heldDisable;
+            await heldPrefs;
+            assert.equal(
+              (await product.notifications(recipient, {})).items.some(
+                (row) => row.id === readId,
+              ),
+              false,
+            );
+            assert.equal(
+              (await product.notifications(recipient, {})).items.some(
+                (row) => row.id === olderMessage,
+              ),
+              true,
+            );
+          } finally {
+            await readHolder.query('ROLLBACK');
+            readHolder.release();
+            if (heldRead) await heldRead;
+            if (heldDisable) await heldDisable;
+            if (heldPrefs) await heldPrefs;
+          }
+          await pool.query(
+            'UPDATE notification_preferences SET in_app=true WHERE user_id=$1',
+            [recipient.id],
+          );
+          const producerVersion = await configureSubscription();
+          const producerHolder = await pool.connect();
+          let afterProducer:
+            ReturnType<ListingSubscriptions['disable']> | undefined;
+          try {
+            await producerHolder.query('BEGIN');
+            await producerHolder.query(
+              'UPDATE listings SET version=8012 WHERE id=$1',
+              [listingId],
+            );
+            await enqueueImmediateListingNotifications(
+              producerHolder,
+              event(8012),
+            );
+            const pid = (
+              await producerHolder.query('SELECT pg_backend_pid() AS pid')
+            ).rows[0].pid;
+            afterProducer = subscriptions.disable(recipient, listingId, {
+              version: producerVersion,
+            });
+            await waitForLock('SELECT version FROM listing_subscriptions', pid);
+            await producerHolder.query('COMMIT');
+            await afterProducer;
+            const producedId = (await inbox(8012))[0].id;
+            assert.equal(
+              (await product.notifications(recipient, {})).items.some(
+                (row) => row.id === producedId,
+              ),
+              false,
+            );
+          } finally {
+            await producerHolder.query('ROLLBACK');
+            producerHolder.release();
+            if (afterProducer) await afterProducer;
+          }
+          const disableVersion = await configureSubscription();
+          await pool.query('UPDATE listings SET version=8013 WHERE id=$1', [
+            listingId,
+          ]);
+          const disableHolder = await pool.connect();
+          let beforeProducer:
+            ReturnType<ListingSubscriptions['disable']> | undefined;
+          let queuedProducer: Promise<number> | undefined;
+          try {
+            await disableHolder.query('BEGIN');
+            await disableHolder.query(
+              'SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
+              [recipient.id, listingId],
+            );
+            const pid = (
+              await disableHolder.query('SELECT pg_backend_pid() AS pid')
+            ).rows[0].pid;
+            beforeProducer = subscriptions.disable(recipient, listingId, {
+              version: disableVersion,
+            });
+            await waitForLock('SELECT version FROM listing_subscriptions', pid);
+            queuedProducer = db.transaction((sql) =>
+              enqueueImmediateListingNotifications(sql, event(8013)),
+            );
+            await waitForLock('WITH eligible');
+            await disableHolder.query('COMMIT');
+            await beforeProducer;
+            await queuedProducer;
+            assert.equal((await inbox(8013)).length, 0);
+            assert.equal((await email(8013)).length, 0);
+          } finally {
+            await disableHolder.query('ROLLBACK');
+            disableHolder.release();
+            if (beforeProducer) await beforeProducer;
+            if (queuedProducer) await queuedProducer;
+          }
+          await configureSubscription();
+          await pool.query('UPDATE listings SET version=8009 WHERE id=$1', [
+            listingId,
+          ]);
+          // The old envelope now has a different subscription version; create a fresh event/version for the next barrier.
+          await pool.query('UPDATE listings SET version=8014 WHERE id=$1', [
+            listingId,
+          ]);
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8014)),
+          );
+          // Existing private inbox rows must not deadlock a producer's user FK KEY SHARE.
+          await db.transaction((sql) =>
+            enqueueImmediateListingNotifications(sql, event(8009)),
+          );
+          const holder = await pool.connect();
+          let reading: ReturnType<Product['notifications']> | undefined;
+          try {
+            await holder.query('BEGIN');
+            await holder.query(
+              'SELECT 1 FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2 FOR UPDATE',
+              [recipient.id, listingId],
+            );
+            const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+              .rows[0].pid;
+            reading = product.notifications(recipient, {});
+            const deadline = performance.now() + 4000;
+            let waited = false;
+            while (performance.now() < deadline) {
+              waited = (
+                await pool.query(
+                  "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND position('FROM listing_subscriptions' in query)>0 AND $1=ANY(pg_blocking_pids(pid))) AS waited",
+                  [pid],
+                )
+              ).rows[0].waited;
+              if (waited) break;
+              await new Promise<void>((done) => setImmediate(done));
+            }
+            assert.equal(waited, true);
+            await enqueueImmediateListingNotifications(holder, {
+              listingId,
+              version: 8014,
+              publicBefore: false,
+              publicAfter: true,
+              previousPrice: '',
+              price: '99',
+            });
+            await holder.query('COMMIT');
+            await reading;
+          } finally {
+            await holder.query('ROLLBACK');
+            holder.release();
+            if (reading) await reading;
+          }
+        } finally {
+          await pool.query(
+            'UPDATE listings SET status=$2,version=$3,price=$4,title=$5 WHERE id=$1',
+            [
+              listingId,
+              originalListing.status,
+              originalListing.version,
+              originalListing.price,
+              originalListing.title,
+            ],
+          );
+          await pool.query(
+            'UPDATE users SET active=$2,role=$3,email_verified_at=$4,phone_verified_at=$5 WHERE id=$1',
+            [
+              actors[0]!.id,
+              originalSeller.active,
+              originalSeller.role,
+              originalSeller.email_verified_at,
+              originalSeller.phone_verified_at,
+            ],
+          );
+        }
       },
     );
   } finally {

@@ -8,7 +8,7 @@ staging smoke remain pending in issue #40 and the launch evidence report.
 ## Current candidate evidence
 
 This packaging is integrated with the current account/search candidate.
-The required migration package is 001–018. Regional YAML assets enter the
+The required migration package is 001–019. Regional YAML assets enter the
 allowlisted build context and the validated catalogue is copied into API dist.
 CI builds the exact committed source and checks the immutable image ID offline,
 including non-root identity, native dependencies, regional catalogue and migration
@@ -139,3 +139,14 @@ reusing the original runner image. Downloaded archives can be checked with
 `node /trusted/checkout/scripts/runtime-image-archive.mjs <source-sha> <ci-run-id>`
 from an artifact root containing `.cache/runtime-image-receipt.json` and
 `.cache/runtime-image.tar.gz`, after the receipt passes trusted release verification.
+
+## Immediate subscription inbox compatibility
+
+Migration 019 expands the existing message inbox for immediate listing updates.
+Keep the complete 001–019 ledger and the gated subscription inbox reader when
+rolling back. An older message-only API must explicitly filter `kind='message'`
+on both list and mark-read; its unconditional inbox query is unsafe once
+subscription rows exist. Stopping new writes alone does not make that reader
+compatible. Never delete inbox rows or down-migrate 019 to permit rollback; use a
+reviewed compatible artifact or a forward fix. Preserve durable offboarding and
+last-public-price snapshot capture/reading. Daily digest remains unimplemented.

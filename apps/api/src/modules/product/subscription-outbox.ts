@@ -3,7 +3,7 @@ import { listingSubscriptionConsentVersion } from './subscription-contract';
 import { listingSubscriptionEvents } from './subscription-events';
 
 /** Call in the same transaction as the authoritative public listing change. */
-export async function enqueueImmediateListingEmails(
+export async function enqueueImmediateListingNotifications(
   sql: Sql,
   change: Parameters<typeof listingSubscriptionEvents>[0],
 ) {
@@ -33,13 +33,25 @@ export async function enqueueImmediateListingEmails(
     const eventName = event.kind;
     if (eventName === 'subscribed') continue;
     await sql.query(
-      `INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
-       SELECT s.user_id,'email','subscription.listing.'||$2,$3,
+      `WITH eligible AS MATERIALIZED (
+         SELECT s.*,COALESCE(p.in_app,true) AS in_app_enabled
+         FROM listing_subscriptions s JOIN users u ON u.id=s.user_id
+         LEFT JOIN notification_preferences p ON p.user_id=s.user_id
+         WHERE s.listing_id=$1 AND s.disabled_at IS NULL AND s.frequency='immediate'
+           AND s.consent_version=$5 AND $2=ANY(s.events) AND u.active
+         ORDER BY s.user_id,s.listing_id FOR UPDATE OF s
+       ), emails AS (
+         INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
+         SELECT s.user_id,'email','subscription.listing.'||$2,$3,
+           jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb)
+         FROM eligible s WHERE 'email'=ANY(s.channels)
+         ON CONFLICT(user_id,channel,dedupe_key) DO NOTHING
+       )
+       INSERT INTO notifications(user_id,kind,listing_id,subscription_version,listing_version,dedupe_key,payload)
+       SELECT s.user_id,'subscription.listing.'||$2,s.listing_id,s.version,$6::integer,$3,
          jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb)
-       FROM listing_subscriptions s JOIN users u ON u.id=s.user_id
-       WHERE s.listing_id=$1 AND s.disabled_at IS NULL AND s.frequency='immediate'
-         AND s.consent_version=$5 AND 'email'=ANY(s.channels) AND $2=ANY(s.events) AND u.active
-       ON CONFLICT(user_id,channel,dedupe_key) DO NOTHING`,
+       FROM eligible s WHERE 'in_app'=ANY(s.channels) AND s.in_app_enabled
+       ON CONFLICT(user_id,dedupe_key) WHERE kind IN ('subscription.listing.price_drop','subscription.listing.availability') DO NOTHING`,
       [
         change.listingId,
         eventName,

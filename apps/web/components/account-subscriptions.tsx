@@ -62,6 +62,10 @@ export default function AccountSubscriptions() {
     <section aria-label="Подписки на объявления">
       <h2>Подписки на объявления</h2>
       <p>Подписки на изменения объектов не включают рекламную рассылку.</p>
+      <p>
+        Ежедневная подборка пока недоступна. Для уведомлений в аккаунте выберите
+        «Сразу» и канал «В аккаунте» на странице объявления.
+      </p>
       {loading && <p role="status">Загружаем подписки…</p>}
       {!loading && !error && !items.length && (
         <p>
@@ -91,7 +95,7 @@ export default function AccountSubscriptions() {
           <p>
             Частота:{' '}
             {item.frequency === 'daily'
-              ? 'ежедневная подборка'
+              ? 'ежедневная подборка — пока недоступна'
               : 'по мере изменений'}
           </p>
           <Button disabled={Boolean(busy)} onClick={() => void disable(item)}>

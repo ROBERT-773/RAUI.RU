@@ -41,3 +41,9 @@ test('failed disable preserves subscription and displays error without false suc
   await screen.findByRole('alert');
   expect(screen.getByRole('link', { name: 'Открыть объявление' })).toBeTruthy();
 });
+test('account subscription settings disclose that daily digest is not implemented', async () => {
+  vi.mocked(api).mockResolvedValue([row]);
+  render(<AccountSubscriptions />);
+  await screen.findByRole('button', { name: 'Отключить подписку' });
+  expect(screen.getByText(/Ежедневная подборка пока недоступна/)).toBeTruthy();
+});

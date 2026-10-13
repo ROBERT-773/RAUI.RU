@@ -73,3 +73,15 @@ test('email renderer rejects injected titles, identifiers and unsafe origins', (
     }),
   );
 });
+test('large safe price-drop values preserve exact cents in both email formats', () => {
+  const email = renderListingEmail({
+    ...base,
+    event: {
+      kind: 'price_drop',
+      previousPriceMinor: 9007199254740991,
+      priceMinor: 9007199254740987,
+    },
+  });
+  assert.ok(email.text.replace(/\s/g, ' ').includes('90 071 992 547 409,87 ₽'));
+  assert.ok(email.html.replace(/\s/g, ' ').includes('90 071 992 547 409,87 ₽'));
+});

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueImmediateListingEmails } from './modules/product/subscription-outbox';
+import { enqueueImmediateListingNotifications } from './modules/product/subscription-outbox';
 import { Database, Sql } from './modules/database/database';
 import {
   NotificationWorker,
@@ -17,7 +17,7 @@ test('unchanged public listing produces no queued price notifications', async ()
     },
   } as unknown as Sql;
   assert.equal(
-    await enqueueImmediateListingEmails(sql, {
+    await enqueueImmediateListingNotifications(sql, {
       listingId: 'fixture',
       version: 1,
       publicBefore: true,
@@ -91,7 +91,7 @@ test('enqueue binds the current server-owned consent version as a SQL parameter'
       return { rows: [] };
     },
   } as unknown as Sql;
-  await enqueueImmediateListingEmails(sql, {
+  await enqueueImmediateListingNotifications(sql, {
     listingId: '12345678-1234-4234-8234-123456789abc',
     version: 1,
     publicBefore: true,
@@ -282,7 +282,7 @@ test('republish serializes availability and price drop using only last public ba
     lastPublicPrice: '100.10',
     price: '99.99',
   };
-  assert.equal(await enqueueImmediateListingEmails(sql, change), 2);
+  assert.equal(await enqueueImmediateListingNotifications(sql, change), 2);
   assert.deepEqual(calls, [
     [
       change.listingId,
@@ -529,7 +529,7 @@ test('large valid public prices preserve availability without unsafe monetary pa
     },
   } as unknown as Sql;
   assert.equal(
-    await enqueueImmediateListingEmails(sql, {
+    await enqueueImmediateListingNotifications(sql, {
       listingId: '12345678-1234-4234-8234-123456789abc',
       version: 2,
       publicBefore: false,

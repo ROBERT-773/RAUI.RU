@@ -41,3 +41,10 @@ test('missing consent prevents API request even on direct form submission', () =
   );
   expect(api).not.toHaveBeenCalled();
 });
+test('subscription form distinguishes operational immediate inbox from absent daily digest', () => {
+  render(<ListingSubscription id="fixture-listing" />);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Подписаться на изменения' }),
+  );
+  expect(screen.getByText(/Ежедневная подборка пока недоступна/)).toBeTruthy();
+});

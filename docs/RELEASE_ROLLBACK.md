@@ -2,7 +2,7 @@
 
 ## Current account-policy compatibility gate
 
-For the current candidate, migrations 001–018 must remain applied. The schema
+For the current candidate, migrations 001–019 must remain applied. The schema
 counts and compatibility statements below describe
 historical Phase4D/RC baselines; they do not authorize rollback of this candidate.
 Use the selected exact source SHA and its complete migration ledger/checksums.
@@ -37,7 +37,7 @@ readability alone does not establish policy compatibility.
   because migration 018 is readable. If the queue cannot reach only `sent`/`skipped`
   states, retain compatible workers or deploy a reviewed forward fix.
 - Preserve `listing_history` JSON, including schema-1 `publicPriceSnapshot`
-  markers, and the complete migration 001–018 ledger. Snapshot capture adds no
+  markers, and the complete migration 001–019 ledger. Snapshot capture adds no
   migration. Before enabling baseline-dependent listing events, require every
   rollback API to retain qualifying approval capture and a compatible snapshot
   reader. If capture is unavailable, suspend baseline-dependent event generation
@@ -92,7 +92,7 @@ dry-run` workflow takes a successful RAUI CI run ID, full source SHA and either
 staging-dry-run or rollback-dry-run. It verifies GitHub run provenance and every
 manifest hash from the retained artifact using the trusted checked-out verifier.
 The selected run must be completed/successful for the exact `.github/workflows/ci.yml` path and source SHA; the downloaded manifest must carry the same run ID. It has read-only permissions and no deploy command or production credential.
-The historical RC baseline required 12 migrations and RC evidence. The current candidate verifier requires all 18 migrations and matching 18-migration recovery evidence; historical artifacts cannot pass that contract. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
+The historical RC baseline required 12 migrations and RC evidence. The current candidate verifier requires all 19 migrations and matching 19-migration recovery evidence; historical artifacts cannot pass that contract. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
 Locally, from an extracted artifact root, use the trusted repository verifier:
 `node /path/to/RAUI.RU/scripts/release-contract.mjs verify .cache/phase4d-release.json <full-sha>`.
 Do not create a fake CI manifest or use a mutable branch/tag as release identity.
@@ -200,3 +200,14 @@ The repository core/search smoke scripts write development fixtures and require
 local adapters; do not run them unchanged against real provider bindings or a
 production-shaped signed ingress. Adapt sandbox fixture authentication and
 identity explicitly before executing corresponding staging acceptance checks.
+
+## Immediate subscription inbox compatibility
+
+Migration 019 expands the existing message inbox for immediate listing updates.
+Keep the complete 001–019 ledger and the gated subscription inbox reader when
+rolling back. An older message-only API must explicitly filter `kind='message'`
+on both list and mark-read; its unconditional inbox query is unsafe once
+subscription rows exist. Stopping new writes alone does not make that reader
+compatible. Never delete inbox rows or down-migrate 019 to permit rollback; use a
+reviewed compatible artifact or a forward fix. Preserve durable offboarding and
+last-public-price snapshot capture/reading. Daily digest remains unimplemented.

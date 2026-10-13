@@ -35,7 +35,7 @@ import { Audit } from '../audit/audit';
 import { Listings, ListingsModule } from '../listings/listings';
 import type { Listing } from '../listings/access';
 import { readLastPublicPriceSnapshot } from '../listings/public-price-history';
-import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 import {
   PublicationQuotaModule,
   PublicationQuotas,
@@ -439,7 +439,7 @@ export class Administration {
               )
             : null;
         if (publicPriceSnapshot) {
-          await enqueueImmediateListingEmails(sql, {
+          await enqueueImmediateListingNotifications(sql, {
             listingId: listing!.id,
             version: publicPriceSnapshot.listingVersion,
             publicBefore: false,

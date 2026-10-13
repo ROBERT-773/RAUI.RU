@@ -31,7 +31,7 @@ import { ProfessionalImports, ProfessionalImportsModule } from './imports';
 import { Structures, StructuresModule } from '../properties/structures';
 import { Database } from '../database/database';
 import { ListingAccess, ListingAccessModule } from '../listings/access';
-import { enqueueImmediateListingEmails } from '../product/subscription-outbox';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 import {
   Organizations,
   OrganizationsModule,
@@ -201,7 +201,7 @@ export class ProfessionalPlatform {
         for (const row of rows) {
           if (visible.has(row.id)) {
             const version = updated.find((item) => item.id === row.id)!.version;
-            await enqueueImmediateListingEmails(sql, {
+            await enqueueImmediateListingNotifications(sql, {
               listingId: row.id,
               version,
               publicBefore: true,

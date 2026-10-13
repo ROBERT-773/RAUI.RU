@@ -81,6 +81,17 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       'INSERT INTO notification_preferences(user_id,in_app,email,sms,push,transactional) VALUES($1,false,true,false,true,false)',
       [user],
     );
+    const thread = randomUUID();
+    await pool.query(
+      'INSERT INTO inquiry_threads(id,listing_id,buyer_id,seller_id) VALUES($1,$2,$3,$3)',
+      [thread, listing, user],
+    );
+    const oldMessages = (
+      await pool.query(
+        "INSERT INTO notifications(user_id,thread_id,kind,read_at) VALUES($1,$2,'message',NULL),($1,$2,'message',now()) RETURNING id::text,read_at",
+        [user, thread],
+      )
+    ).rows;
     const snapshot = async () => {
       const tables = (
         await pool.query(
@@ -96,7 +107,9 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
               ? "to_jsonb(t)-'region_code'"
               : tablename === 'users'
                 ? "to_jsonb(t)-'public_id'-'registration_approval_state'"
-                : 'to_jsonb(t)';
+                : tablename === 'notifications'
+                  ? "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'"
+                  : 'to_jsonb(t)';
         const rows = (
           await pool.query(
             `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
@@ -139,13 +152,14 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 18);
+    assert.equal(upgradedLedger.length, 19);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
       [15, '016_registration_approval.sql'],
       [16, '017_phone_otp.sql'],
       [17, '018_listing_subscriptions.sql'],
+      [18, '019_listing_subscription_inbox.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -223,6 +237,112 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       upgradedLedger,
     );
     assert.deepEqual(await snapshot(), before);
+    const preserved = (
+      await pool.query(
+        'SELECT id::text,read_at,listing_id,subscription_version,listing_version,dedupe_key,payload FROM notifications WHERE user_id=$1 ORDER BY id',
+        [user],
+      )
+    ).rows;
+    assert.deepEqual(
+      preserved.map(({ id, read_at }) => ({ id, read_at })),
+      oldMessages,
+    );
+    for (const row of preserved)
+      for (const field of [
+        'listing_id',
+        'subscription_version',
+        'listing_version',
+        'dedupe_key',
+        'payload',
+      ])
+        assert.equal(row[field], null);
+    await assert.rejects(
+      pool.query(
+        "INSERT INTO notifications(user_id,kind) VALUES($1,'message')",
+        [user],
+      ),
+      /notifications_shape_check/,
+    );
+    await assert.rejects(
+      pool.query(
+        "INSERT INTO notifications(user_id,kind,listing_id,listing_version,subscription_version,dedupe_key,payload) VALUES($1,'subscription.listing.availability',$2,1,NULL,'invalid','{}')",
+        [user, listing],
+      ),
+      /notifications_shape_check/,
+    );
+    const otherUser = randomUUID();
+    await pool.query(
+      "INSERT INTO users(id,email,password_hash,display_name,role) VALUES($1,$2,'fixture-only','Other upgrade','buyer')",
+      [otherUser, `${otherUser}@example.test`],
+    );
+    const subscriptionInsert =
+      'INSERT INTO notifications(user_id,kind,listing_id,listing_version,subscription_version,dedupe_key,payload) VALUES($1,$2,$3,$4,$5,$6,$7)';
+    const neutral = {
+      listingId: listing,
+      listingVersion: 1,
+      subscriptionVersion: 1,
+      event: { kind: 'availability', available: false },
+    };
+    const args = [
+      user,
+      'subscription.listing.availability',
+      listing,
+      1,
+      1,
+      'upgrade-event',
+      neutral,
+    ];
+    await pool.query(subscriptionInsert, args);
+    await assert.rejects(
+      pool.query(subscriptionInsert, args),
+      /notifications_subscription_dedupe/,
+    );
+    await pool.query(subscriptionInsert, [otherUser, ...args.slice(1)]);
+    await pool.query(subscriptionInsert, [
+      ...args.slice(0, 5),
+      'another-upgrade-event',
+      neutral,
+    ]);
+    for (const invalid of [
+      [user, 'subscription.listing.unknown', listing, 1, 1, 'unknown', neutral],
+      [
+        user,
+        'subscription.listing.availability',
+        listing,
+        null,
+        1,
+        'null',
+        neutral,
+      ],
+      [
+        user,
+        'subscription.listing.availability',
+        listing,
+        0,
+        1,
+        'zero',
+        neutral,
+      ],
+    ])
+      await assert.rejects(
+        pool.query(subscriptionInsert, invalid),
+        /notifications_shape_check/,
+      );
+    await assert.rejects(
+      pool.query(
+        "INSERT INTO notifications(user_id,thread_id,kind,listing_id) VALUES($1,$2,'message',$3)",
+        [user, thread, listing],
+      ),
+      /notifications_shape_check/,
+    );
+    const nextNotification = (
+      await pool.query(
+        "INSERT INTO notifications(user_id,thread_id,kind) VALUES($1,$2,'message') RETURNING id::text",
+        [user, thread],
+      )
+    ).rows[0];
+    assert.ok(BigInt(nextNotification.id) > BigInt(oldMessages.at(-1)!.id));
+
     assert.deepEqual(
       (
         await pool.query('SELECT * FROM schema_migrations ORDER BY name')

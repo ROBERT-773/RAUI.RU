@@ -91,9 +91,13 @@ export default function ListingSubscription({ id }: { id: string }) {
             Частота уведомлений
             <select name="frequency" defaultValue="daily" disabled={busy}>
               <option value="daily">Ежедневная подборка</option>
-              <option value="immediate">По мере изменений</option>
+              <option value="immediate">Сразу</option>
             </select>
           </label>
+          <p>
+            Ежедневная подборка пока недоступна. Для уведомлений в аккаунте
+            выберите «Сразу» и канал «В аккаунте».
+          </p>
           <label>
             <input
               type="checkbox"

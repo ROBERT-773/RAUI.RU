@@ -25,7 +25,7 @@ import {
 } from '../../common/security';
 import { loadConfig } from '../../config';
 import { ListingAccess, ListingAccessModule } from '../listings/access';
-import { priceMinor } from '../product/subscription-events';
+import { eligibleListingSubscriptionEvent } from '../product/subscription-eligibility';
 import {
   listingSubscriptionDeliverySchema,
   listingSubscriptionConsentVersion,
@@ -142,7 +142,7 @@ export class NotificationWorker {
     await this.db.pool
       .query(`INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
   SELECT n.user_id,o.channel,'message','notification-outbox:'||o.id,jsonb_build_object('notificationId',n.id,'threadId',n.thread_id)
-  FROM notification_outbox o JOIN notifications n ON n.id=o.notification_id WHERE o.state='pending'
+  FROM notification_outbox o JOIN notifications n ON n.id=o.notification_id WHERE o.state='pending' AND n.kind='message'
   AND NOT EXISTS(SELECT 1 FROM notification_deliveries d WHERE d.user_id=n.user_id AND d.channel=o.channel AND d.dedupe_key='notification-outbox:'||o.id)
   ORDER BY o.id LIMIT 100 ON CONFLICT(user_id,channel,dedupe_key) DO NOTHING`);
   }
@@ -258,37 +258,14 @@ export class NotificationWorker {
       if (!valid) return;
     }
     if (subscriptionPayload) {
-      const event = subscriptionPayload.event;
-      let eligible = false;
-      if (event.kind === 'availability' && !event.available) {
-        // A single snapshot prevents eligibility/version reads observing different states.
-        const current = await this.access.currentVisibility(
-          subscriptionPayload.listingId,
+      if (
+        !(await eligibleListingSubscriptionEvent(
+          this.access,
+          job.kind,
+          subscriptionPayload,
           sql,
-        );
-        eligible =
-          current !== undefined &&
-          !current.visible &&
-          current.version === subscriptionPayload.listingVersion;
-      } else {
-        const visible = await this.access.visible(
-          subscriptionPayload.listingId,
-          sql,
-        );
-        if (visible?.version === subscriptionPayload.listingVersion) {
-          if (event.kind === 'availability') eligible = true;
-          else {
-            try {
-              eligible =
-                visible.price !== null &&
-                priceMinor(visible.price) === event.priceMinor;
-            } catch {
-              eligible = false;
-            }
-          }
-        }
-      }
-      if (!eligible) {
+        ))
+      ) {
         await this.finish(job, 'skipped', sql);
         return;
       }

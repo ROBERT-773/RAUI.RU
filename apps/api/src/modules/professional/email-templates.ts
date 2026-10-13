@@ -18,10 +18,8 @@ function escapeHtml(value: string) {
 function rubles(minor: number) {
   if (!Number.isSafeInteger(minor) || minor <= 0)
     throw new Error('Invalid email price');
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: 'RUB',
-  }).format(minor / 100);
+  const value = BigInt(minor);
+  return `${(value / 100n).toLocaleString('ru-RU')},${(value % 100n).toString().padStart(2, '0')} ₽`;
 }
 
 /** Pure renderer; delivery and current subscription consent are checked by the worker. */
