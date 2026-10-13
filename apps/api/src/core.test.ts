@@ -26,6 +26,7 @@ import { VerificationDelivery } from './modules/auth/delivery';
 import { PhoneOtpService } from './modules/auth/phone-otp';
 import { Audit } from './modules/audit/audit';
 import { Organizations } from './modules/organizations/organizations';
+import { ProfessionalPlatform } from './modules/professional/platform';
 import { Test } from '@nestjs/testing';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 
@@ -34,21 +35,49 @@ test('organization offboarding does not depend on current user eligibility', asy
   const ownerId = '22222222-2222-4222-8222-222222222222';
   const memberId = '33333333-3333-4333-8333-333333333333';
   const writes: Array<{ text: string; values: unknown[] }> = [];
+  const audits: Array<{
+    sql: unknown;
+    actor: string;
+    action: string;
+    type: string;
+    id: string;
+    data: unknown;
+  }> = [];
   let membershipExists = true;
+  let partnerClientsActive = true;
   const sql = {
     query: async (text: string, values: unknown[] = []) => {
       writes.push({ text, values });
+      if (text.startsWith('UPDATE partner_clients SET active=false')) {
+        assert.match(text, /organization_id=\$1/);
+        assert.match(text, /created_by=\$2/);
+        assert.match(text, /AND active/);
+        assert.match(text, /RETURNING id/);
+        if (!partnerClientsActive) return { rows: [] };
+        partnerClientsActive = false;
+        return {
+          rows: [
+            { id: '44444444-4444-4444-8444-444444444444' },
+            { id: '55555555-5555-4555-8555-555555555555' },
+          ],
+        };
+      }
       return { rows: [] };
     },
   };
   const db = {
-    pool: sql,
+    pool: {},
     transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
       work(sql),
     rows: async (text: string) => {
-      if (text.includes('SELECT o.kind,m.role'))
-        return [{ kind: 'agency', role: 'owner' }];
-      if (text.includes('SELECT role FROM memberships'))
+      if (text.includes('SELECT kind FROM organizations'))
+        return [{ kind: 'agency' }];
+      if (
+        text.includes('SELECT role FROM memberships WHERE organization_id') &&
+        text.includes('AND active FOR SHARE')
+      )
+        return [{ role: 'owner' }];
+      if (text.startsWith('SELECT role'))
         return membershipExists ? [{ role: 'member' }] : [];
       if (text.includes('SELECT id FROM users')) return [];
       throw new Error(`Unexpected query: ${text}`);
@@ -56,7 +85,24 @@ test('organization offboarding does not depend on current user eligibility', asy
   };
   const organizations = new Organizations(
     db as unknown as Database,
-    { record: async () => {} } as unknown as Audit,
+    {
+      record: async (
+        auditSql: unknown,
+        auditActor: string,
+        action: string,
+        type: string,
+        id: string,
+        data: unknown,
+      ) =>
+        audits.push({
+          sql: auditSql,
+          actor: auditActor,
+          action,
+          type,
+          id,
+          data,
+        }),
+    } as unknown as Audit,
     {} as never,
   );
   const actor = {
@@ -87,6 +133,44 @@ test('organization offboarding does not depend on current user eligibility', asy
     writes.some(({ text }) => text.startsWith('INSERT INTO memberships')),
     false,
   );
+  assert.ok(
+    writes.some(
+      ({ text, values }) =>
+        text.startsWith('UPDATE partner_clients SET active=false') &&
+        values[0] === organizationId &&
+        values[1] === memberId,
+    ),
+  );
+  const partnerAudits = audits.filter(
+    ({ action }) => action === 'partner.client.revoked',
+  );
+  assert.deepEqual(
+    partnerAudits,
+    [
+      '44444444-4444-4444-8444-444444444444',
+      '55555555-5555-4555-8555-555555555555',
+    ].map((id) => ({
+      sql,
+      actor: ownerId,
+      action: 'partner.client.revoked',
+      type: 'partner_client',
+      id,
+      data: {
+        reason: 'membership_offboarded',
+        organizationId,
+        userId: memberId,
+      },
+    })),
+  );
+  await organizations.setMember(actor, organizationId, {
+    userId: memberId,
+    role: 'member',
+    active: false,
+  });
+  assert.deepEqual(
+    audits.filter(({ action }) => action === 'partner.client.revoked'),
+    partnerAudits,
+  );
   await assert.rejects(
     organizations.setMember(actor, organizationId, {
       userId: memberId,
@@ -106,6 +190,324 @@ test('organization offboarding does not depend on current user eligibility', asy
     /Membership required/,
   );
   assert.equal(writes.length, writesBeforeMissingMember + 1);
+});
+
+test('organization admin downgrade permanently revokes partner clients', async () => {
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const ownerId = '22222222-2222-4222-8222-222222222222';
+  const adminId = '33333333-3333-4333-8333-333333333333';
+  const writes: string[] = [];
+  const audits: Array<{ action: string; data: unknown }> = [];
+  const sql = {
+    query: async (text: string) => {
+      writes.push(text);
+      if (text.startsWith('UPDATE partner_clients SET active=false'))
+        return { rows: [{ id: '44444444-4444-4444-8444-444444444444' }] };
+      return { rows: [] };
+    },
+  };
+  const db = {
+    pool: {},
+    transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
+      work(sql),
+    rows: async (text: string) => {
+      if (text.includes('SELECT kind FROM organizations'))
+        return [{ kind: 'agency' }];
+      if (text.includes('AND active FOR SHARE')) return [{ role: 'owner' }];
+      if (
+        text.startsWith('SELECT role,active FROM memberships') ||
+        text.startsWith('SELECT role FROM memberships')
+      )
+        return [{ role: 'admin', active: true }];
+      if (text.includes('SELECT id FROM users')) return [{ id: adminId }];
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const organizations = new Organizations(
+    db as unknown as Database,
+    {
+      record: async (
+        _sql: unknown,
+        _actor: string,
+        action: string,
+        _type: string,
+        _id: string,
+        data: unknown,
+      ) => audits.push({ action, data }),
+    } as unknown as Audit,
+    {} as never,
+  );
+
+  await organizations.setMember(
+    {
+      id: ownerId,
+      role: 'agency',
+      email_verified_at: 'verified',
+      phone_verified_at: 'verified',
+      session_id: 'owner-session',
+    },
+    organizationId,
+    { userId: adminId, role: 'member', active: true },
+  );
+  assert.ok(
+    writes.some((text) =>
+      text.startsWith('UPDATE partner_clients SET active=false'),
+    ),
+  );
+  assert.ok(
+    audits.some(
+      ({ action, data }) =>
+        action === 'partner.client.revoked' &&
+        JSON.stringify(data).includes('membership_privilege_removed'),
+    ),
+  );
+});
+
+test('locked organization permission acquires organization before membership', async () => {
+  const queries: string[] = [];
+  const db = {
+    pool: {},
+    rows: async (text: string) => {
+      queries.push(text);
+      if (text.includes('FROM organizations')) return [{ kind: 'agency' }];
+      if (text.includes('FROM memberships')) return [{ role: 'owner' }];
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const organizations = new Organizations(
+    db as unknown as Database,
+    {} as Audit,
+    {} as never,
+  );
+
+  assert.deepEqual(
+    await organizations.permission(
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        role: 'agency',
+        email_verified_at: 'verified',
+        phone_verified_at: 'verified',
+        session_id: 'owner-session',
+      },
+      '11111111-1111-4111-8111-111111111111',
+      true,
+      {} as never,
+    ),
+    { kind: 'agency', role: 'owner' },
+  );
+  assert.equal(queries.length, 2);
+  assert.match(queries[0]!, /FROM organizations/);
+  assert.match(queries[0]!, /FOR SHARE/);
+  assert.match(queries[1]!, /FROM memberships/);
+  assert.match(queries[1]!, /FOR SHARE/);
+});
+
+test('autocommit organization permission keeps authorization in one statement', async () => {
+  const queries: string[] = [];
+  const pool = {};
+  const db = {
+    pool,
+    rows: async (text: string) => {
+      queries.push(text);
+      if (text.includes('JOIN memberships'))
+        return [{ kind: 'agency', role: 'owner' }];
+      throw new Error('Authorization was split across autocommit statements');
+    },
+  };
+  const organizations = new Organizations(
+    db as unknown as Database,
+    {} as Audit,
+    {} as never,
+  );
+
+  await organizations.permission(
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      role: 'agency',
+      email_verified_at: 'verified',
+      phone_verified_at: 'verified',
+      session_id: 'owner-session',
+    },
+    '11111111-1111-4111-8111-111111111111',
+    true,
+  );
+  assert.equal(queries.length, 1);
+});
+
+test('partner authentication locks organization and membership before client', async () => {
+  const queries: string[] = [];
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const creatorId = '22222222-2222-4222-8222-222222222222';
+  const clientId = '33333333-3333-4333-8333-333333333333';
+  const sql = { query: async () => ({ rows: [] }) };
+  const db = {
+    transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
+      work(sql),
+    rows: async (text: string) => {
+      queries.push(text);
+      if (text.includes('FROM partner_clients WHERE token_digest'))
+        return [
+          {
+            id: clientId,
+            organization_id: organizationId,
+            created_by: creatorId,
+          },
+        ];
+      if (text.includes('FROM organizations')) return [{ id: organizationId }];
+      if (text.includes('FROM memberships')) return [{ role: 'admin' }];
+      if (text.includes('FROM partner_clients k JOIN users u'))
+        return [
+          {
+            id: clientId,
+            organization_id: organizationId,
+            scopes: ['listings:read'],
+            requests_per_minute: 10,
+            created_by: creatorId,
+          },
+        ];
+      if (text.includes('clock_timestamp()')) return [{ valid: true }];
+      if (text.includes('INSERT INTO partner_client_usage'))
+        return [{ count: 1 }];
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const platform = new ProfessionalPlatform(
+    db as unknown as Database,
+    {} as Organizations,
+    {} as Audit,
+    {} as never,
+    {} as never,
+  );
+
+  assert.equal(
+    (
+      await platform.partner(
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'listings:read',
+      )
+    ).id,
+    clientId,
+  );
+  assert.match(queries[0]!, /FROM partner_clients WHERE token_digest/);
+  assert.doesNotMatch(queries[0]!, /FOR UPDATE/);
+  assert.match(queries[1]!, /FROM organizations/);
+  assert.match(queries[1]!, /FOR SHARE/);
+  assert.match(queries[2]!, /FROM memberships/);
+  assert.match(queries[2]!, /FOR SHARE/);
+  assert.match(queries[3]!, /FROM partner_clients k JOIN users u/);
+  assert.match(queries[3]!, /FOR UPDATE OF k/);
+});
+
+test('partner authentication rejects expiry after client lock before usage', async () => {
+  const queries: string[] = [];
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const creatorId = '22222222-2222-4222-8222-222222222222';
+  const clientId = '33333333-3333-4333-8333-333333333333';
+  const sql = { query: async () => ({ rows: [] }) };
+  const db = {
+    transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
+      work(sql),
+    rows: async (text: string) => {
+      queries.push(text);
+      if (text.includes('FROM partner_clients WHERE token_digest'))
+        return [
+          {
+            id: clientId,
+            organization_id: organizationId,
+            created_by: creatorId,
+          },
+        ];
+      if (text.includes('FROM organizations')) return [{ id: organizationId }];
+      if (text.includes('FROM memberships')) return [{ role: 'admin' }];
+      if (text.includes('FROM partner_clients k JOIN users u'))
+        return [
+          {
+            id: clientId,
+            organization_id: organizationId,
+            scopes: ['listings:read'],
+            requests_per_minute: 10,
+            created_by: creatorId,
+          },
+        ];
+      if (text.includes('clock_timestamp()')) return [{ valid: false }];
+      if (text.includes('INSERT INTO partner_client_usage'))
+        return [{ count: 1 }];
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const platform = new ProfessionalPlatform(
+    db as unknown as Database,
+    {} as Organizations,
+    {} as Audit,
+    {} as never,
+    {} as never,
+  );
+
+  await assert.rejects(
+    platform.partner(
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'listings:read',
+    ),
+    /Partner scope required/,
+  );
+  assert.equal(
+    queries.some((query) => query.includes('INSERT INTO partner_client_usage')),
+    false,
+  );
+  assert.match(queries[0]!, /FROM partner_clients WHERE token_digest/);
+  assert.doesNotMatch(queries[0]!, /FOR UPDATE/);
+  assert.match(queries[1]!, /FROM organizations/);
+  assert.match(queries[1]!, /FOR SHARE/);
+  assert.match(queries[2]!, /FROM memberships/);
+  assert.match(queries[2]!, /FOR SHARE/);
+  assert.match(queries[3]!, /FROM partner_clients k JOIN users u/);
+  assert.match(queries[3]!, /FOR UPDATE OF k/);
+});
+
+test('partner revocation authorizes organization before locking client', async () => {
+  const events: string[] = [];
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  const clientId = '33333333-3333-4333-8333-333333333333';
+  const sql = { query: async () => ({ rows: [] }) };
+  const db = {
+    transaction: async <T>(work: (client: typeof sql) => Promise<T>) =>
+      work(sql),
+    rows: async (text: string) => {
+      if (text.includes('FROM partner_clients')) {
+        events.push(
+          text.includes('FOR UPDATE') ? 'client-lock' : 'client-read',
+        );
+        return [{ organization_id: organizationId, active: true }];
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    },
+  };
+  const platform = new ProfessionalPlatform(
+    db as unknown as Database,
+    {
+      permission: async () => {
+        events.push('permission');
+        return { kind: 'agency', role: 'owner' };
+      },
+    } as unknown as Organizations,
+    { record: async () => {} } as unknown as Audit,
+    {} as never,
+    {} as never,
+  );
+
+  await platform.revoke(
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      role: 'agency',
+      email_verified_at: 'verified',
+      phone_verified_at: 'verified',
+      session_id: 'owner-session',
+    },
+    clientId,
+    false,
+    organizationId,
+  );
+  assert.deepEqual(events, ['client-read', 'permission', 'client-lock']);
 });
 
 test('password reset HTTP acceptance is identical for known and unknown accounts during delivery outage', async () => {
@@ -295,6 +697,20 @@ test('owner quota OpenAPI distinguishes owner capacity from nonowner null fields
     JSON.stringify(conflict.content),
     /OWNER_PUBLICATION_QUOTA_EXCEEDED/,
   );
+});
+
+test('organization membership OpenAPI documents irreversible partner revocation', () => {
+  const document: OpenAPIObject = {
+    openapi: '3.0.0',
+    info: { title: 'fixture', version: '1' },
+    paths: {
+      '/v1/organizations/{id}/members': { patch: { responses: {} } },
+    },
+  };
+  enrichOpenApi(document);
+  const operation = document.paths['/v1/organizations/{id}/members']!.patch!;
+  assert.match(operation.description!, /permanently revokes/i);
+  assert.match(operation.description!, /reactivation does not restore/i);
 });
 
 test('OpenAPI enrichment preserves path metadata and query parameters on repeated calls', () => {

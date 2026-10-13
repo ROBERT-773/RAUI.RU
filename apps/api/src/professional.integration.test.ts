@@ -8,6 +8,7 @@ import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
 import { Database } from './modules/database/database';
+import { Organizations } from './modules/organizations/organizations';
 import { Actor, hash, token } from './common/security';
 import { ProfessionalFeeds } from './modules/professional/feeds';
 import { ProfessionalImports } from './modules/professional/imports';
@@ -68,6 +69,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
   configure(app);
   await app.listen(0, '127.0.0.1');
   const db = app.get(Database),
+    organizations = app.get(Organizations),
     feeds = app.get(ProfessionalFeeds),
     imports = app.get(ProfessionalImports),
     platform = app.get(ProfessionalPlatform),
@@ -912,6 +914,292 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           [client.id],
         );
         assert.equal(usage!.count, 4);
+      },
+    );
+    await t.test(
+      'Partner expiry is rechecked after organization and client lock waits',
+      async () => {
+        for (const lock of ['organization', 'client'] as const) {
+          const client = await platform.createPartnerClient(
+            actors[0]!,
+            org,
+            {
+              name: `Expiry during ${lock} wait`,
+              scopes: ['listings:read'],
+            },
+            token(),
+          );
+          if (lock === 'client')
+            await pool.query(
+              "UPDATE partner_clients SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1",
+              [client.id],
+            );
+          const holder = await pool.connect();
+          let authenticating: Promise<unknown> | undefined;
+          try {
+            await holder.query('BEGIN');
+            const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+              .rows[0].pid;
+            await holder.query(
+              lock === 'organization'
+                ? 'SELECT id FROM organizations WHERE id=$1 FOR UPDATE'
+                : 'SELECT id FROM partner_clients WHERE id=$1 FOR UPDATE',
+              [lock === 'organization' ? org : client.id],
+            );
+            authenticating = platform.partner(client.token!, 'listings:read');
+            void authenticating.catch(() => {});
+            const deadline = performance.now() + 4000;
+            let blocked = false;
+            while (performance.now() < deadline) {
+              blocked = (
+                await pool.query(
+                  `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+              WHERE datname=current_database() AND wait_event_type='Lock'
+                AND $1::integer=ANY(pg_blocking_pids(pid))) AS blocked`,
+                  [pid],
+                )
+              ).rows[0].blocked;
+              if (blocked) break;
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            assert.ok(blocked, `authentication did not wait on ${lock}`);
+            if (lock === 'organization')
+              await pool.query(
+                "UPDATE partner_clients SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+                [client.id],
+              );
+            let expired = false;
+            while (performance.now() < deadline) {
+              expired = (
+                await pool.query(
+                  'SELECT expires_at<=clock_timestamp() AS expired FROM partner_clients WHERE id=$1',
+                  [client.id],
+                )
+              ).rows[0].expired;
+              if (expired) break;
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            assert.ok(expired, 'token did not expire before releasing lock');
+            await holder.query('COMMIT');
+            await assert.rejects(authenticating, /Partner scope required/);
+            const [state] = await db.rows<{
+              last_used_at: unknown;
+              count: unknown;
+            }>(
+              'SELECT k.last_used_at,u.count FROM partner_clients k LEFT JOIN partner_client_usage u ON u.client_id=k.id WHERE k.id=$1',
+              [client.id],
+            );
+            assert.equal(state!.last_used_at, null);
+            assert.equal(state!.count, null);
+          } finally {
+            await holder.query('ROLLBACK');
+            holder.release();
+            if (authenticating) await Promise.allSettled([authenticating]);
+          }
+        }
+      },
+    );
+    await t.test(
+      'Membership privilege loss permanently revokes partner clients without lock-order deadlocks',
+      async () => {
+        await organizations.setMember(actors[0]!, org, {
+          userId: actors[1]!.id,
+          role: 'admin',
+          active: true,
+        });
+        const first = await platform.createPartnerClient(
+          actors[1]!,
+          org,
+          {
+            name: 'Offboarded first client',
+            scopes: ['listings:read'],
+            requestsPerMinute: 10,
+          },
+          token(),
+        );
+        const second = await platform.createPartnerClient(
+          actors[1]!,
+          org,
+          {
+            name: 'Offboarded second client',
+            scopes: ['listings:read'],
+            requestsPerMinute: 10,
+          },
+          token(),
+        );
+        const other = await platform.createPartnerClient(
+          actors[1]!,
+          otherOrg,
+          {
+            name: 'Other organization control',
+            scopes: ['listings:read'],
+            requestsPerMinute: 10,
+          },
+          token(),
+        );
+        const sameOrganizationControl = await platform.createPartnerClient(
+          actors[0]!,
+          org,
+          {
+            name: 'Same organization creator control',
+            scopes: ['listings:read'],
+            requestsPerMinute: 10,
+          },
+          token(),
+        );
+        await platform.partner(first.token!, 'listings:read');
+        const holder = await pool.connect();
+        let authenticating: Promise<unknown> | undefined;
+        let offboarding: Promise<unknown> | undefined;
+        try {
+          await holder.query('BEGIN');
+          const holderPid = (
+            await holder.query('SELECT pg_backend_pid() AS pid')
+          ).rows[0].pid as number;
+          await holder.query(
+            'SELECT client_id FROM partner_client_usage WHERE client_id=$1 FOR UPDATE',
+            [first.id],
+          );
+          authenticating = platform.partner(first.token!, 'listings:read');
+          void authenticating.catch(() => {});
+          const deadline = performance.now() + 4000;
+          let authPid: number | undefined;
+          while (performance.now() < deadline) {
+            const [waiting] = (
+              await pool.query<{ pid: number }>(
+                `SELECT pid FROM pg_stat_activity
+                 WHERE datname=current_database() AND wait_event_type='Lock'
+                   AND position($1 in query)>0
+                   AND $2::integer=ANY(pg_blocking_pids(pid))`,
+                ['INSERT INTO partner_client_usage', holderPid],
+              )
+            ).rows;
+            if (waiting) {
+              authPid = waiting.pid;
+              break;
+            }
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          assert.ok(authPid, 'partner authentication did not reach usage lock');
+          offboarding = organizations.setMember(actors[0]!, org, {
+            userId: actors[1]!.id,
+            role: 'member',
+            active: false,
+          });
+          void offboarding.catch(() => {});
+          let offboardBlocked = false;
+          while (performance.now() < deadline) {
+            offboardBlocked = Boolean(
+              (
+                await pool.query(
+                  `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                   WHERE datname=current_database() AND wait_event_type='Lock'
+                     AND position($1 in query)>0
+                     AND $2::integer=ANY(pg_blocking_pids(pid))) AS waiting`,
+                  ['SELECT id FROM organizations WHERE id=', authPid],
+                )
+              ).rows[0].waiting,
+            );
+            if (offboardBlocked) break;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          assert.ok(
+            offboardBlocked,
+            'offboarding did not wait for authentication',
+          );
+          await holder.query('COMMIT');
+          await authenticating;
+          await offboarding;
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+          await Promise.allSettled(
+            [authenticating, offboarding].filter(
+              (promise): promise is Promise<unknown> => promise !== undefined,
+            ),
+          );
+        }
+        const clients = await db.rows<{ id: string; active: boolean }>(
+          'SELECT id,active FROM partner_clients WHERE id=ANY($1::uuid[]) ORDER BY id',
+          [[first.id, second.id, other.id, sameOrganizationControl.id]],
+        );
+        const active = new Map(
+          clients.map((client) => [client.id, client.active]),
+        );
+        assert.equal(active.get(first.id), false);
+        assert.equal(active.get(second.id), false);
+        assert.equal(active.get(other.id), true);
+        assert.equal(active.get(sameOrganizationControl.id), true);
+        await assert.rejects(platform.partner(first.token!, 'listings:read'));
+        await assert.rejects(platform.partner(second.token!, 'listings:read'));
+        await platform.partner(other.token!, 'listings:read');
+        await platform.partner(sameOrganizationControl.token!, 'listings:read');
+        await organizations.setMember(actors[0]!, org, {
+          userId: actors[1]!.id,
+          role: 'member',
+          active: false,
+        });
+        const revokedAudit = await db.rows<{
+          actor_id: string;
+          entity_type: string;
+          entity_id: string;
+          data: {
+            reason: string;
+            organizationId: string;
+            userId: string;
+          };
+        }>(
+          `SELECT actor_id,entity_type,entity_id,data FROM audit_events
+           WHERE action='partner.client.revoked'
+             AND entity_id=ANY($1::text[]) ORDER BY entity_id`,
+          [[first.id, second.id]],
+        );
+        assert.equal(revokedAudit.length, 2);
+        for (const event of revokedAudit) {
+          assert.equal(event.actor_id, actors[0]!.id);
+          assert.equal(event.entity_type, 'partner_client');
+          assert.equal(event.data.reason, 'membership_offboarded');
+          assert.equal(event.data.organizationId, org);
+          assert.equal(event.data.userId, actors[1]!.id);
+        }
+        assert.deepEqual(
+          revokedAudit.map((event) => event.entity_id),
+          [first.id, second.id].sort(),
+        );
+        await organizations.setMember(actors[0]!, org, {
+          userId: actors[1]!.id,
+          role: 'admin',
+          active: true,
+        });
+        await assert.rejects(platform.partner(first.token!, 'listings:read'));
+        await assert.rejects(platform.partner(second.token!, 'listings:read'));
+        const replacement = await platform.createPartnerClient(
+          actors[1]!,
+          org,
+          {
+            name: 'Replacement after reactivation',
+            scopes: ['listings:read'],
+          },
+          token(),
+        );
+        await platform.partner(replacement.token!, 'listings:read');
+        await organizations.setMember(actors[0]!, org, {
+          userId: actors[1]!.id,
+          role: 'member',
+          active: true,
+        });
+        await assert.rejects(
+          platform.partner(replacement.token!, 'listings:read'),
+        );
+        assert.equal(
+          (
+            await db.rows<{ active: boolean }>(
+              'SELECT active FROM partner_clients WHERE id=$1',
+              [replacement.id],
+            )
+          )[0]!.active,
+          false,
+        );
       },
     );
     await t.test(

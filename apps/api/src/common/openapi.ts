@@ -531,6 +531,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
           };
         }
       }
+      if (operationId === 'patch /v1/organizations/{id}/members')
+        operation.description =
+          'Organization owner/admin membership management. Deactivation preserves the stored role, removes organization access and permanently revokes active partner clients created by that member. Reactivation does not restore prior credentials; reactivation or any role change revokes legacy active clients. Create a new partner client explicitly after the membership change.';
       if (operationId === 'get /v1/account/publication-quota') {
         const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
         operation.description =

@@ -35,17 +35,43 @@ export class Organizations {
     manage = false,
     sql: Sql = this.db.pool,
   ) {
-    const [row] = await this.db.rows<{
-      kind: 'agency' | 'developer';
-      role: string;
-    }>(
-      `SELECT o.kind,m.role FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=$1 AND o.active AND m.user_id=$2 AND m.active FOR SHARE OF o,m`,
-      [parse(uuid, id), actor.id],
+    const organization = parse(uuid, id);
+    if (sql === this.db.pool) {
+      const [permission] = await this.db.rows<{
+        kind: 'agency' | 'developer';
+        role: string;
+      }>(
+        `SELECT o.kind,m.role FROM organizations o JOIN memberships m ON m.organization_id=o.id
+         WHERE o.id=$1 AND o.active AND m.user_id=$2 AND m.active FOR SHARE OF o,m`,
+        [organization, actor.id],
+        sql,
+      );
+      if (
+        !permission ||
+        (manage && !['owner', 'admin'].includes(permission.role))
+      )
+        throw new ForbiddenException('Active organization membership required');
+      return permission;
+    }
+    const [row] = await this.db.rows<{ kind: 'agency' | 'developer' }>(
+      'SELECT kind FROM organizations WHERE id=$1 AND active FOR SHARE',
+      [organization],
       sql,
     );
-    if (!row || (manage && !['owner', 'admin'].includes(row.role)))
+    const [membership] = row
+      ? await this.db.rows<{ role: string }>(
+          'SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2 AND active FOR SHARE',
+          [organization, actor.id],
+          sql,
+        )
+      : [];
+    if (
+      !row ||
+      !membership ||
+      (manage && !['owner', 'admin'].includes(membership.role))
+    )
       throw new ForbiddenException('Active organization membership required');
-    return row;
+    return { kind: row.kind, role: membership.role };
   }
   async create(actor: Actor, body: unknown, key: unknown) {
     seller(actor);
@@ -115,8 +141,8 @@ export class Organizations {
         parse(uuid, id),
       ]);
       const permission = await this.permission(actor, id, true, sql);
-      const [target] = await this.db.rows<{ role: string }>(
-        'SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2',
+      const [target] = await this.db.rows<{ role: string; active: boolean }>(
+        'SELECT role,active FROM memberships WHERE organization_id=$1 AND user_id=$2 FOR UPDATE',
         [id, input.userId],
         sql,
       );
@@ -146,6 +172,32 @@ export class Organizations {
           'UPDATE memberships SET active=false WHERE organization_id=$1 AND user_id=$2',
           [id, input.userId],
         );
+      }
+      const revocationReason = !input.active
+        ? 'membership_offboarded'
+        : target && (!target.active || target.role !== input.role)
+          ? target.role === 'admin' && input.role === 'member'
+            ? 'membership_privilege_removed'
+            : 'membership_reconfigured'
+          : undefined;
+      if (revocationReason) {
+        const revoked = await sql.query<{ id: string }>(
+          'UPDATE partner_clients SET active=false WHERE organization_id=$1 AND created_by=$2 AND active RETURNING id',
+          [id, input.userId],
+        );
+        for (const client of revoked.rows)
+          await this.audit.record(
+            sql,
+            actor.id,
+            'partner.client.revoked',
+            'partner_client',
+            client.id,
+            {
+              reason: revocationReason,
+              organizationId: id,
+              userId: input.userId,
+            },
+          );
       }
       await this.audit.record(
         sql,
