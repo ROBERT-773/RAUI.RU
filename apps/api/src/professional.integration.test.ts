@@ -1088,7 +1088,8 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         adapter.fail = true;
         await delivery.once();
         const [job] = await db.rows<{ id: string }>(
-          'SELECT id FROM notification_deliveries',
+          "SELECT id FROM notification_deliveries WHERE user_id=$1 AND kind='message' AND payload->>'notificationId'=$2",
+          [actors[0]!.id, n!.id],
         );
         jobId = job!.id;
         assert.equal(
@@ -1116,7 +1117,8 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         assert.equal(
           (
             await db.rows<{ count: string }>(
-              'SELECT count(*) FROM notification_deliveries',
+              "SELECT count(*) FROM notification_deliveries WHERE user_id=$1 AND kind='message' AND payload->>'notificationId'=$2",
+              [actors[0]!.id, n!.id],
             )
           )[0]!.count,
           '1',
