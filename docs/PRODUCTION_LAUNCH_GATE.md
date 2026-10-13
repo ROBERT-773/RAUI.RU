@@ -33,6 +33,13 @@ Do not deploy automatically. Real production deployment requires an explicit sep
 - Verify no secrets in repository, artifacts or logs.
 - Verify production cookies/session/CSRF/CSP/security headers.
 - Verify privileged admin authorization and audit trails.
+- Verify administrators and moderators require server-verified second-factor
+  assurance for privileged reads, writes and idempotent replay. Ordinary password
+  sessions, revoked factors and expired assurance must not authorize these paths;
+  role and scoped-grant checks remain mandatory. Cover delegated staff permissions
+  as well as administrator-only routes. Client profile flags do not prove assurance.
+  Attach current-build acceptance evidence before launch: dependency readiness,
+  successful CI and runtime archive checks alone do not establish staff 2FA.
 - Verify webhook signature validation and replay protection.
 - Verify API key hashing/scopes/rate limits.
 - Verify upload and SSRF protections.
@@ -76,15 +83,16 @@ Do not deploy automatically. Real production deployment requires an explicit sep
   or unverified applicants; rejection revokes affected sessions and prevents login.
 - Verify email or phone confirmation never grants registration approval, changes
   the account role, or reactivates the account.
-- Verify the owner publication cap counts six distinct published Property IDs,
-  including concurrent sixth/seventh approval decisions. Multiple sale/rental
-  offers for the same Property consume one slot, including an additional offer at
-  the cap. Enforce the cap across owner, organization and API sources; a seventh
-  distinct Property returns HTTP409 without changing its pending case or history.
-  Pausing every public offer for a Property frees a slot and permits retrying the
-  same pending case. Existing over-limit publications remain intact with an
-  accurate count and zero remaining slots. Draft creation, editing, media and
-  moderation submission remain available at the cap.
+- Verify the v1.1 free owner limits: one active listing and three publications per
+  Europe/Moscow calendar month. Enforce both counters across owner, organization
+  and API sources, including concurrent approvals and month-boundary decisions.
+  Republish consumes another monthly publication; pause frees the active slot but
+  does not refund the monthly counter. Idempotent replay must not consume either
+  counter again. Reject an over-limit approval with HTTP409 without changing its
+  pending case or publication history. Paid promotion alone grants no additional
+  publication entitlement. Preserve existing over-limit publications with accurate
+  counts and zero remaining slots; draft creation, editing, media and moderation
+  submission remain available at the cap.
 - Verify `PHONE_OTP_ENABLED=false` preserves the existing long-token phone path.
   Numeric OTP capability and captured-adapter tests are not evidence of real SMS
   delivery; record approved provider bindings and controlled-recipient delivery
