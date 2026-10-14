@@ -41,9 +41,28 @@ test('failed disable preserves subscription and displays error without false suc
   await screen.findByRole('alert');
   expect(screen.getByRole('link', { name: 'Открыть объявление' })).toBeTruthy();
 });
-test('account subscription settings disclose that daily digest is not implemented', async () => {
+test('account subscription settings disclose available in-app and unavailable email daily delivery', async () => {
   vi.mocked(api).mockResolvedValue([row]);
   render(<AccountSubscriptions />);
   await screen.findByRole('button', { name: 'Отключить подписку' });
-  expect(screen.getByText(/Ежедневная подборка пока недоступна/)).toBeTruthy();
+  expect(
+    screen.getByText(/Ежедневная подборка доступна в аккаунте/),
+  ).toBeTruthy();
+});
+
+test('daily email remains explicitly unavailable', async () => {
+  vi.mocked(api).mockResolvedValue([]);
+  render(<AccountSubscriptions />);
+  await screen.findByText(/Подписок пока нет/);
+  expect(
+    screen.getByText(/Ежедневная подборка по email пока недоступна/),
+  ).toBeTruthy();
+});
+
+test('daily email-only subscription is shown unavailable rather than claiming account delivery', async () => {
+  vi.mocked(api).mockResolvedValue([row]);
+  render(<AccountSubscriptions />);
+  expect(
+    await screen.findByText(/ежедневная подборка по email — пока недоступна/),
+  ).toBeTruthy();
 });

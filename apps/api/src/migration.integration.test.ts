@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -108,7 +108,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
               : tablename === 'users'
                 ? "to_jsonb(t)-'public_id'-'registration_approval_state'"
                 : tablename === 'notifications'
-                  ? "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'"
+                  ? "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'-'captured_frequency'-'daily_run_id'"
                   : 'to_jsonb(t)';
         const rows = (
           await pool.query(
@@ -124,7 +124,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       const sequences = [];
       for (const config of (
         await pool.query(
-          "SELECT sequencename,data_type::text,start_value,min_value,max_value,increment_by,cycle,cache_size FROM pg_sequences WHERE schemaname='public' AND sequencename<>'users_public_id_seq' ORDER BY sequencename",
+          "SELECT sequencename,data_type::text,start_value,min_value,max_value,increment_by,cycle,cache_size FROM pg_sequences WHERE schemaname='public' AND sequencename NOT IN ('users_public_id_seq','listing_daily_candidates_id_seq') ORDER BY sequencename",
         )
       ).rows) {
         const state = (
@@ -152,7 +152,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 19);
+    assert.equal(upgradedLedger.length, 20);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -160,6 +160,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [16, '017_phone_otp.sql'],
       [17, '018_listing_subscriptions.sql'],
       [18, '019_listing_subscription_inbox.sql'],
+      [19, '020_listing_subscription_daily.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -173,6 +174,9 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       'phone_otp_challenges',
       'phone_otp_send_events',
       'listing_subscriptions',
+      'listing_daily_candidates',
+      'listing_daily_runs',
+      'listing_daily_items',
     ]) {
       assert.equal(
         (await pool.query(`SELECT count(*)::int AS count FROM ${quote(table)}`))

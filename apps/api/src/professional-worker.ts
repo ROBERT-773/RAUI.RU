@@ -1,4 +1,7 @@
 import 'reflect-metadata';
+import { releaseDailyInbox } from './modules/product/subscription-daily';
+import { ListingAccess } from './modules/listings/access';
+import { Database } from './modules/database/database';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -42,10 +45,14 @@ async function run() {
 
   try {
     do {
+      const daily = await releaseDailyInbox(
+        app.get(Database),
+        app.get(ListingAccess),
+      );
       const worked = await worker.once();
       const imported = await imports.once();
       if (process.argv.includes('--once')) break;
-      if (!worked && !imported)
+      if (!worked && !imported && !daily)
         await new Promise((resolve) => setTimeout(resolve, 1000));
     } while (!stopping);
   } finally {

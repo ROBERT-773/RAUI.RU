@@ -88,7 +88,7 @@ jobs:
           const archiveHash = createHash('sha256');
           for await (const chunk of createReadStream('.cache/runtime-image.tar.gz')) archiveHash.update(chunk);
           const archiveSha256 = archiveHash.digest('hex');
-          writeFileSync('.cache/runtime-image-receipt.json', JSON.stringify({version: 1, sourceRevision: revision, imageId, archiveSha256, sourceState: 'committed', siteUrl: metadata.Config.Labels['raui.site-url'], deploymentEnvironment: metadata.Config.Labels['raui.deployment-env'], ciRunId: process.env.GITHUB_RUN_ID, contract: 'passed', serviceSmoke: 'passed', migrationCount: 19, network: 'linux-host', adapters: 'local-development', stagingAcceptance: 'not_executed', deployment: 'not_executed'}, null, 2) + '\n');
+          writeFileSync('.cache/runtime-image-receipt.json', JSON.stringify({version: 1, sourceRevision: revision, imageId, archiveSha256, sourceState: 'committed', siteUrl: metadata.Config.Labels['raui.site-url'], deploymentEnvironment: metadata.Config.Labels['raui.deployment-env'], ciRunId: process.env.GITHUB_RUN_ID, contract: 'passed', serviceSmoke: 'passed', migrationCount: 20, network: 'linux-host', adapters: 'local-development', stagingAcceptance: 'not_executed', deployment: 'not_executed'}, null, 2) + '\n');
           JS
           cd .cache
           sha256sum runtime-image.tar.gz runtime-image-receipt.json > runtime-image-sha256.txt

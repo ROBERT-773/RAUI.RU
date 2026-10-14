@@ -266,7 +266,15 @@ export class Product {
     const q = parse(inboxPage, query);
     return this.db.transaction(async (sql) => {
       const rows = await this.db.rows<InboxRow>(
-        'SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at FROM notifications WHERE user_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT $3',
+        `SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at,captured_frequency,daily_run_id,
+        EXISTS(SELECT 1 FROM listing_daily_items i JOIN listing_daily_runs r ON r.id=i.run_id AND r.user_id=i.user_id
+          JOIN listing_daily_candidates c ON c.id=i.candidate_id AND c.user_id=i.user_id
+          WHERE i.notification_id=notifications.id AND i.user_id=notifications.user_id AND i.outcome='released'
+            AND r.id=notifications.daily_run_id AND r.released_at IS NOT NULL AND r.released_at<=clock_timestamp()
+            AND c.listing_id=notifications.listing_id AND c.listing_version=notifications.listing_version
+            AND c.subscription_version=notifications.subscription_version AND c.kind=notifications.kind
+            AND c.dedupe_key=notifications.dedupe_key AND c.payload=notifications.payload) AS daily_released
+        FROM notifications WHERE user_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT $3`,
         [actor.id, q.cursor ?? null, q.limit],
         sql,
       );
@@ -286,7 +294,15 @@ export class Product {
     const parsedId = parse(notificationId, id);
     return this.db.transaction(async (sql) => {
       const rows = await this.db.rows<InboxRow>(
-        'SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at FROM notifications WHERE user_id=$1 AND id=$2::bigint',
+        `SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at,captured_frequency,daily_run_id,
+        EXISTS(SELECT 1 FROM listing_daily_items i JOIN listing_daily_runs r ON r.id=i.run_id AND r.user_id=i.user_id
+          JOIN listing_daily_candidates c ON c.id=i.candidate_id AND c.user_id=i.user_id
+          WHERE i.notification_id=notifications.id AND i.user_id=notifications.user_id AND i.outcome='released'
+            AND r.id=notifications.daily_run_id AND r.released_at IS NOT NULL AND r.released_at<=clock_timestamp()
+            AND c.listing_id=notifications.listing_id AND c.listing_version=notifications.listing_version
+            AND c.subscription_version=notifications.subscription_version AND c.kind=notifications.kind
+            AND c.dedupe_key=notifications.dedupe_key AND c.payload=notifications.payload) AS daily_released
+        FROM notifications WHERE user_id=$1 AND id=$2::bigint`,
         [actor.id, parsedId],
         sql,
       );

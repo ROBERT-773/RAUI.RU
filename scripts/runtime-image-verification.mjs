@@ -27,6 +27,7 @@ export const migrationNames = [
   '017_phone_otp.sql',
   '018_listing_subscriptions.sql',
   '019_listing_subscription_inbox.sql',
+  '020_listing_subscription_daily.sql',
 ];
 export async function verifyMigrationPackage(root) {
   const directory = resolve(root, 'apps/api/migrations');

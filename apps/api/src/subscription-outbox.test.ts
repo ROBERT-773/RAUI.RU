@@ -291,6 +291,7 @@ test('republish serializes availability and price drop using only last public ba
       JSON.stringify({ kind: 'availability', available: true }),
       listingSubscriptionConsentVersion,
       12,
+      48,
     ],
     [
       change.listingId,
@@ -303,6 +304,7 @@ test('republish serializes availability and price drop using only last public ba
       }),
       listingSubscriptionConsentVersion,
       12,
+      48,
     ],
   ]);
 });
@@ -545,4 +547,28 @@ test('large valid public prices preserve availability without unsafe monetary pa
     available: true,
   });
   assert.equal(queued.length, 1);
+});
+
+test('canonical producer durably captures daily in-app candidates without per-item daily email', async () => {
+  let captured = false;
+  await enqueueImmediateListingNotifications(
+    {
+      query: async (query: string) => {
+        assert.match(query, /INSERT INTO listing_daily_candidates/);
+        assert.match(query, /s\.frequency='daily'/);
+        assert.match(query, /s\.frequency='immediate' AND 'email'/);
+        captured = true;
+        return { rows: [] };
+      },
+    } as unknown as Sql,
+    {
+      listingId: '12345678-1234-4234-8234-123456789abc',
+      version: 8,
+      publicBefore: true,
+      publicAfter: true,
+      previousPrice: '100',
+      price: '99',
+    },
+  );
+  assert.equal(captured, true);
 });

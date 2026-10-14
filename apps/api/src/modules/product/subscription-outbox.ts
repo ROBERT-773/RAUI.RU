@@ -1,3 +1,4 @@
+import { dailySubscriptionSettings } from './subscription-daily';
 import { Sql } from '../database/database';
 import { listingSubscriptionConsentVersion } from './subscription-contract';
 import { listingSubscriptionEvents } from './subscription-events';
@@ -37,20 +38,27 @@ export async function enqueueImmediateListingNotifications(
          SELECT s.*,COALESCE(p.in_app,true) AS in_app_enabled
          FROM listing_subscriptions s JOIN users u ON u.id=s.user_id
          LEFT JOIN notification_preferences p ON p.user_id=s.user_id
-         WHERE s.listing_id=$1 AND s.disabled_at IS NULL AND s.frequency='immediate'
+         WHERE s.listing_id=$1 AND s.disabled_at IS NULL AND s.frequency IN ('immediate','daily')
            AND s.consent_version=$5 AND $2=ANY(s.events) AND u.active
          ORDER BY s.user_id,s.listing_id FOR UPDATE OF s
        ), emails AS (
          INSERT INTO notification_deliveries(user_id,channel,kind,dedupe_key,payload)
          SELECT s.user_id,'email','subscription.listing.'||$2,$3,
            jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb)
-         FROM eligible s WHERE 'email'=ANY(s.channels)
+         FROM eligible s WHERE s.frequency='immediate' AND 'email'=ANY(s.channels)
          ON CONFLICT(user_id,channel,dedupe_key) DO NOTHING
+       ), daily AS (
+         INSERT INTO listing_daily_candidates(user_id,listing_id,subscription_version,listing_version,kind,dedupe_key,payload,expires_at)
+         SELECT s.user_id,s.listing_id,s.version,$6::integer,'subscription.listing.'||$2,$3,
+           jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb),
+           clock_timestamp()+make_interval(hours=>$7)
+         FROM eligible s WHERE s.frequency='daily' AND 'in_app'=ANY(s.channels) AND s.in_app_enabled
+         ON CONFLICT(user_id,dedupe_key) DO NOTHING
        )
        INSERT INTO notifications(user_id,kind,listing_id,subscription_version,listing_version,dedupe_key,payload)
        SELECT s.user_id,'subscription.listing.'||$2,s.listing_id,s.version,$6::integer,$3,
          jsonb_build_object('listingId',s.listing_id,'subscriptionVersion',s.version,'listingVersion',$6::integer,'event',$4::jsonb)
-       FROM eligible s WHERE 'in_app'=ANY(s.channels) AND s.in_app_enabled
+       FROM eligible s WHERE s.frequency='immediate' AND 'in_app'=ANY(s.channels) AND s.in_app_enabled
        ON CONFLICT(user_id,dedupe_key) WHERE kind IN ('subscription.listing.price_drop','subscription.listing.availability') DO NOTHING`,
       [
         change.listingId,
@@ -59,6 +67,7 @@ export async function enqueueImmediateListingNotifications(
         JSON.stringify(event),
         listingSubscriptionConsentVersion,
         change.version,
+        dailySubscriptionSettings().ttlHours,
       ],
     );
   }

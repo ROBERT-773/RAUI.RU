@@ -41,10 +41,23 @@ test('missing consent prevents API request even on direct form submission', () =
   );
   expect(api).not.toHaveBeenCalled();
 });
-test('subscription form distinguishes operational immediate inbox from absent daily digest', () => {
+test('subscription form distinguishes daily in-app release from unavailable daily email', () => {
   render(<ListingSubscription id="fixture-listing" />);
   fireEvent.click(
     screen.getByRole('button', { name: 'Подписаться на изменения' }),
   );
-  expect(screen.getByText(/Ежедневная подборка пока недоступна/)).toBeTruthy();
+  expect(
+    screen.getByText(/Ежедневная подборка доступна в аккаунте/),
+  ).toBeTruthy();
+});
+
+test('daily email remains explicitly unavailable', async () => {
+  vi.mocked(api).mockResolvedValue([]);
+  render(<ListingSubscription id="fixture-listing" />);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Подписаться на изменения' }),
+  );
+  expect(
+    screen.getByText(/Ежедневная подборка по email пока недоступна/),
+  ).toBeTruthy();
 });

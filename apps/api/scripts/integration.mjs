@@ -23,6 +23,7 @@ for (const testFile of [
   'search.integration.test.js',
   'commerce.integration.test.js',
   'professional.integration.test.js',
+  'subscription-daily.integration.test.js',
   'ai-trust.integration.test.js',
 ]) {
   const name = `raui_test_${randomBytes(8).toString('hex')}`;

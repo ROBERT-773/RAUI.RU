@@ -33,6 +33,7 @@ function fixture(
     disabled?: boolean;
     raw?: unknown[];
     hidden?: boolean;
+    frequency?: string;
   } = {},
 ) {
   let reads = 0;
@@ -55,7 +56,7 @@ function fixture(
             version: options.version ?? 1,
             disabled_at: options.disabled ? 'now' : null,
             consent_version: listingSubscriptionConsentVersion,
-            frequency: 'immediate',
+            frequency: options.frequency ?? 'immediate',
             events: ['price_drop', 'availability'],
             channels: ['in_app'],
           },
@@ -167,4 +168,44 @@ test('neutral unavailable response avoids loading private listing details', asyn
       created_at: item.created_at,
     },
   ]);
+});
+
+test('daily inbox item requires released exact manifest and current daily consent', async () => {
+  const daily = {
+    ...item,
+    captured_frequency: 'daily',
+    daily_run_id: listingId,
+    daily_released: true,
+  };
+  assert.equal(
+    (
+      await fixture({ frequency: 'daily', raw: [daily] }).service.notifications(
+        actor,
+        {},
+      )
+    ).items.length,
+    1,
+  );
+  for (const raw of [
+    { ...daily, daily_released: false },
+    { ...daily, daily_run_id: null },
+  ])
+    assert.equal(
+      (
+        await fixture({ frequency: 'daily', raw: [raw] }).service.notifications(
+          actor,
+          {},
+        )
+      ).items.length,
+      0,
+    );
+  assert.equal(
+    (
+      await fixture({
+        frequency: 'immediate',
+        raw: [daily],
+      }).service.notifications(actor, {})
+    ).items.length,
+    0,
+  );
 });

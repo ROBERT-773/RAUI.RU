@@ -40,6 +40,12 @@ named grants), `016_registration_approval.sql`, `017_phone_otp.sql` and
 `018_listing_subscriptions.sql` and `019_listing_subscription_inbox.sql`. Auth
 returns `public_id` as a decimal string. The
 upgrade fixture compares legacy facts separately from these additive fields/tables
-and verifies backfill; recovery and release contracts require 19 migrations. Keep
+and verifies backfill; recovery and release contracts require 20 migrations. Keep
 these columns, tables and sequence on application rollback; never reset identifiers
 to reuse them.
+
+## Daily in-app expand migration 020
+
+`020_listing_subscription_daily.sql` adds immutable daily event candidates, user/day runs and immutable manifests, plus nullable frequency/run provenance on notifications. Existing message/immediate rows preserve null provenance. Composite foreign keys bind candidate, run and notification to the same recipient; the reader additionally matches the exact candidate envelope and a released manifest. Candidates are captured in the authoritative lifecycle transaction. Bounded worker batches stay hidden until the run's atomic release. Operational candidate TTL applies when inserting the inbox item after final visibility checks, not the lifetime of released history. No historical data or candidate/manifest deletion is introduced.
+
+Daily email is not implemented or enabled. Roll forward migration020; rollback requires a reader that understands020 or explicitly filters daily notifications. Stop the daily producer and coordinator before application rollback; stopping producer alone does not protect a legacy reader from prepared/released daily rows. Preserve all manifest/candidate records. No down migration is supplied.

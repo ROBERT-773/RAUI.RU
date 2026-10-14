@@ -14,6 +14,9 @@ export interface InboxRow {
   listing_version: number | null;
   subscription_version: number | null;
   payload: unknown;
+  captured_frequency?: string | null;
+  daily_run_id?: string | null;
+  daily_released?: boolean;
   read_at: Date | string | null;
   created_at: Date | string;
 }
@@ -91,7 +94,10 @@ export async function eligibleInboxRows(
       s.disabled_at !== null ||
       s.version !== row.subscription_version ||
       s.consent_version !== listingSubscriptionConsentVersion ||
-      s.frequency !== 'immediate' ||
+      s.frequency !== (row.captured_frequency ?? 'immediate') ||
+      (row.captured_frequency === 'daily' &&
+        (!row.daily_run_id || row.daily_released !== true)) ||
+      (row.captured_frequency !== 'daily' && row.daily_run_id != null) ||
       !s.channels.includes('in_app') ||
       !s.events.includes(parsed.data.event.kind)
     )
