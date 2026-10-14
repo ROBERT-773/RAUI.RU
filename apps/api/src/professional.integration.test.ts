@@ -180,6 +180,42 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         );
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);
+        const holder = await pool.connect();
+        let updating:
+          ReturnType<ProfessionalPlatform['setPreferences']> | undefined;
+        try {
+          await holder.query('BEGIN');
+          await holder.query(
+            'SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE',
+            [actors[0]!.id],
+          );
+          const blocker = (await holder.query('SELECT pg_backend_pid() AS pid'))
+            .rows[0].pid;
+          updating = platform.setPreferences(actors[0]!, {
+            email: false,
+            push: false,
+            transactional: true,
+          });
+          const deadline = performance.now() + 4000;
+          let waiting = false;
+          while (performance.now() < deadline) {
+            waiting = (
+              await pool.query(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND position('SELECT id FROM users' in query)>0 AND $1=ANY(pg_blocking_pids(pid))) AS waiting",
+                [blocker],
+              )
+            ).rows[0].waiting;
+            if (waiting) break;
+            await new Promise<void>((done) => setImmediate(done));
+          }
+          assert.equal(waiting, true);
+          await holder.query('COMMIT');
+          assert.equal((await updating)!.email, false);
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+          if (updating) await updating;
+        }
         const res = await call(
           `/v1/organizations/${org}/feeds`,
           'POST',

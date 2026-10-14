@@ -505,15 +505,21 @@ export class ProfessionalPlatform {
         .strict(),
       body,
     );
-    const [row] = await this.db.rows(
-      `INSERT INTO notification_preferences(user_id,email,push,transactional,updated_at)
-       VALUES($1,$2,$3,$4,now())
-       ON CONFLICT(user_id) DO UPDATE SET
-         email=$2,push=$3,transactional=$4,updated_at=now()
-       RETURNING user_id,email,push,transactional,updated_at`,
-      [actor.id, input.email, input.push, input.transactional],
-    );
-    return row;
+    return this.db.transaction(async (sql) => {
+      await sql.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [
+        actor.id,
+      ]);
+      const [row] = await this.db.rows(
+        `INSERT INTO notification_preferences(user_id,email,push,transactional,updated_at)
+         VALUES($1,$2,$3,$4,now())
+         ON CONFLICT(user_id) DO UPDATE SET
+           email=$2,push=$3,transactional=$4,updated_at=now()
+         RETURNING user_id,email,push,transactional,updated_at`,
+        [actor.id, input.email, input.push, input.transactional],
+        sql,
+      );
+      return row;
+    });
   }
   async adminClients(actor: Actor) {
     verified(actor);
