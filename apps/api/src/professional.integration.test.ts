@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Test } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { AppModule } from './app.module';
 import { configure } from './bootstrap';
@@ -1033,6 +1034,188 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             holder.release();
             if (authenticating) await Promise.allSettled([authenticating]);
           }
+        }
+      },
+    );
+    await t.test(
+      'Partner authentication waits for creator eligibility changes before recording usage',
+      async () => {
+        for (const mutation of [
+          'active=false',
+          'email_verified_at=NULL',
+          'phone_verified_at=NULL',
+        ]) {
+          const client = await platform.createPartnerClient(
+            actors[0]!,
+            org,
+            {
+              name: `Creator eligibility ${mutation}`,
+              scopes: ['listings:read'],
+            },
+            token(),
+          );
+          const holder = await pool.connect();
+          let authenticating: Promise<unknown> | undefined;
+          try {
+            await holder.query('BEGIN');
+            const pid = (await holder.query('SELECT pg_backend_pid() AS pid'))
+              .rows[0].pid;
+            // Same non-key user update as admin.user(), held before its commit.
+            await holder.query(`UPDATE users SET ${mutation} WHERE id=$1`, [
+              actors[0]!.id,
+            ]);
+            authenticating = platform.partner(client.token!, 'listings:read');
+            void authenticating.catch(() => {});
+            const deadline = performance.now() + 4000;
+            let blocked = false;
+            while (performance.now() < deadline) {
+              blocked = (
+                await pool.query(
+                  `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+                   AND wait_event_type='Lock' AND $1::integer=ANY(pg_blocking_pids(pid))) AS blocked`,
+                  [pid],
+                )
+              ).rows[0].blocked;
+              if (blocked) break;
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            assert.ok(
+              blocked,
+              `authentication did not wait for creator ${mutation}`,
+            );
+            await holder.query('COMMIT');
+            await assert.rejects(authenticating, (error: unknown) => {
+              assert.ok(error instanceof ForbiddenException);
+              assert.equal(error.getStatus(), 403);
+              assert.equal(error.message, 'Partner scope required');
+              return true;
+            });
+            const [state] = await db.rows<{
+              last_used_at: unknown;
+              count: unknown;
+            }>(
+              'SELECT k.last_used_at,u.count FROM partner_clients k LEFT JOIN partner_client_usage u ON u.client_id=k.id WHERE k.id=$1',
+              [client.id],
+            );
+            assert.equal(state!.last_used_at, null);
+            assert.equal(state!.count, null);
+          } finally {
+            await holder.query('ROLLBACK');
+            holder.release();
+            if (authenticating) await Promise.allSettled([authenticating]);
+            await pool.query(
+              'UPDATE users SET active=true,email_verified_at=now(),phone_verified_at=now() WHERE id=$1',
+              [actors[0]!.id],
+            );
+          }
+        }
+      },
+    );
+    await t.test(
+      'Creator deactivation waits for partner authentication already holding creator eligibility',
+      async () => {
+        const client = await platform.createPartnerClient(
+          actors[0]!,
+          org,
+          {
+            name: 'Creator deactivation during client wait',
+            scopes: ['listings:read'],
+          },
+          token(),
+        );
+        const holder = await pool.connect(),
+          updater = await pool.connect();
+        let authenticating: Promise<unknown> | undefined;
+        let deactivating: Promise<unknown> | undefined;
+        try {
+          await holder.query('BEGIN');
+          await updater.query('BEGIN');
+          const holderPid = (
+            await holder.query('SELECT pg_backend_pid() AS pid')
+          ).rows[0].pid;
+          const updaterPid = (
+            await updater.query('SELECT pg_backend_pid() AS pid')
+          ).rows[0].pid;
+          await holder.query(
+            'SELECT id FROM partner_clients WHERE id=$1 FOR UPDATE',
+            [client.id],
+          );
+          authenticating = platform.partner(client.token!, 'listings:read');
+          void authenticating.catch(() => {});
+          const deadline = performance.now() + 4000;
+          let authenticationPid: number | undefined;
+          while (performance.now() < deadline) {
+            authenticationPid = (
+              await pool.query(
+                `SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'
+                 AND $1::integer=ANY(pg_blocking_pids(pid))`,
+                [holderPid],
+              )
+            ).rows[0]?.pid;
+            if (authenticationPid) break;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          assert.ok(authenticationPid, 'authentication did not wait on client');
+          deactivating = updater.query(
+            'UPDATE users SET active=false WHERE id=$1',
+            [actors[0]!.id],
+          );
+          void deactivating.catch(() => {});
+          let blocked = false;
+          const deactivationDeadline = performance.now() + 4000;
+          while (performance.now() < deactivationDeadline) {
+            blocked = (
+              await pool.query(
+                `SELECT $1::integer=ANY(pg_blocking_pids($2::integer)) AS blocked`,
+                [authenticationPid, updaterPid],
+              )
+            ).rows[0].blocked;
+            if (blocked) break;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          assert.ok(
+            blocked,
+            'creator deactivation did not wait for authentication',
+          );
+          // Release the client before awaiting the updater: auth owns the user lock.
+          await holder.query('COMMIT');
+          await authenticating;
+          await deactivating;
+          await updater.query('COMMIT');
+          await assert.rejects(
+            platform.partner(client.token!, 'listings:read'),
+            (error: unknown) => {
+              assert.ok(error instanceof ForbiddenException);
+              assert.equal(error.getStatus(), 403);
+              assert.equal(error.message, 'Partner scope required');
+              return true;
+            },
+          );
+          const [state] = await db.rows<{
+            active: boolean;
+            count: number;
+            last_used_at: unknown;
+          }>(
+            'SELECT k.active,k.last_used_at,u.count FROM partner_clients k JOIN partner_client_usage u ON u.client_id=k.id WHERE k.id=$1',
+            [client.id],
+          );
+          assert.equal(
+            state!.active,
+            true,
+            'account deactivation must not permanently revoke the client',
+          );
+          assert.equal(state!.count, 1);
+          assert.ok(state!.last_used_at);
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+          if (authenticating) await Promise.allSettled([authenticating]);
+          if (deactivating) await Promise.allSettled([deactivating]);
+          await updater.query('ROLLBACK');
+          updater.release();
+          await pool.query('UPDATE users SET active=true WHERE id=$1', [
+            actors[0]!.id,
+          ]);
         }
       },
     );

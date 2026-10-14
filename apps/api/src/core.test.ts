@@ -334,7 +334,7 @@ test('autocommit organization permission keeps authorization in one statement', 
   assert.equal(queries.length, 1);
 });
 
-test('partner authentication locks organization and membership before client', async () => {
+test('partner authentication locks creator then organization and membership before client', async () => {
   const queries: string[] = [];
   const organizationId = '11111111-1111-4111-8111-111111111111';
   const creatorId = '22222222-2222-4222-8222-222222222222';
@@ -353,6 +353,7 @@ test('partner authentication locks organization and membership before client', a
             created_by: creatorId,
           },
         ];
+      if (text.includes('FROM users WHERE id=')) return [{ id: creatorId }];
       if (text.includes('FROM organizations')) return [{ id: organizationId }];
       if (text.includes('FROM memberships')) return [{ role: 'admin' }];
       if (text.includes('FROM partner_clients k JOIN users u'))
@@ -390,12 +391,14 @@ test('partner authentication locks organization and membership before client', a
   );
   assert.match(queries[0]!, /FROM partner_clients WHERE token_digest/);
   assert.doesNotMatch(queries[0]!, /FOR UPDATE/);
-  assert.match(queries[1]!, /FROM organizations/);
+  assert.match(queries[1]!, /FROM users/);
   assert.match(queries[1]!, /FOR SHARE/);
-  assert.match(queries[2]!, /FROM memberships/);
+  assert.match(queries[2]!, /FROM organizations/);
   assert.match(queries[2]!, /FOR SHARE/);
-  assert.match(queries[3]!, /FROM partner_clients k JOIN users u/);
-  assert.match(queries[3]!, /FOR UPDATE OF k/);
+  assert.match(queries[3]!, /FROM memberships/);
+  assert.match(queries[3]!, /FOR SHARE/);
+  assert.match(queries[4]!, /FROM partner_clients k JOIN users u/);
+  assert.match(queries[4]!, /FOR UPDATE OF k/);
 });
 
 test('partner authentication rejects expiry after client lock before usage', async () => {
@@ -417,6 +420,7 @@ test('partner authentication rejects expiry after client lock before usage', asy
             created_by: creatorId,
           },
         ];
+      if (text.includes('FROM users WHERE id=')) return [{ id: creatorId }];
       if (text.includes('FROM organizations')) return [{ id: organizationId }];
       if (text.includes('FROM memberships')) return [{ role: 'admin' }];
       if (text.includes('FROM partner_clients k JOIN users u'))
@@ -456,12 +460,14 @@ test('partner authentication rejects expiry after client lock before usage', asy
   );
   assert.match(queries[0]!, /FROM partner_clients WHERE token_digest/);
   assert.doesNotMatch(queries[0]!, /FOR UPDATE/);
-  assert.match(queries[1]!, /FROM organizations/);
+  assert.match(queries[1]!, /FROM users/);
   assert.match(queries[1]!, /FOR SHARE/);
-  assert.match(queries[2]!, /FROM memberships/);
+  assert.match(queries[2]!, /FROM organizations/);
   assert.match(queries[2]!, /FOR SHARE/);
-  assert.match(queries[3]!, /FROM partner_clients k JOIN users u/);
-  assert.match(queries[3]!, /FOR UPDATE OF k/);
+  assert.match(queries[3]!, /FROM memberships/);
+  assert.match(queries[3]!, /FOR SHARE/);
+  assert.match(queries[4]!, /FROM partner_clients k JOIN users u/);
+  assert.match(queries[4]!, /FOR UPDATE OF k/);
 });
 
 test('partner revocation authorizes organization before locking client', async () => {

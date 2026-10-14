@@ -319,6 +319,14 @@ export class ProfessionalPlatform {
         sql,
       );
       if (!candidate) throw new ForbiddenException('Partner scope required');
+      // Serialize creator eligibility with account updates before tenant/client locks.
+      // SHARE blocks non-key eligibility updates while remaining FK KEY SHARE compatible.
+      const [creator] = await this.db.rows<{ id: string }>(
+        'SELECT id FROM users WHERE id=$1 AND active AND email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL FOR SHARE',
+        [candidate.created_by],
+        sql,
+      );
+      if (!creator) throw new ForbiddenException('Partner scope required');
       const [organization] = await this.db.rows<{ id: string }>(
         'SELECT id FROM organizations WHERE id=$1 AND active FOR SHARE',
         [candidate.organization_id],

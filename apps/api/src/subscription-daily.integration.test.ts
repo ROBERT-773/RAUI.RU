@@ -48,7 +48,7 @@ test('Daily in-app real PostgreSQL acceptance: immutable release, late commits a
       [user, user + '@example.test'],
     );
     await db.pool.query(
-      "INSERT INTO addresses(id,formatted,locality) VALUES($1,'Daily fixture','Москва')",
+      "INSERT INTO addresses(id,formatted,locality,point) VALUES($1,'Daily fixture','Москва',ST_SetSRID(ST_MakePoint(37.62,55.75),4326))",
       [address],
     );
     await db.pool.query(
