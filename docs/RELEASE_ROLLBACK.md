@@ -59,7 +59,7 @@ Real provider delivery and infrastructure acceptance remain separate gates.
 The current release verifier also requires the hashed runtime-image receipt and
 completed `runtime-contract` / `runtime-smoke` gates. It binds source SHA and CI
 run ID to the same receipt, validates immutable image ID and archive SHA256,
-and requires 18 migrations plus completed local image acceptance. A rehashed
+and requires 19 migrations plus completed local image acceptance. A rehashed
 receipt from another source/run or an incomplete smoke must fail verification.
 The receipt certifies Linux host networking and local development adapters only;
 external staging acceptance and deployment remain not executed.

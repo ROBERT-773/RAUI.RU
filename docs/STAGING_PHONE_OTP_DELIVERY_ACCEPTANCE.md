@@ -10,7 +10,7 @@ Implementation evidence and boundaries are in `PHONE_OTP_VERIFICATION.md`.
   authorization for this live send before execution; general development approval
   is not recipient authorization. Never request secret values in chat.
 - Record the isolated staging target and immutable application commit. Confirm
-  the complete migration 001–018 ledger/checksums match the release and
+  the complete migration 001–019 ledger/checksums match the release and
   registration approval, the one-active-listing limit and the
   three-publications-per-Europe/Moscow-calendar-month limit remain enforced. Do
   not use an older API that bypasses these policies.
@@ -51,7 +51,7 @@ Implementation evidence and boundaries are in `PHONE_OTP_VERIFICATION.md`.
    from gateway acceptance and handset receipt.
 6. Restore `PHONE_OTP_ENABLED=false` through the staging change procedure and
    verify numeric capability is disabled. Record the rollback result. Retain
-   migration 017 and its tables, verify and retain the complete 001–018 ledger
+   migration 017 and its tables, verify and retain the complete 001–019 ledger
    and checksums, keep legacy long-token routes
    available, and preserve approval and publication-limit guards. Do not rotate
    the pepper during this drill.
@@ -88,7 +88,7 @@ or raw message/provider payloads. Use separate verdicts; all remain
   "staging_reference": null,
   "application_commit": null,
   "runtime_artifact_digest": null,
-  "migration_001_018_ledger_checksums_verified": null,
+  "migration_001_019_ledger_checksums_verified": null,
   "evidenceReferences": [],
   "prerequisite_approval_references": [],
   "secret_bindings_present": null,

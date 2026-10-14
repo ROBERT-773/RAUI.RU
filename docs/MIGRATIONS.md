@@ -37,8 +37,9 @@ Phase 3 adds expand-only `002_search_product.sql`; see [search/product rollout](
 Account launch foundation adds `014_user_public_id.sql` (unique immutable positive
 numeric ID, existing UUIDs retained), `015_staff_permissions.sql` (initially empty
 named grants), `016_registration_approval.sql`, `017_phone_otp.sql` and
-`018_listing_subscriptions.sql`. Auth returns `public_id` as a decimal string. The
+`018_listing_subscriptions.sql` and `019_listing_subscription_inbox.sql`. Auth
+returns `public_id` as a decimal string. The
 upgrade fixture compares legacy facts separately from these additive fields/tables
-and verifies backfill; recovery and release contracts require 18 migrations. Keep
+and verifies backfill; recovery and release contracts require 19 migrations. Keep
 these columns, tables and sequence on application rollback; never reset identifiers
 to reuse them.

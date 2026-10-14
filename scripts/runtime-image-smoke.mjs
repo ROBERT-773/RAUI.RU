@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import {
   assertLocalPortsFree,
   cleanupRuntimeResources,
+  migrationNames,
 } from './runtime-image-verification.mjs';
 
 // Orchestrator uses host tooling; every service/worker and the copied fixture
@@ -154,7 +155,7 @@ try {
     assert.equal(
       (await db.query('SELECT count(*)::int AS count FROM schema_migrations'))
         .rows[0].count,
-      18,
+      migrationNames.length,
     );
     docker(
       'run',
