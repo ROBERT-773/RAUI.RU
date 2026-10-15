@@ -2,13 +2,14 @@
 
 ## Current account-policy compatibility gate
 
-For the candidate stacked through PR79, PR81 and PR83, migrations001–017
-must remain applied. The schema counts and compatibility statements below describe
+For the current candidate, migrations 001–021 must remain applied. The schema
+counts and compatibility statements below describe
 historical Phase4D/RC baselines; they do not authorize rollback of this candidate.
 Use the selected exact source SHA and its complete migration ledger/checksums.
 
-Prefer a reviewed forward fix retaining registration approval and the six-object
-publication limit. Database readability alone does not establish policy compatibility.
+Prefer a reviewed forward fix retaining registration approval, the one-active-listing
+limit and the three-publications-per-Europe/Moscow-calendar-month limit. Database
+readability alone does not establish policy compatibility.
 
 - Apply migration016 before directing traffic to registration-aware API binaries.
   Old API binaries ignore pending/rejected approval state and create approved users.
@@ -23,9 +24,30 @@ publication limit. Database readability alone does not establish policy compatib
   For pepper rotation, pause all new numeric and legacy phone sends across every
   API replica for the full one-hour quota window. Setting `PHONE_OTP_ENABLED=false`
   alone is insufficient because legacy phone routes remain available.
+- Keep migration 018 and all listing-subscription and notification-delivery rows.
+  Before rolling back any API or notification worker that lacks
+  `subscription.listing.*` consent/version revalidation, pause every producer that
+  can enqueue those deliveries and stop new notification-worker claims on every
+  replica. Let held 30-second leases finish or expire, then use only compatible
+  workers to process subscription deliveries. Do not mix old and new notification
+  workers: an old worker can claim a shared-queue delivery and invoke transport
+  without rechecking the current subscription. Rollback remains blocked while any
+  `subscription.listing.*` delivery is `pending`, `running` or `dead`; do not retry
+  such rows through old code, delete queue/history, or start old workers merely
+  because migration 018 is readable. If the queue cannot reach only `sent`/`skipped`
+  states, retain compatible workers or deploy a reviewed forward fix.
+- Preserve `listing_history` JSON, including schema-1 `publicPriceSnapshot`
+  markers, and the complete migration 001–021 ledger. Snapshot capture adds no
+  migration. Before enabling baseline-dependent listing events, require every
+  rollback API to retain qualifying approval capture and a compatible snapshot
+  reader. If capture is unavailable, suspend baseline-dependent event generation
+  and delivery. Treat prices across a capture gap as unknown; do not infer the
+  last public price from older snapshots, drafts or legacy history. Current
+  production listing-event wiring remains disabled.
 - Verify the chosen immutable artifact preserves these policies and security fixes.
-  Run staging checks for pending/rejected denial, concurrent sixth/seventh object
-  publication and OTP-disabled fallback before traffic cutover.
+  Run staging checks for pending/rejected denial, concurrent active-listing quota,
+  Europe/Moscow monthly publication quota and OTP-disabled fallback before traffic
+  cutover.
 
 See REGISTRATION_ONBOARDING_VERIFICATION.md,
 OWNER_PUBLICATION_QUOTA_VERIFICATION.md and PHONE_OTP_VERIFICATION.md.
@@ -37,7 +59,7 @@ Real provider delivery and infrastructure acceptance remain separate gates.
 The current release verifier also requires the hashed runtime-image receipt and
 completed `runtime-contract` / `runtime-smoke` gates. It binds source SHA and CI
 run ID to the same receipt, validates immutable image ID and archive SHA256,
-and requires 17 migrations plus completed local image acceptance. A rehashed
+and requires 21 migrations plus completed local image acceptance. A rehashed
 receipt from another source/run or an incomplete smoke must fail verification.
 The receipt certifies Linux host networking and local development adapters only;
 external staging acceptance and deployment remain not executed.
@@ -70,7 +92,7 @@ dry-run` workflow takes a successful RAUI CI run ID, full source SHA and either
 staging-dry-run or rollback-dry-run. It verifies GitHub run provenance and every
 manifest hash from the retained artifact using the trusted checked-out verifier.
 The selected run must be completed/successful for the exact `.github/workflows/ci.yml` path and source SHA; the downloaded manifest must carry the same run ID. It has read-only permissions and no deploy command or production credential.
-The historical RC baseline required 12 migrations and RC evidence. The current candidate verifier requires all 17 migrations and matching 17-migration recovery evidence; historical artifacts cannot pass that contract. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
+The historical RC baseline required 12 migrations and RC evidence. The current candidate verifier requires all 21 migrations and matching 21-migration recovery evidence; historical artifacts cannot pass that contract. Prepare a newly verified compatible rollback artifact preserving RC security fixes, or use a separately reviewed historical-verifier path; never bypass the current contract.
 Locally, from an extracted artifact root, use the trusted repository verifier:
 `node /path/to/RAUI.RU/scripts/release-contract.mjs verify .cache/phase4d-release.json <full-sha>`.
 Do not create a fake CI manifest or use a mutable branch/tag as release identity.
@@ -156,8 +178,11 @@ image merely because its DB reader is compatible.
 
 For code rollback: flags off, stop claims/drain leases, validate the previous
 compatible API/web/config and verified image, run worker-independent smoke
-behind private ingress, restart compatible workers, then run full core/search
-smoke before switching ingress and observing. Keep 012 and its
+behind private ingress, restart a single compatible notification-worker version
+and the other compatible workers, then run full core/search smoke before switching
+ingress and observing. Before starting any artifact without the subscription
+recheck, verify that no `pending`, `running` or `dead` `subscription.listing.*`
+deliveries remain. Keep 012 and its
 queued facts; old explicit-column producers/readers remain compatible. Preserve
 RC security patches in any rollback artifact. If that cannot be achieved, use a
 reviewed forward-fix rather than restoring an older unsafe artifact.
@@ -175,3 +200,29 @@ The repository core/search smoke scripts write development fixtures and require
 local adapters; do not run them unchanged against real provider bindings or a
 production-shaped signed ingress. Adapt sandbox fixture authentication and
 identity explicitly before executing corresponding staging acceptance checks.
+
+## Immediate subscription inbox compatibility
+
+Migration 019 expands the existing message inbox for immediate listing updates.
+Keep the complete 001–021 ledger and the gated subscription inbox reader when
+rolling back. An older message-only API must explicitly filter `kind='message'`
+on both list and mark-read; its unconditional inbox query is unsafe once
+subscription rows exist. Stopping new writes alone does not make that reader
+compatible. Never delete inbox rows or down-migrate 019 to permit rollback; use a
+reviewed compatible artifact or a forward fix. Preserve durable offboarding and
+last-public-price snapshot capture/reading. Daily digest remains unimplemented.
+
+### Daily in-app020 rollback compatibility
+
+Keep migration020 and immutable daily candidate/run/item records. Before rolling back application code, stop daily capture and its professional-worker coordinator, and deploy a reader that understands020 or explicitly excludes captured_frequency='daily'. Stopping writes alone leaves existing hidden/released rows that a019 reader cannot authorize correctly. Preserve the current consent/visibility reader gate and message-only outbox bridge. Roll forward rather than dropping schema/data. Daily email remains unavailable.
+
+### Visibility revision021 rollback compatibility
+
+Keep the 021 generation registry, tombstones and triggers. A rollback artifact
+must compare strict v2 availability tokens and accept legacy availability only
+while every required current generation is a known seeded zero. If it cannot,
+disable availability production, email transport, immediate/daily inbox release
+and inbox reads together; stopping only the producer leaves unsafe queued rows.
+Never reset/delete registry generations or reconstruct them from current state.
+Migration021 does not provide global dependency-change fanout, and its presence
+must not be described as complete global availability delivery.

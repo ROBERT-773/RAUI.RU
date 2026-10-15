@@ -187,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '17',
+          '21',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -1183,12 +1183,59 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           ).status,
           403,
         );
-        await ok(
-          `/organizations/${organization.id}/members`,
-          'PATCH',
-          { userId: other.user.id, role: 'member', active: false },
-          developer,
-        );
+        for (const ineligible of [
+          {
+            sql: 'UPDATE users SET active=false WHERE id=$1',
+            reactivate: true,
+          },
+          {
+            sql: 'UPDATE users SET email_verified_at=NULL WHERE id=$1',
+            reactivate: true,
+          },
+          {
+            sql: 'UPDATE users SET phone_verified_at=NULL WHERE id=$1',
+            reactivate: false,
+          },
+        ]) {
+          await pool.query(ineligible.sql, [other.user.id]);
+          await ok(
+            `/organizations/${organization.id}/members`,
+            'PATCH',
+            { userId: other.user.id, role: 'member', active: false },
+            developer,
+          );
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT active FROM memberships WHERE organization_id=$1 AND user_id=$2',
+                [organization.id, other.user.id],
+              )
+            ).rows[0].active,
+            false,
+          );
+          assert.equal(
+            (
+              await call(
+                `/organizations/${organization.id}/members`,
+                'PATCH',
+                { userId: other.user.id, role: 'member', active: true },
+                developer,
+              )
+            ).status,
+            404,
+          );
+          await pool.query(
+            'UPDATE users SET active=true,email_verified_at=now(),phone_verified_at=now() WHERE id=$1',
+            [other.user.id],
+          );
+          if (ineligible.reactivate)
+            await ok(
+              `/organizations/${organization.id}/members`,
+              'PATCH',
+              { userId: other.user.id, role: 'member', active: true },
+              developer,
+            );
+        }
         assert.equal(
           (await call(`/listings/${offer.id}`, 'GET', undefined, other)).status,
           403,

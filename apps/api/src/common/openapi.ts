@@ -1,3 +1,7 @@
+import {
+  listingSubscriptionSchema,
+  listingSubscriptionDisableSchema,
+} from '../modules/product/subscription-contract';
 import { aiRequest, flagRequest } from '../modules/ai/contracts';
 import { trustDecision, duplicateDecision } from '../modules/trust/trust';
 import { analyticsEvent } from '../modules/analytics/analytics';
@@ -116,6 +120,9 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/account/threads/{id}/messages': object({
     body: z.string().min(1).max(4000),
   }),
+  'post /v1/account/listing-subscriptions/{id}': listingSubscriptionSchema,
+  'post /v1/account/listing-subscriptions/{id}/disable':
+    listingSubscriptionDisableSchema,
   'patch /v1/account/preferences': object({
     in_app: z.boolean(),
     email: z.boolean(),
@@ -488,10 +495,170 @@ export function enrichOpenApi(document: OpenAPIObject) {
           };
         }
       }
+      if (
+        operationId === 'get /v1/account/notifications' ||
+        operationId === 'post /v1/account/notifications/{id}/read'
+      ) {
+        const decimalId: SchemaObject = {
+          type: 'string',
+          pattern: '^[1-9][0-9]{0,18}$',
+          description:
+            'Exact positive PostgreSQL bigint decimal string, at most 9223372036854775807; never a JavaScript number',
+        };
+        operation.description =
+          'Owned account inbox. Message behavior is preserved. Immediate in-app subscription rows require current consent/channel/preferences, subscription version and latest full-public listing state; unavailable events are neutral. Daily digest is not implemented. Authorization is point-in-time; already received content cannot be recalled.';
+        if (method === 'get') {
+          const common: Record<string, SchemaObject> = {
+            id: decimalId,
+            read_at: { type: 'string', format: 'date-time', nullable: true },
+            created_at: { type: 'string', format: 'date-time' },
+          };
+          const shape = (
+            properties: Record<string, SchemaObject>,
+          ): SchemaObject => ({
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(properties),
+            properties,
+          });
+          const priceEvent = shape({
+            kind: { type: 'string', enum: ['price_drop'] },
+            previousPriceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+            priceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+          });
+          const availabilityEvent = shape({
+            kind: { type: 'string', enum: ['availability'] },
+            available: { type: 'boolean' },
+          });
+          operation.parameters = [
+            {
+              in: 'query',
+              name: 'cursor',
+              required: false,
+              schema: decimalId,
+              description:
+                'Exclusive last scanned raw id. An empty filtered page may still have a cursor.',
+            },
+            {
+              in: 'query',
+              name: 'limit',
+              required: false,
+              schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            },
+          ];
+          operation.responses['200'] = {
+            description: 'Safe current inbox rows and advancing raw cursor',
+            content: {
+              'application/json': {
+                schema: shape({
+                  items: {
+                    type: 'array',
+                    items: {
+                      oneOf: [
+                        shape({
+                          ...common,
+                          kind: { type: 'string', enum: ['message'] },
+                          thread_id: { type: 'string', format: 'uuid' },
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.price_drop'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: priceEvent,
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.availability'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: availabilityEvent,
+                        }),
+                      ],
+                    },
+                  },
+                  cursor: { ...decimalId, nullable: true },
+                }),
+              },
+            },
+          };
+        } else {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            { name: 'id', in: 'path', required: true, schema: decimalId },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Notification not owned or no longer eligible; read state unchanged',
+          };
+          operation.responses['201'] = {
+            description:
+              'Eligible notification marked read; repeated reads are idempotent',
+          };
+        }
+      }
+      if (path.startsWith('/v1/account/listing-subscriptions')) {
+        operation.description =
+          'Own-account listing subscriptions. Favorites do not imply consent. Saving preferences does not establish delivery; worker/channel configuration and current preferences govern notifications.';
+        if (path.includes('{id}')) {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Listing unavailable for subscription, or subscription not owned by current account',
+          };
+        }
+        if (path.endsWith('/disable')) {
+          operation.responses['409'] = {
+            description:
+              'Stale subscription version; reload current preferences',
+          };
+          operation.responses['201'] = {
+            description:
+              'Subscription disabled for current account. After successful disable, no new transport attempts for the previous subscription start. Messages already accepted by the provider cannot be recalled.',
+          };
+        }
+      }
+      if (operationId === 'patch /v1/organizations/{id}/members')
+        operation.description =
+          'Organization owner/admin membership management. Deactivation preserves the stored role, removes organization access and permanently revokes active partner clients created by that member. Reactivation does not restore prior credentials; reactivation or any role change revokes legacy active clients. Create a new partner client explicitly after the membership change.';
       if (operationId === 'get /v1/account/publication-quota') {
         const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
         operation.description =
-          'Own-account informational capacity. Owners count distinct published Property IDs, across all sources; drafts and nonpublic offers consume no slots. Multiple offers for one Property count once. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
+          'Own-account informational capacity. Owners may have one published listing across all sources; drafts and nonpublic offers consume no active slot. Each transition into publication counts toward three publications per Moscow calendar month. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
         operation.responses['200'] = {
           description:
             'Current owner capacity, or null quota fields for other roles',
@@ -505,9 +672,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
                     required,
                     properties: {
                       applies: { type: 'boolean', enum: [true] },
-                      limit: { type: 'integer', enum: [6] },
+                      limit: { type: 'integer', enum: [1] },
                       publishedObjects: { type: 'integer', minimum: 0 },
-                      remaining: { type: 'integer', minimum: 0, maximum: 6 },
+                      remaining: { type: 'integer', minimum: 0, maximum: 1 },
                     },
                   },
                   {

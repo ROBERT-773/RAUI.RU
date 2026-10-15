@@ -80,6 +80,7 @@ test('registration reports created account when provider is unavailable', async 
   );
   const result = await auth.register({
     email: user.email,
+    role: 'buyer',
     password: 'password-long-enough',
     displayName: 'New user',
   });
@@ -121,6 +122,7 @@ test('registration does not hide programming errors as delivery outages', async 
   await assert.rejects(
     auth.register({
       email: 'new@example.test',
+      role: 'buyer',
       password: 'password-long-enough',
       displayName: 'New user',
     }),

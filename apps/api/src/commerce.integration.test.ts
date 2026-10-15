@@ -188,7 +188,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '17',
+          '21',
         );
         assert.equal(
           (
@@ -757,7 +757,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
     );
     await t.test(
       'advertising counters and spend are idempotent under concurrent events',
-      async () => {
+      async (advertisingTest) => {
         assert.equal(
           (
             await call(
@@ -790,6 +790,67 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
           'ad-campaign-001',
         );
         campaignId = String(campaign.id);
+        await advertisingTest.test(
+          'enabled advertising reads campaigns and excludes unavailable placements and campaigns',
+          async () => {
+            assert.equal(await features.enabled('advertising'), true);
+            const activeIds = async () =>
+              (await commerce.activeCampaigns('sidebar')).map((row) => row.id);
+            assert.deepEqual(await activeIds(), [campaignId]);
+
+            await pool.query(
+              "UPDATE advertising_placements SET enabled=false WHERE code='sidebar'",
+            );
+            try {
+              assert.deepEqual(await activeIds(), []);
+            } finally {
+              await pool.query(
+                "UPDATE advertising_placements SET enabled=true WHERE code='sidebar'",
+              );
+            }
+            assert.deepEqual(await activeIds(), [campaignId]);
+
+            await pool.query(
+              "UPDATE advertising_campaigns SET status='paused' WHERE id=$1",
+              [campaignId],
+            );
+            try {
+              assert.deepEqual(await activeIds(), []);
+            } finally {
+              await pool.query(
+                "UPDATE advertising_campaigns SET status='active' WHERE id=$1",
+                [campaignId],
+              );
+            }
+
+            await pool.query(
+              "UPDATE advertising_campaigns SET ends_at=now()-interval '1 second' WHERE id=$1",
+              [campaignId],
+            );
+            try {
+              assert.deepEqual(await activeIds(), []);
+            } finally {
+              await pool.query(
+                'UPDATE advertising_campaigns SET ends_at=$2 WHERE id=$1',
+                [campaignId, campaign.ends_at],
+              );
+            }
+
+            await pool.query(
+              'UPDATE advertising_campaigns SET budget_minor=0 WHERE id=$1',
+              [campaignId],
+            );
+            try {
+              assert.deepEqual(await activeIds(), []);
+            } finally {
+              await pool.query(
+                'UPDATE advertising_campaigns SET budget_minor=10 WHERE id=$1',
+                [campaignId],
+              );
+            }
+            assert.deepEqual(await activeIds(), [campaignId]);
+          },
+        );
         const event = { eventId: randomUUID(), kind: 'impression' };
         const results = await Promise.all([
           commerce.recordAdvertising(

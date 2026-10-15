@@ -34,6 +34,8 @@ import { Database, Sql } from '../database/database';
 import { Audit } from '../audit/audit';
 import { Listings, ListingsModule } from '../listings/listings';
 import type { Listing } from '../listings/access';
+import { readLastPublicPriceSnapshot } from '../listings/public-price-history';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 import {
   PublicationQuotaModule,
   PublicationQuotas,
@@ -384,15 +386,23 @@ export class Administration {
           throw new ConflictException('Stale moderation case');
         if (listing!.seller_id === actor.id)
           throw new ForbiddenException('Cannot moderate own listing');
+        let decisionAt: Date | undefined;
         // Eligibility is checked against the original seller, not reviewer privileges.
         if (input.decision === 'approve') {
           const sellerActor: Actor = { ...publicationSeller!, session_id: '' };
           await this.listings.validate(sql, listing!, sellerActor);
           await this.trust.checkPublication(sql, listing!.id);
+          const [decisionClock] = await this.db.rows<{ decision_at: Date }>(
+            'SELECT clock_timestamp() AS decision_at',
+            [],
+            sql,
+          );
+          decisionAt = decisionClock!.decision_at;
           await this.quotas.assertCapacity(
             sql,
             publicationSeller!,
-            listing!.property_id,
+            listing!.id,
+            decisionAt,
           );
         } else {
           const [sellerActor] = await this.db.rows<Actor>(
@@ -402,6 +412,10 @@ export class Administration {
           );
           if (!sellerActor) throw new ConflictException('Seller inactive');
         }
+        const lastPublicPrice =
+          input.decision === 'approve'
+            ? await readLastPublicPriceSnapshot(sql, listing!.id)
+            : null;
         const status = input.decision === 'approve' ? 'published' : 'rejected';
         await sql.query(
           'UPDATE moderation_cases SET state=$2,reviewer_id=$3,reason=$4,resolved_at=now() WHERE id=$1',
@@ -413,16 +427,41 @@ export class Administration {
           ],
         );
         await sql.query(
-          "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN now() ELSE published_at END,updated_at=now() WHERE id=$1",
-          [listing!.id, status],
+          "UPDATE listings SET status=$2,version=version+1,published_at=CASE WHEN $2='published' THEN $3::timestamptz ELSE published_at END,updated_at=now() WHERE id=$1",
+          [listing!.id, status, decisionAt ?? null],
         );
+        const publicPriceSnapshot =
+          input.decision === 'approve'
+            ? await this.listings.publicPriceSnapshot(
+                listing!.id,
+                sql,
+                decisionAt!,
+              )
+            : null;
+        if (publicPriceSnapshot) {
+          await enqueueImmediateListingNotifications(sql, {
+            listingId: listing!.id,
+            version: publicPriceSnapshot.listingVersion,
+            publicBefore: false,
+            publicAfter: true,
+            previousPrice: '',
+            lastPublicPrice: lastPublicPrice?.price ?? null,
+            price: publicPriceSnapshot.price,
+          });
+        }
         await this.audit.history(
           sql,
           actor.id,
           listing!.id,
           'moderation.decided',
           { status: listing!.status },
-          { status, caseId: id, reason: input.reason },
+          {
+            status,
+            caseId: id,
+            reason: input.reason,
+            ...(publicPriceSnapshot ? { publicPriceSnapshot } : {}),
+          },
+          decisionAt,
         );
         return { listingId: listing!.id, status };
       },

@@ -20,7 +20,7 @@ async function fixture(run) {
     deploymentEnvironment: 'staging',
     contract: 'passed',
     serviceSmoke: 'passed',
-    migrationCount: 17,
+    migrationCount: 21,
     network: 'linux-host',
     adapters: 'local-development',
     stagingAcceptance: 'not_executed',

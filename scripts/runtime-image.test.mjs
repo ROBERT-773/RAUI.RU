@@ -203,6 +203,11 @@ test('migration package rejects jointly truncated manifest and SQL directory', a
     rmSync(root, { recursive: true, force: true });
   }
 });
+test('runtime smoke derives its migration count from the canonical package manifest', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const smoke = await readFile('scripts/runtime-image-smoke.mjs', 'utf8');
+  assert.match(smoke, /migrationNames\.length/);
+});
 test('smoke preflight rejects a real pre-existing local listener', async () => {
   const { createServer } = await import('node:net');
   const helper = resolve('scripts/runtime-image-verification.mjs');
