@@ -177,7 +177,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               'SELECT count(*) FROM schema_migrations',
             )
           )[0]!.count,
-          '20',
+          '21',
         );
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);
@@ -567,10 +567,16 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             listingId,
           ])
         ).rows[0];
+        const pausedVisibility = await app
+          .get(ListingAccess)
+          .currentVisibility(listingId);
+        assert.ok(pausedVisibility?.visibilityToken);
         assert.deepEqual(queued[0].payload, {
+          schemaVersion: 2,
           listingId,
           listingVersion: paused.version,
           subscriptionVersion: 1,
+          visibilityToken: pausedVisibility.visibilityToken,
           event: { kind: 'availability', available: false },
         });
         await pool.query(
@@ -2246,6 +2252,12 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           subscriptionVersion: subscription!.version,
           event,
         });
+        const availabilityPayload = async (available: boolean) => ({
+          ...payload({ kind: 'availability', available }),
+          schemaVersion: 2 as const,
+          visibilityToken: (await access.currentVisibility(listingId))!
+            .visibilityToken!,
+        });
         const calls = () =>
           adapter.calls.filter(
             (call) =>
@@ -2285,7 +2297,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         assert.ok(await access.visible(listingId));
         await run(payload(), 'sent');
         await run(
-          payload({ kind: 'availability', available: true }),
+          await availabilityPayload(true),
           'sent',
           'subscription.listing.availability',
         );
@@ -2325,6 +2337,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           },
         ]) {
           await restore();
+          const capturedAvailability = await availabilityPayload(true);
           await pool.query(mutation.sql, mutation.args);
           assert.equal(
             (
@@ -2341,7 +2354,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           assert.equal(await access.visible(listingId), undefined);
           await run(payload(), 'skipped');
           await run(
-            payload({ kind: 'availability', available: true }),
+            capturedAvailability,
             'skipped',
             'subscription.listing.availability',
           );
@@ -2351,7 +2364,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           "UPDATE listings SET status='paused',title='PRIVATE TITLE',price=1 WHERE id=$1",
           [listingId],
         );
-        const unavailable = payload({ kind: 'availability', available: false });
+        const unavailable = await availabilityPayload(false);
         await run(unavailable, 'sent', 'subscription.listing.availability');
         // Neutral envelope contains no current hidden title, price or cause.
         assert.deepEqual(calls().at(-1)!.payload, unavailable);

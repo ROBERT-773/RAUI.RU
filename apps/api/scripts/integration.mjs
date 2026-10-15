@@ -24,6 +24,7 @@ for (const testFile of [
   'commerce.integration.test.js',
   'professional.integration.test.js',
   'subscription-daily.integration.test.js',
+  'subscription-visibility.integration.test.js',
   'ai-trust.integration.test.js',
 ]) {
   const name = `raui_test_${randomBytes(8).toString('hex')}`;

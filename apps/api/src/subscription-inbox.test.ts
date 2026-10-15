@@ -70,7 +70,15 @@ function fixture(
   const access = {
     visible: async () =>
       options.hidden ? undefined : { version: 8, price: options.price ?? '99' },
-    currentVisibility: async () => ({ version: 8, visible: !options.hidden }),
+    currentVisibility: async () => ({
+      version: 8,
+      visible: !options.hidden,
+      visibilityToken: {
+        seller: { id: actor.id, generation: '0' },
+        organization: null,
+        membership: null,
+      },
+    }),
   } as unknown as ListingAccess;
   return {
     service: new Product(db, access, {} as Search),

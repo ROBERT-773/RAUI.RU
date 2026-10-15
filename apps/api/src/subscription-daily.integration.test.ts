@@ -116,7 +116,7 @@ test('Daily in-app real PostgreSQL acceptance: immutable release, late commits a
       await migrate(db.pool);
       assert.equal(
         (await db.rows('SELECT * FROM schema_migrations')).length,
-        20,
+        21,
       );
       assert.deepEqual(
         (await db.rows('SELECT * FROM schema_migrations ORDER BY name')).slice(
@@ -604,6 +604,71 @@ test('Daily in-app real PostgreSQL acceptance: immutable release, late commits a
         const now = new Date();
         const day = dailyReleaseSlot(now, dailySubscriptionSettings());
         assert.match(day, /^\d{4}-\d{2}-\d{2}$/);
+      },
+    );
+    await t.test(
+      'v2 availability bytes survive daily manifest release and gated read',
+      async () => {
+        const f = await fixture();
+        await db.transaction(async (sql) => {
+          await sql.query("UPDATE listings SET status='paused' WHERE id=$1", [
+            f.listing,
+          ]);
+          await enqueueImmediateListingNotifications(sql, {
+            listingId: f.listing,
+            version: 1,
+            publicBefore: true,
+            publicAfter: false,
+            previousPrice: '99',
+            price: '99',
+          });
+        });
+        const [captured] = await db.rows<{
+          dedupe_key: string;
+          payload: Record<string, unknown>;
+        }>(
+          "SELECT dedupe_key,payload FROM listing_daily_candidates WHERE user_id=$1 AND kind='subscription.listing.availability'",
+          [f.user],
+        );
+        assert.equal(captured!.payload.schemaVersion, 2);
+        assert.deepEqual(captured!.payload.event, {
+          kind: 'availability',
+          available: false,
+        });
+        assert.notEqual(
+          (
+            captured!.payload.visibilityToken as {
+              seller: { generation: string };
+            }
+          ).seller.generation,
+          '0',
+        );
+        const agedKey = captured!.dedupe_key + ':aged';
+        await db.pool.query(
+          `INSERT INTO listing_daily_candidates(user_id,listing_id,subscription_version,listing_version,kind,dedupe_key,payload,created_at,expires_at)
+           VALUES($1,$2,1,1,'subscription.listing.availability',$3,$4::jsonb,clock_timestamp()-interval '26 hours',clock_timestamp()+interval '1 hour')`,
+          [f.user, f.listing, agedKey, JSON.stringify(captured!.payload)],
+        );
+        await drain();
+        const [released] = await db.rows<{
+          id: string;
+          payload: Record<string, unknown>;
+          candidate_payload: Record<string, unknown>;
+        }>(
+          `SELECT n.id::text,n.payload,c.payload AS candidate_payload
+           FROM listing_daily_items i
+           JOIN listing_daily_candidates c ON c.id=i.candidate_id
+           JOIN notifications n ON n.id=i.notification_id
+           WHERE c.user_id=$1 AND c.dedupe_key=$2 AND i.outcome='released'`,
+          [f.user, agedKey],
+        );
+        assert.deepEqual(released!.payload, captured!.payload);
+        assert.deepEqual(released!.candidate_payload, captured!.payload);
+        const inbox = await product.notifications(f.actor, {});
+        assert.ok(inbox.items.some((item) => item.id === released!.id));
+        assert.deepEqual(await product.read(f.actor, released!.id), {
+          ok: true,
+        });
       },
     );
   } finally {

@@ -269,6 +269,20 @@ test('republish serializes availability and price drop using only last public ba
   const calls: unknown[][] = [];
   const sql = {
     query: async (_query: string, values: unknown[]) => {
+      if (_query.startsWith('SELECT l.version'))
+        return {
+          rows: [
+            {
+              version: 12,
+              visible: true,
+              token: {
+                seller: { id: change.listingId, generation: '0' },
+                organization: null,
+                membership: null,
+              },
+            },
+          ],
+        };
       calls.push(values);
       return { rows: [] };
     },
@@ -287,11 +301,19 @@ test('republish serializes availability and price drop using only last public ba
     [
       change.listingId,
       'availability',
-      `listing:${change.listingId}:12:availability`,
+      `listing:${change.listingId}:12:availability-v2:${change.listingId}:0:-:-:-:-`,
       JSON.stringify({ kind: 'availability', available: true }),
       listingSubscriptionConsentVersion,
       12,
       48,
+      JSON.stringify({
+        schemaVersion: 2,
+        visibilityToken: {
+          seller: { id: change.listingId, generation: '0' },
+          organization: null,
+          membership: null,
+        },
+      }),
     ],
     [
       change.listingId,
@@ -305,6 +327,7 @@ test('republish serializes availability and price drop using only last public ba
       listingSubscriptionConsentVersion,
       12,
       48,
+      '{}',
     ],
   ]);
 });
@@ -439,9 +462,17 @@ test('worker refreshes lease after final visibility query before transport', asy
     } as NotificationAdapter,
     {} as Audit,
     {
-      visible: async () => {
+      currentVisibility: async () => {
         visibilityRead = true;
-        return { version: 8, price: '99' };
+        return {
+          version: 8,
+          visible: true,
+          visibilityToken: {
+            seller: { id: job.payload.listingId, generation: '0' },
+            organization: null,
+            membership: null,
+          },
+        };
       },
     } as unknown as ListingAccess,
   );
@@ -494,7 +525,14 @@ test('unavailable events use one neutral authoritative state snapshot without lo
       currentVisibility: async (id: string, client: Sql) => {
         assert.equal(id, payload.listingId);
         assert.equal(client, sql);
-        return state;
+        return {
+          ...state,
+          visibilityToken: {
+            seller: { id: payload.listingId, generation: '0' },
+            organization: null,
+            membership: null,
+          },
+        };
       },
     } as unknown as ListingAccess;
     const worker = new NotificationWorker(
@@ -526,6 +564,23 @@ test('large valid public prices preserve availability without unsafe monetary pa
   const queued: unknown[][] = [];
   const sql = {
     query: async (_query: string, values: unknown[]) => {
+      if (_query.startsWith('SELECT l.version'))
+        return {
+          rows: [
+            {
+              version: 2,
+              visible: true,
+              token: {
+                seller: {
+                  id: '12345678-1234-4234-8234-123456789abc',
+                  generation: '0',
+                },
+                organization: null,
+                membership: null,
+              },
+            },
+          ],
+        };
       queued.push(values);
       return { rows: [] };
     },
