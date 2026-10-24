@@ -38,7 +38,7 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
   const staffContext = await browser.newContext();
   const staff = await staffContext.newPage();
   try {
-    await login(page, 'seller@e2e.test');
+    await login(page, `quota-${info.project.name}@e2e.test`);
     await page.goto('/account/listings');
     const baselineResponse = await page.request.get(
       '/api/v1/account/publication-quota',
@@ -51,13 +51,13 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       remaining: number;
     };
     expect(baseline.applies).toBe(true);
-    expect(baseline.limit).toBe(6);
+    expect(baseline.limit).toBe(1);
     expect(baseline.publishedObjects).toBeLessThan(baseline.limit);
     const quotaPanel = page.getByRole('region', {
       name: 'Лимит публикации объектов',
     });
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
     const creation = page.locator('form').filter({
       has: page.getByRole('heading', {
@@ -209,7 +209,7 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
     });
     await page.reload();
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects + 1} из 6. Свободных мест: ${baseline.remaining - 1}.`,
+      `Активных объявлений: ${baseline.publishedObjects + 1} из 1. Свободных мест: ${baseline.remaining - 1}.`,
     );
     await page.getByRole('button', { name: title, exact: true }).click();
     await expect(
@@ -237,7 +237,7 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
       .getByRole('button', { name: 'Обновить лимит публикации', exact: true })
       .click();
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
     // Reload cleared the new-listing form; supply valid fields before checking
     // draft availability, so category-loading validation is not mistaken for quota.
@@ -284,7 +284,7 @@ test('owner saves a draft, uploads a real photo and publishes only after staff a
     expect(finalQuota.status()).toBe(200);
     expect(await finalQuota.json()).toEqual(baseline);
     await expect(quotaPanel).toContainText(
-      `Опубликовано объектов: ${baseline.publishedObjects} из 6. Свободных мест: ${baseline.remaining}.`,
+      `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
   } finally {
     if (listingId) {

@@ -13,7 +13,7 @@ interface Profile {
   registration_approval_reason: string | null;
 }
 const roles: Record<string, string> = {
-  buyer: 'Покупатель / арендатор',
+  buyer: 'Ищу недвижимость',
   owner: 'Собственник',
   agent: 'Агент',
   agency: 'Агентство',
@@ -138,6 +138,13 @@ export default function AccountProfile({
       {profile && (
         <>
           <p>Роль: {roles[profile.role] ?? profile.role}</p>
+          {profile.role === 'buyer' && (
+            <p>
+              Сохраняйте интересные объекты, сравнивайте объявления и пишите
+              продавцам. Ваши избранное и сохранённые поиски доступны в
+              аккаунте.
+            </p>
+          )}
           <p>
             {profile.registration_approval_state === 'pending'
               ? 'Ожидает одобрения сотрудника'

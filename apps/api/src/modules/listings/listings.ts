@@ -36,7 +36,9 @@ import {
   Organizations,
   OrganizationsModule,
 } from '../organizations/organizations';
+import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
   processing: ['draft', 'moderation'],
@@ -81,6 +83,19 @@ export class Listings {
     private readonly audit: Audit,
     private readonly idem: Idempotency,
   ) {}
+  /** Internal capture at the authoritative public-policy query, in caller's transaction. */
+  async publicPriceSnapshot(id: string, sql: Sql, capturedAt: Date) {
+    const listing = await this.access.visible(id, sql);
+    if (!listing) return null;
+    if (listing.price === null)
+      throw new Error('Invalid public price snapshot');
+    return buildPublicPriceSnapshot({
+      price: listing.price,
+      currency: 'RUB',
+      listingVersion: listing.version,
+      capturedAt,
+    });
+  }
   async create(actor: Actor, body: unknown, key: unknown) {
     seller(actor);
     const input = parse(
@@ -289,11 +304,25 @@ export class Listings {
             "UPDATE moderation_cases SET state='cancelled',resolved_at=now(),reason='withdrawn' WHERE listing_id=$1 AND state='pending'",
             [id],
           );
+        const publicBefore =
+          listing.status === 'published'
+            ? await this.access.visible(id, sql)
+            : null;
         const [updated] = await this.db.rows<Listing>(
           'UPDATE listings SET status=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',
           [id, input.status],
           sql,
         );
+        if (publicBefore) {
+          await enqueueImmediateListingNotifications(sql, {
+            listingId: id,
+            version: updated!.version,
+            publicBefore: true,
+            publicAfter: false,
+            previousPrice: '',
+            price: '',
+          });
+        }
         await this.audit.history(
           sql,
           actor.id,

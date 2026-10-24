@@ -49,6 +49,7 @@ test('Permanent numeric user IDs survive profile changes, migration reruns and s
       email: 'numeric-id@example.test',
       password: 'Long-test-password-42',
       displayName: 'Numeric user',
+      role: 'buyer',
     };
     const first = await post('register', input);
     assert.match(first.public_id, /^[1-9][0-9]*$/);

@@ -126,10 +126,13 @@ export async function api<T>(
         typeof failure === 'object' &&
         'code' in failure &&
         response.status === 409 &&
-        failure.code === 'OWNER_PUBLICATION_QUOTA_EXCEEDED'
+        (failure.code === 'OWNER_PUBLICATION_QUOTA_EXCEEDED' ||
+          failure.code === 'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED')
       )
         throw new ApiError(
-          'Достигнут лимит: 6 объектов одновременно. Приостановите все опубликованные объявления одного объекта; сотрудник сможет повторить проверку текущей заявки.',
+          failure.code === 'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED'
+            ? 'Достигнут лимит: три публикации в календарный месяц.'
+            : 'Разрешено одно активное объявление. Приостановите действующее объявление; сотрудник сможет повторить проверку текущей заявки.',
           response.status,
         );
     }

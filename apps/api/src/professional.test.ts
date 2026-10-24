@@ -26,6 +26,49 @@ import {
   nextDue,
   normalizedFingerprint,
 } from './modules/professional/contracts';
+import { ProfessionalPlatform } from './modules/professional/platform';
+test('professional preference writers share the user mutex', async () => {
+  const calls: { query: string; sql: unknown }[] = [];
+  const transactionSql = {
+    query: async (query: string) => {
+      calls.push({ query, sql: transactionSql });
+      return { rows: [] };
+    },
+  };
+  const db = {
+    transaction: async (run: (sql: typeof transactionSql) => unknown) =>
+      run(transactionSql),
+    rows: async (query: string, _values: unknown[], sql: unknown) => {
+      calls.push({ query, sql });
+      return [
+        {
+          user_id: '00000000-0000-4000-8000-000000000001',
+          email: false,
+          push: false,
+          transactional: true,
+        },
+      ];
+    },
+  };
+  const platform = new ProfessionalPlatform(
+    db as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  await platform.setPreferences(
+    {
+      id: '00000000-0000-4000-8000-000000000001',
+      role: 'agency',
+    } as never,
+    { email: false, push: false, transactional: true },
+  );
+  assert.match(calls[0]!.query, /users.*FOR NO KEY UPDATE/);
+  assert.equal(calls[0]!.sql, transactionSql);
+  assert.match(calls[1]!.query, /notification_preferences/);
+  assert.equal(calls[1]!.sql, transactionSql);
+});
 test('Missing import items fail validation before authorization or persistence', async () => {
   const imports = new ProfessionalImports(
     {} as never,

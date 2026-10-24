@@ -1,5 +1,25 @@
 # Owner publication quota
 
+> Historical acceptance below covers the superseded six-object policy, not
+> specification v1.1. Current preparation enforces one active listing and three
+> publications per Moscow calendar month. PostgreSQL and browser acceptance of
+> this revision remains pending; old passing results do not certify it.
+
+## v1.1 preparation checkpoint — 2026-10-11
+
+- Concurrent approval fixtures now use distinct reviewers and wait for two
+  database queries blocked by the seller lock before releasing it.
+- The HTTP decision-clock assertion compares millisecond precision, matching
+  the PostgreSQL driver's JavaScript Date, while retaining exact equality between
+  publication and history timestamps.
+- Browser publication journeys use separate owner fixtures per project, without
+  changing existing catalog publications; expectations use one active listing.
+- No new SQL migration or production change is part of these test corrections.
+- Local PostgreSQL/Docker are unavailable. Real database/browser execution is
+  pending CI; the local socket-ownership runtime test fails in this environment.
+
+## Historical six-object implementation
+
 Issue80 implements the six simultaneously published objects rule from the latest account scenario. Moscow and Moscow Oblast remain the launch geography. This branch builds on registration onboarding PR79; it does not deploy either branch.
 
 ## Behavior

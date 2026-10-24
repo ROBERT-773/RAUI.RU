@@ -36,7 +36,7 @@ function setup(status = 'draft') {
         phone_verified_at: 'now',
       };
     if (path === 'v1/account/publication-quota')
-      return { applies: true, limit: 6, publishedObjects: 4, remaining: 2 };
+      return { applies: true, limit: 1, publishedObjects: 0, remaining: 1 };
     if (path === 'v1/listings?limit=20') return [{ ...listing, status }];
     if (path.endsWith('/history'))
       return [
@@ -286,7 +286,7 @@ test.each([
   },
 );
 
-function quotaSetup(count = 4, role = 'owner') {
+function quotaSetup(count = 0, role = 'owner') {
   setup();
   const base = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async (path, method, body, options) => {
@@ -300,16 +300,16 @@ function quotaSetup(count = 4, role = 'owner') {
     if (path === 'v1/account/publication-quota')
       return {
         applies: role === 'owner',
-        limit: role === 'owner' ? 6 : null,
+        limit: role === 'owner' ? 1 : null,
         publishedObjects: role === 'owner' ? count : null,
-        remaining: role === 'owner' ? Math.max(0, 6 - count) : null,
+        remaining: role === 'owner' ? Math.max(0, 1 - count) : null,
       };
     return base(path, method, body, options);
   });
 }
 test.each([
-  [4, 2],
-  [6, 0],
+  [0, 1],
+  [1, 0],
   [7, 0],
 ])(
   'quota shows authoritative %i objects and %i remaining while draft creation stays available',
@@ -317,7 +317,7 @@ test.each([
     quotaSetup(count);
     render(<OwnerListings />);
     await screen.findByText(
-      `Опубликовано объектов: ${count} из 6. Свободных мест: ${remaining}.`,
+      `Активных объявлений: ${count} из 1. Свободных мест: ${remaining}.`,
     );
     expect(screen.getByText('Создание объекта')).toBeTruthy();
     expect(
@@ -353,13 +353,13 @@ test('quota failure offers manual refresh without inventing zero capacity', asyn
   await screen.findByText(
     'Не удалось загрузить лимит публикации. Обновите данные.',
   );
-  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+  expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
   expect(screen.getByText('Создание объекта')).toBeTruthy();
   fail = false;
   fireEvent.click(
     screen.getByRole('button', { name: 'Обновить лимит публикации' }),
   );
-  await screen.findByText('Опубликовано объектов: 4 из 6. Свободных мест: 2.');
+  await screen.findByText('Активных объявлений: 0 из 1. Свободных мест: 1.');
 });
 test('late quota response after unmount never appears in another account', async () => {
   quotaSetup();
@@ -378,15 +378,15 @@ test('late quota response after unmount never appears in another account', async
   quotaSetup(0, 'agent');
   render(<OwnerListings />);
   await screen.findByText('Создание объекта');
-  resolve({ applies: true, limit: 6, publishedObjects: 7, remaining: 0 });
+  resolve({ applies: true, limit: 1, publishedObjects: 7, remaining: 0 });
   await waitFor(() =>
-    expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull(),
+    expect(screen.queryByText(/Активных объявлений:/)).toBeNull(),
   );
 });
 test('full quota keeps draft editing, media and moderation submission enabled', async () => {
-  quotaSetup(6);
+  quotaSetup(1);
   render(<OwnerListings />);
-  await screen.findByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.');
+  await screen.findByText('Активных объявлений: 1 из 1. Свободных мест: 0.');
   fireEvent.click(await screen.findByRole('button', { name: listing.title }));
   expect(
     (
@@ -408,7 +408,7 @@ test('full quota keeps draft editing, media and moderation submission enabled', 
 });
 
 test('pausing a published offer refreshes authoritative quota without assuming a slot was freed', async () => {
-  quotaSetup(6);
+  quotaSetup(1);
   const base = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async (path, method, body, options) => {
     if (path === 'v1/listings?limit=20')
@@ -418,12 +418,21 @@ test('pausing a published offer refreshes authoritative quota without assuming a
     return base(path, method, body, options);
   });
   render(<OwnerListings />);
-  await screen.findByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.');
+  await screen.findByText('Активных объявлений: 1 из 1. Свободных мест: 0.');
   fireEvent.click(screen.getByRole('button', { name: listing.title }));
   fireEvent.click(await screen.findByRole('button', { name: 'Приостановить' }));
   await screen.findByText('Размещение приостановлено.');
+  const monthlyHelp = screen.getByText(
+    /Приостановка не уменьшает число публикаций за месяц/,
+  );
+  expect(monthlyHelp.textContent).toMatch(
+    /Повторная\s+публикация тоже учитывается в лимите/,
+  );
+  expect(monthlyHelp.textContent).toMatch(
+    /Календарный месяц\s+считается по московскому времени/,
+  );
   expect(
-    screen.getByText('Опубликовано объектов: 6 из 6. Свободных мест: 0.'),
+    screen.getByText('Активных объявлений: 1 из 1. Свободных мест: 0.'),
   ).toBeTruthy();
   expect(
     vi
@@ -461,7 +470,7 @@ test.each([403, 503])(
       'Не удалось загрузить лимит публикации. Обновите данные.',
     );
     expect(screen.getByText('Создание объекта')).toBeTruthy();
-    expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+    expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
   },
 );
 test('expired quota session hides seller controls and asks for login', async () => {
@@ -475,7 +484,7 @@ test('expired quota session hides seller controls and asks for login', async () 
   render(<OwnerListings />);
   await screen.findByText('Войдите в аккаунт, чтобы продолжить.');
   expect(screen.queryByText('Создание объекта')).toBeNull();
-  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+  expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
 });
 
 test('fresh non-applicable quota hides owner panel after a role change', async () => {
@@ -493,5 +502,5 @@ test('fresh non-applicable quota hides owner panel after a role change', async (
       screen.queryByRole('region', { name: 'Лимит публикации объектов' }),
     ).toBeNull(),
   );
-  expect(screen.queryByText(/Опубликовано объектов:/)).toBeNull();
+  expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
 });

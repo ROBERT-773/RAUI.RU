@@ -1,8 +1,8 @@
 # Codex Task Router
 
-This file is the authoritative no-idle execution order after the completed Phase 2, Phase 3, and Phase 4A work.
+This file records the historical execution order after Phase 2, Phase 3, and Phase 4A. Before selecting work, verify the current issue/PR and phase acceptance; an old entry is not evidence that its phase remains active. Current product requirements are governed by `docs/RAUI_TZ_v1.1.md`, with phase boundaries in `docs/RAUI_MASTER_EXECUTION_PLAN.md`. The v1.1 portal reconciliation plan is `docs/superpowers/plans/2026-10-10-portal-workflows.md`; its design blockers must be resolved before dependent implementation.
 
-## Current chain
+## Historical phase chain
 
 1. Issue #24 — Phase 4B — Professional tooling, feeds and integrations
    - Spec: `docs/PHASE4B_PROFESSIONAL_INTEGRATIONS_SPEC.md`
@@ -39,7 +39,7 @@ This file is the authoritative no-idle execution order after the completed Phase
 For every implementation block:
 
 1. update from the latest `master`;
-2. read `AGENTS.md`, the block spec, `docs/RAUI_MASTER_EXECUTION_PLAN.md`, and `docs/RAUI_TZ_v1.0.md`;
+2. read `AGENTS.md`, the block spec, `docs/RAUI_MASTER_EXECUTION_PLAN.md`, and `docs/RAUI_TZ_v1.1.md`;
 3. implement only the current block;
 4. run the required quality gates;
 5. push the dedicated branch;

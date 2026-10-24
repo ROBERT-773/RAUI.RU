@@ -356,7 +356,15 @@ for (const delay of ['read', 'threads', 'none']) {
         if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
         else if (url.endsWith('/notifications'))
           value = {
-            items: [{ id: 'n-one', thread_id: 'thread-a', read_at: null }],
+            items: [
+              {
+                id: 'n-one',
+                kind: 'message',
+                thread_id: 'thread-a',
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
             cursor: null,
           };
         else if (url.endsWith('/preferences')) value = { in_app: true };
@@ -572,7 +580,30 @@ test('Owner registration survives unavailable verification delivery and opens on
   });
   render(<Account />);
   fireEvent.click(await screen.findByRole('button', { name: 'Регистрация' }));
-  fireEvent.change(screen.getByLabelText('Тип аккаунта'), {
+  const role = screen.getByLabelText('Кто вы?') as HTMLSelectElement;
+  expect(role.value).toBe('');
+  expect(role.required).toBe(true);
+  const roleHelp = screen.getByText(/Покупаете или арендуете/);
+  expect(role.getAttribute('aria-describedby')).toBe(roleHelp.id);
+  expect(roleHelp.textContent).toMatch(
+    /Размещаете свой\s+объект — «Собственник»/,
+  );
+  expect(roleHelp.textContent).toContain('Работаете риелтором — «Агент»');
+  expect(roleHelp.textContent).toContain(
+    'Представляете агентство — «Агентство»',
+  );
+  expect(roleHelp.textContent).toMatch(
+    /строительную компанию —\s+«Застройщик»/,
+  );
+  expect(Array.from(role.options).map((option) => option.value)).toEqual([
+    '',
+    'buyer',
+    'owner',
+    'agent',
+    'agency',
+    'developer',
+  ]);
+  fireEvent.change(screen.getByLabelText('Кто вы?'), {
     target: { value: 'owner' },
   });
   fireEvent.change(screen.getByLabelText('Имя'), {
@@ -825,3 +856,259 @@ test('saved searches show distinct escaped summaries while retaining original re
     definitions[0],
   );
 });
+
+for (const available of [false, true]) {
+  test(`Subscription availability ${available} uses a separate inbox action`, async () => {
+    const requests: string[] = [];
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        requests.push(url);
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/notifications'))
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.availability',
+                listing_id: 'listing-one',
+                event: { kind: 'availability', available },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        else if (url.endsWith('/preferences')) value = { in_app: true };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await screen.findByText(
+      available ? 'Объявление снова доступно' : 'Объявление больше недоступно',
+    );
+    if (available)
+      expect(
+        screen
+          .getByRole('link', { name: 'Открыть объявление' })
+          .getAttribute('href'),
+      ).toBe('/listings/listing-one');
+    else
+      expect(
+        screen.queryByRole('link', { name: 'Открыть объявление' }),
+      ).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Отметить прочитанным' }),
+    );
+    await vi.waitFor(() =>
+      expect(requests.some((url) => url.endsWith('/42/read'))).toBe(true),
+    );
+    expect(requests.some((url) => url.includes('/account/threads'))).toBe(
+      false,
+    );
+    expect(
+      screen
+        .getByRole('button', { name: 'Уведомления' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+}
+test('Empty filtered notification page retains its advancing cursor', async () => {
+  const requests: string[] = [];
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => {
+      requests.push(url);
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/notifications'))
+        value = { items: [], cursor: '42' };
+      else if (url.endsWith('/notifications?cursor=42'))
+        value = {
+          items: [
+            {
+              id: '41',
+              kind: 'subscription.listing.availability',
+              listing_id: 'listing-two',
+              event: { kind: 'availability', available: false },
+              read_at: null,
+              created_at: '2026-10-14T00:00:00Z',
+            },
+          ],
+          cursor: null,
+        };
+      else if (url.endsWith('/preferences')) value = { in_app: true };
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+  await screen.findByText('Объявление больше недоступно');
+  expect(requests.some((url) => url.endsWith('/notifications?cursor=42'))).toBe(
+    true,
+  );
+});
+for (const [priceMinor, expected] of [
+  [9900, 'Цена снизилась до 99,00 ₽'],
+  [9007199254740987, 'Цена снизилась до 90 071 992 547 409,87 ₽'],
+] as const) {
+  test(`Price-drop inbox preserves exact minor units ${priceMinor}`, async () => {
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/notifications'))
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.price_drop',
+                listing_id: 'listing-one',
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 9007199254740991,
+                  priceMinor,
+                },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        else if (url.endsWith('/preferences')) value = { in_app: true };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    const price = await screen.findByText(/Цена снизилась до/);
+    expect(price.textContent?.replace(/\s/g, ' ')).toBe(expected);
+  });
+}
+test('Subscription stale mark-read failure preserves inbox navigation and unread action', async () => {
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => {
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/notifications'))
+        value = {
+          items: [
+            {
+              id: '42',
+              kind: 'subscription.listing.availability',
+              listing_id: 'listing-one',
+              event: { kind: 'availability', available: false },
+              read_at: null,
+              created_at: '2026-10-14T00:00:00Z',
+            },
+          ],
+          cursor: null,
+        };
+      else if (url.endsWith('/preferences')) value = { in_app: true };
+      else if (url.endsWith('/42/read'))
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ message: 'Уведомление недоступно' }),
+        };
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Отметить прочитанным' }),
+  );
+  await screen.findByText('Объект недоступен.');
+  expect(
+    screen
+      .getByRole('button', { name: 'Уведомления' })
+      .getAttribute('aria-pressed'),
+  ).toBe('true');
+  expect(
+    (
+      screen.getByRole('button', {
+        name: 'Отметить прочитанным',
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+});
+for (const delayed of ['notifications', 'preferences'])
+  test(`Late subscription ${delayed} response cannot leak content or cursor across identities`, async () => {
+    let identity = 'A';
+    let release: (() => void) | undefined;
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Identity A' };
+        else if (url.endsWith('/auth/logout')) identity = '';
+        else if (url.endsWith('/auth/login')) {
+          identity = 'B';
+          value = {
+            csrfToken: 'synthetic-csrf-B',
+            user: { display_name: 'Identity B' },
+          };
+        } else if (url.endsWith('/notifications') && identity === 'A') {
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.price_drop',
+                listing_id: 'private-A',
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 10000,
+                  priceMinor: 9900,
+                },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: '41',
+          };
+          if (delayed === 'notifications')
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        } else if (url.endsWith('/preferences')) {
+          value = { in_app: true };
+          if (identity === 'A' && delayed === 'preferences')
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        }
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Identity A');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+    await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'b@example.test' },
+    });
+    fireEvent.change(screen.getByLabelText('Пароль'), {
+      target: { value: 'synthetic-long-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
+    await screen.findByText('Identity B');
+    await act(async () => {
+      release!();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await screen.findByText('Новых уведомлений нет.');
+    expect(screen.queryByText(/Цена снизилась до/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  });

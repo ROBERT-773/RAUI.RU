@@ -40,7 +40,7 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
       .getByRole('button', { name: 'Регистрация', exact: true })
       .click();
     await page
-      .getByRole('combobox', { name: /Тип аккаунта/ })
+      .getByRole('combobox', { name: 'Кто вы?', exact: true })
       .selectOption('owner');
     await page.getByLabel('Имя', { exact: true }).fill(name);
     await page.getByLabel('Email', { exact: true }).fill(email);

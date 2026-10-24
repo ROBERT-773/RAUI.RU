@@ -7,8 +7,8 @@ staging smoke remain pending in issue #40 and the launch evidence report.
 
 ## Current candidate evidence
 
-This packaging is integrated with the account/search candidate after PR92.
-The required migration package is 001–017. Regional YAML assets enter the
+This packaging is integrated with the current account/search candidate.
+The required migration package is 001–019. Regional YAML assets enter the
 allowlisted build context and the validated catalogue is copied into API dist.
 CI builds the exact committed source and checks the immutable image ID offline,
 including non-root identity, native dependencies, regional catalogue and migration
@@ -22,8 +22,12 @@ After all required gates pass, CI retains the saved image archive, SHA256 checks
 and a sanitized source/image receipt for 14 days under `raui-runtime-<source-sha>`.
 This is local development-adapter acceptance; external staging acceptance remains
 not executed. It does not authorize deployment or registry publication.
-Rollback must preserve the current account policies in `RELEASE_ROLLBACK.md`;
-an older readable schema alone does not establish policy compatibility.
+Rollback must preserve the current account policies and the migration-018
+subscription-delivery guard in `RELEASE_ROLLBACK.md`; an older readable schema
+alone does not establish policy compatibility.
+Preserve public-price snapshot JSON and continuous qualifying approval capture
+before enabling baseline-dependent events. Follow the capture-gap and compatible
+reader requirements in RELEASE_ROLLBACK.md.
 
 ## Build and identity
 
@@ -114,7 +118,8 @@ unchanged. Validate real pnpm targets/native execution rather than package names
 
 Rollback uses a reviewed policy-compatible accepted image ID and its matching public configuration;
 it does not reverse database migrations. Forward fixes build and recheck a new
-artifact, applying only new reviewed migrations when needed. This task adds none.
+artifact, applying only new reviewed migrations when needed. Migration 018 remains
+applied during application rollback.
 
 ## Retained local artifact
 
@@ -134,3 +139,14 @@ reusing the original runner image. Downloaded archives can be checked with
 `node /trusted/checkout/scripts/runtime-image-archive.mjs <source-sha> <ci-run-id>`
 from an artifact root containing `.cache/runtime-image-receipt.json` and
 `.cache/runtime-image.tar.gz`, after the receipt passes trusted release verification.
+
+## Immediate subscription inbox compatibility
+
+Migration 019 expands the existing message inbox for immediate listing updates.
+Keep the complete 001–019 ledger and the gated subscription inbox reader when
+rolling back. An older message-only API must explicitly filter `kind='message'`
+on both list and mark-read; its unconditional inbox query is unsafe once
+subscription rows exist. Stopping new writes alone does not make that reader
+compatible. Never delete inbox rows or down-migrate 019 to permit rollback; use a
+reviewed compatible artifact or a forward fix. Preserve durable offboarding and
+last-public-price snapshot capture/reading. Daily digest remains unimplemented.

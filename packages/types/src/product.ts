@@ -78,3 +78,24 @@ export interface GeoJSONFeature {
   geometry: { type: string; coordinates: unknown };
   properties: Record<string, unknown>;
 }
+export type AccountNotification = {
+  id: string;
+  read_at: string | null;
+  created_at: string;
+} & (
+  | { kind: 'message'; thread_id: string }
+  | {
+      kind: 'subscription.listing.price_drop';
+      listing_id: string;
+      event: {
+        kind: 'price_drop';
+        previousPriceMinor: number;
+        priceMinor: number;
+      };
+    }
+  | {
+      kind: 'subscription.listing.availability';
+      listing_id: string;
+      event: { kind: 'availability'; available: boolean };
+    }
+);

@@ -23,10 +23,18 @@ export class Audit {
     event: string,
     before: unknown,
     after: unknown,
+    createdAt?: Date,
   ) {
     await sql.query(
-      'INSERT INTO listing_history(listing_id,actor_id,event,before_data,after_data) VALUES($1,$2,$3,$4,$5)',
-      [listing, actor, event, JSON.stringify(before), JSON.stringify(after)],
+      'INSERT INTO listing_history(listing_id,actor_id,event,before_data,after_data,created_at) VALUES($1,$2,$3,$4,$5,COALESCE($6::timestamptz,now()))',
+      [
+        listing,
+        actor,
+        event,
+        JSON.stringify(before),
+        JSON.stringify(after),
+        createdAt ?? null,
+      ],
     );
     await this.record(sql, actor, event, 'listing', listing, after);
   }

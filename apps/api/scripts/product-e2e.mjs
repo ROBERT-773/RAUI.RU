@@ -102,6 +102,15 @@ async function run() {
       [randomUUID(), 'outsider@e2e.test', 'buyer'],
       [randomUUID(), 'admin@e2e.test', 'admin'],
       [randomUUID(), 'unverified@e2e.test', 'owner', false],
+      // Keep quota journeys isolated from legacy catalog listings and from
+      // each browser's three-publications-per-month counter.
+      ...[
+        'chromium',
+        'firefox',
+        'webkit',
+        'ios-webkit',
+        'android-chromium',
+      ].map((project) => [randomUUID(), `quota-${project}@e2e.test`, 'owner']),
     ])
       await monitor.run(async () =>
         pool.query(

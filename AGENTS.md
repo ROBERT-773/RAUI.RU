@@ -16,7 +16,7 @@
 Перед началом любого этапа обязательно прочитайте:
 
 - `docs/RAUI_MASTER_EXECUTION_PLAN.md` — порядок этапов, границы и exit criteria;
-- `docs/RAUI_TZ_v1.0.md` — техническое задание продукта;
+- `docs/RAUI_TZ_v1.1.md` — актуальное техническое задание продукта (приоритет над v1.0 и прежними сценариями при расхождении);
 - GitHub Issue текущего этапа — детальная рабочая постановка.
 
 Не выдумывайте требования, которых нет в этих источниках. При конфликте:
@@ -76,7 +76,7 @@
 
 ## Этапы после Foundation
 
-Сверяйтесь с `docs/RAUI_MASTER_EXECUTION_PLAN.md` и `docs/RAUI_TZ_v1.0.md`.
+Сверяйтесь с `docs/RAUI_MASTER_EXECUTION_PLAN.md` и `docs/RAUI_TZ_v1.1.md`.
 Работайте только в явно запрошенном этапе. Для core changes обязательны также
 `pnpm test:integration` и миграционные проверки; см. `docs/PHASE_2_CORE.md` и
 `docs/MIGRATIONS.md`. Не меняйте ранее применённые SQL migration files.
