@@ -1,0 +1,9 @@
+code: magadan
+name: Магаданская область
+type: oblast
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Magadan
+currency: RUB
+geo_bounds: null

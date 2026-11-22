@@ -1,0 +1,9 @@
+code: tuva
+name: Республика Тыва
+type: republic
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Krasnoyarsk
+currency: RUB
+geo_bounds: null

@@ -11,14 +11,32 @@ import {
   Module,
   Post,
   BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  Patch,
+  Param,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { Public, parse, hash, uuid } from '../../common/security';
+import { GeoModule } from '../geo/geo';
+import { RegionCatalogue, regionCodeSchema } from '../geo/regions';
+import {
+  CurrentActor,
+  type Actor,
+  Public,
+  parse,
+  hash,
+  uuid,
+} from '../../common/security';
 import { Database } from '../database/database';
 import {
   PaidPlacementModule,
   PaidPlacementService,
 } from '../commerce/placements';
+import {
+  Organizations,
+  OrganizationsModule,
+} from '../organizations/organizations';
+import { visibleProfessionals } from '../professional/public-profile-visibility';
 import { SearchIndex, listingMapping } from './index';
 import {
   searchSchema,
@@ -57,6 +75,7 @@ export function documentOf(row: PublicRow) {
     price: row.price,
     price_per_m2: row.price_per_m2,
     area: typeof row.attributes.area === 'number' ? row.attributes.area : null,
+    region_code: row.region_code ?? null,
     locality: row.locality,
     district: row.district,
     published_at: row.published_at,
@@ -75,12 +94,15 @@ export function documentOf(row: PublicRow) {
       })),
   };
 }
+
 @Injectable()
 export class Search {
   constructor(
     readonly db: Database,
     readonly index: SearchIndex,
     readonly paidPlacements: PaidPlacementService,
+    readonly regions: RegionCatalogue,
+    readonly organizations: Organizations,
   ) {}
   async publicRows(ids?: string[]) {
     return this.db.rows<PublicRow>(
@@ -88,6 +110,282 @@ export class Search {
         (ids ? ' WHERE id=ANY($1::uuid[])' : ''),
       ids ? [ids] : [],
     );
+  }
+  async ownProfessional(actor: Actor, agencyId?: string) {
+    if (agencyId) {
+      const permission = await this.organizations.permission(
+        actor,
+        agencyId,
+        true,
+      );
+      if (permission.kind !== 'agency') throw new ForbiddenException();
+    } else if (actor.role !== 'agent') throw new ForbiddenException();
+    const ownerColumn = agencyId ? 'agency_id' : 'agent_id';
+    const [profile] = await this.db.rows(
+      `SELECT p.id, p.display_name AS name, p.published_at IS NOT NULL AS published,
+              ARRAY(SELECT r.region_code FROM public_professional_regions r WHERE r.profile_id=p.id ORDER BY r.region_code) AS "regionCodes"
+       FROM public_professional_profiles p WHERE p.${ownerColumn}=$1`,
+      [agencyId ?? actor.id],
+    );
+    return { profile: profile ?? null };
+  }
+  async saveProfessional(actor: Actor, body: unknown, agencyId?: string) {
+    if (!agencyId && actor.role !== 'agent') throw new ForbiddenException();
+    const ownerColumn = agencyId ? 'agency_id' : 'agent_id';
+    const input = parse(
+      z
+        .object({
+          name: z.string().trim().min(1).max(120),
+          regionCodes: z.array(regionCodeSchema).max(20),
+          published: z.boolean(),
+        })
+        .strict(),
+      body,
+    );
+    const regions = [...new Set(input.regionCodes)];
+    for (const region of regions) this.regions.assertConfigured(region);
+    if (input.published && !regions.length)
+      throw new BadRequestException('Select at least one work region');
+    return this.db.transaction(async (sql) => {
+      const {
+        rows: [user],
+      } = await sql.query(
+        `SELECT role, active, registration_approval_state, email_verified_at, phone_verified_at
+         FROM users WHERE id=$1 FOR UPDATE`,
+        [actor.id],
+      );
+      if (
+        !user?.active ||
+        (!agencyId && user.role !== 'agent') ||
+        (input.published &&
+          (user.registration_approval_state !== 'approved' ||
+            !user.email_verified_at ||
+            !user.phone_verified_at))
+      )
+        throw new ForbiddenException();
+      if (agencyId) {
+        const permission = await this.organizations.permission(
+          actor,
+          agencyId,
+          true,
+          sql,
+        );
+        if (permission.kind !== 'agency') throw new ForbiddenException();
+      }
+      const {
+        rows: [profile],
+      } = await sql.query<{ id: string }>(
+        `INSERT INTO public_professional_profiles(${ownerColumn},display_name,published_at)
+         VALUES ($1,$2,CASE WHEN $3 THEN now() END)
+         ON CONFLICT (${ownerColumn}) DO UPDATE SET display_name=EXCLUDED.display_name,
+           published_at=EXCLUDED.published_at RETURNING id`,
+        [agencyId ?? actor.id, input.name, input.published],
+      );
+      if (!profile) throw new Error('Profile save returned no row');
+      await sql.query(
+        'DELETE FROM public_professional_regions WHERE profile_id=$1',
+        [profile.id],
+      );
+      await sql.query(
+        'INSERT INTO public_professional_regions SELECT $1, unnest($2::text[])',
+        [profile.id, regions],
+      );
+      return {
+        id: profile.id,
+        name: input.name,
+        regionCodes: regions,
+        published: input.published,
+      };
+    });
+  }
+  async professionals(query: unknown) {
+    const { regionCode, kind, page, q } = parse(
+      z.object({
+        regionCode: regionCodeSchema,
+        kind: z.enum(['agent', 'agency']).optional(),
+        q: z.string().trim().max(120).default(''),
+        page: z
+          .string()
+          .regex(/^[1-9][0-9]{0,8}$/)
+          .transform(Number)
+          .default(1),
+      }),
+      query,
+    );
+    this.regions.assertConfigured(regionCode);
+    const offset = kind ? (page - 1) * 12 : 0;
+    const [directory] = await this.db.rows<{
+      items: { id: string; name: string; kind: 'agent' | 'agency' }[];
+      counts: { agent: number; agency: number };
+    }>(
+      `WITH visible AS (
+        SELECT p.id, p.display_name AS name,
+          CASE WHEN p.agent_id IS NOT NULL THEN 'agent' ELSE 'agency' END AS kind
+        ${visibleProfessionals} AND r.region_code = $1
+          AND ($5::text = '' OR strpos(lower(p.display_name), lower($5)) > 0)
+      ), ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY kind ORDER BY name, id) AS position
+        FROM visible
+      ), page_items AS (
+        SELECT id, name, kind, position FROM ranked
+        WHERE ($2::text IS NULL OR kind = $2)
+          AND position > $3::bigint AND position <= $4::bigint
+      )
+      SELECT (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'id', id, 'name', name, 'kind', kind
+              ) ORDER BY kind, position), '[]'::jsonb) FROM page_items) AS items,
+             jsonb_build_object(
+               'agent', count(*) FILTER (WHERE kind = 'agent'),
+               'agency', count(*) FILTER (WHERE kind = 'agency')
+             ) AS counts
+      FROM visible`,
+      [regionCode, kind ?? null, offset, offset + 12, q],
+    );
+    if (!directory)
+      throw new Error('Professional directory query returned no result');
+    return {
+      ...directory,
+      hasMore: !!kind && offset + 12 < directory.counts[kind],
+    };
+  }
+  async professional(
+    id: string,
+    region: unknown = undefined,
+    page: unknown = undefined,
+  ) {
+    const pageNumber = parse(
+      z
+        .string()
+        .regex(/^[1-9][0-9]{0,8}$/)
+        .transform(Number)
+        .default(1),
+      page,
+    );
+    const pageSize = 12;
+    const regionCode = parse(regionCodeSchema.optional(), region);
+    if (regionCode) this.regions.assertConfigured(regionCode);
+    const [profile] = await this.db.rows<{
+      id: string;
+      name: string;
+      kind: 'agent' | 'agency';
+      regionCodes: string[];
+      listings: unknown[];
+      listingCount: number;
+      listingPageCount: number;
+      listingCountsByRegion: Record<string, number>;
+    }>(
+      `WITH profile AS (
+        SELECT p.id, p.agent_id, p.agency_id, p.display_name AS name,
+              CASE WHEN p.agent_id IS NULL THEN 'agency' ELSE 'agent' END AS kind,
+              array_agg(r.region_code ORDER BY r.region_code) AS "regionCodes"
+       ${visibleProfessionals} AND p.id = $1
+       GROUP BY p.id, p.display_name, p.agent_id, p.agency_id
+       ), scoped_listings AS (
+         SELECT v.id, v.title, v.price, v.deal_type, v.address,
+                v.attributes, v.published_at, v.region_code
+         FROM profile
+         JOIN listings l ON (profile.agent_id IS NOT NULL AND l.seller_id = profile.agent_id)
+                          OR (profile.agency_id IS NOT NULL AND l.organization_id = profile.agency_id)
+         JOIN public_search_listings v ON v.id = l.id
+       ), counts AS (
+         SELECT region_code, count(*) AS total FROM scoped_listings GROUP BY region_code
+       )
+       SELECT profile.id, profile.name, profile.kind, profile."regionCodes",
+              COALESCE(listings.items, '[]'::jsonb) AS listings,
+              (SELECT COALESCE(sum(total), 0)::int FROM counts) AS "listingCount",
+              (SELECT ceil(COALESCE(sum(total), 0) / $4::int)::int
+                 FROM counts WHERE $2::text IS NULL OR region_code = $2) AS "listingPageCount",
+              (SELECT COALESCE(jsonb_object_agg(region_code, total)
+                FILTER (WHERE region_code IS NOT NULL), '{}'::jsonb) FROM counts) AS "listingCountsByRegion"
+       FROM profile
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(item ORDER BY item.published_at DESC, item.id DESC) AS items
+         FROM (
+           SELECT public.id, public.title, public.price, public.deal_type,
+                  public.address, public.attributes, public.published_at,
+                  COALESCE((
+                    SELECT jsonb_build_array(jsonb_build_object(
+                      'id', m.id, 'url', '/v1/media/' || m.id || '/small'
+                    ))
+                    FROM media m
+                    WHERE m.listing_id = public.id AND m.state = 'ready'
+                      AND m.kind = 'photo' AND m.variants ? 'small'
+                    ORDER BY m.created_at, m.id LIMIT 1
+                  ), '[]'::jsonb) AS media
+           FROM scoped_listings public
+           WHERE ($2::text IS NULL OR public.region_code = $2)
+           ORDER BY public.published_at DESC, public.id DESC LIMIT $4::int OFFSET $3::bigint
+         ) item
+       ) listings ON true`,
+      [
+        parse(z.uuid(), id),
+        regionCode ?? null,
+        (pageNumber - 1) * pageSize,
+        pageSize,
+      ],
+    );
+    if (!profile) throw new NotFoundException();
+    return profile;
+  }
+  async regionCounts() {
+    const rows = await this.db.rows<{ region_code: string; total: string }>(
+      'SELECT region_code, count(*) AS total FROM public_search_listings WHERE region_code IS NOT NULL GROUP BY region_code',
+    );
+    const counts = new Map(
+      rows.map((row) => [row.region_code, Number(row.total)]),
+    );
+    return {
+      items: this.regions.list().map(({ code }) => ({
+        code,
+        count: counts.get(code) ?? 0,
+      })),
+    };
+  }
+  async recentWithPhotos() {
+    const items = await this.db.rows(
+      `SELECT l.id,l.title,l.price,l.deal_type,l.address,l.attributes,
+              CASE WHEN char_length(btrim(l.description)) > 160
+                THEN left(btrim(l.description),157) || '…'
+                ELSE btrim(l.description) END AS summary,
+              jsonb_build_array(jsonb_build_object(
+                'id',photo.id,'url','/v1/media/' || photo.id || '/small'
+              )) AS media
+       FROM public_search_listings l
+       JOIN LATERAL (
+         SELECT m.id FROM media m
+         WHERE m.listing_id=l.id AND m.state='ready' AND m.kind='photo'
+           AND m.variants ? 'small'
+         ORDER BY m.created_at,m.id LIMIT 1
+       ) photo ON true
+       WHERE l.published_at >= now() - interval '14 days'
+         AND l.published_at <= now()
+         AND btrim(l.description) <> ''
+       ORDER BY l.published_at DESC,l.id DESC LIMIT 6`,
+    );
+    return { items };
+  }
+  async locations(query: unknown) {
+    const input = parse(
+      z
+        .object({
+          kind: z.enum(['city', 'metro']),
+          q: z.string().trim().max(100).default(''),
+          regionCode: regionCodeSchema.optional(),
+          locality: z.string().trim().max(150).optional(),
+        })
+        .strict(),
+      query,
+    );
+    const column = input.kind === 'city' ? 'locality' : "attributes->>'metro'";
+    const rows = await this.db.rows<{ name: string }>(
+      `SELECT DISTINCT ${column} AS name FROM public_search_listings
+       WHERE ($1::text IS NULL OR region_code=$1)
+         AND ($2::text IS NULL OR lower(locality)=lower($2))
+         AND ${column} <> '' AND strpos(lower(${column}),lower($3))=1
+       ORDER BY name LIMIT 12`,
+      [input.regionCode ?? null, input.locality || null, input.q],
+    );
+    return { items: rows.map(({ name }) => name) };
   }
   // Live filter and geographic revalidation ensures stale derived documents never bypass privacy or current filters.
   async eligible(ids: string[], input: SearchInput) {
@@ -100,6 +398,7 @@ export class Search {
     for (const [key, value] of Object.entries({
       category: input.category,
       deal_type: input.dealType,
+      region_code: input.regionCode,
       locality: input.locality,
       district: input.district,
       seller_type: input.sellerType,
@@ -162,7 +461,7 @@ export class Search {
           paidPlacement: PaidPlacementSignal | null;
           variants: Record<string, unknown>;
         }>(
-          `SELECT candidate.listing_id,m.id,m.variants,${paidPlacementProjection} AS "paidPlacement" FROM unnest($1::uuid[]) AS candidate(listing_id) LEFT JOIN LATERAL (SELECT id,variants FROM media WHERE listing_id=candidate.listing_id AND state='ready' ORDER BY created_at,id LIMIT 1) m ON true`,
+          `SELECT candidate.listing_id,m.id,m.variants,${paidPlacementProjection} AS "paidPlacement" FROM unnest($1::uuid[]) AS candidate(listing_id) LEFT JOIN LATERAL (SELECT id,variants FROM media WHERE listing_id=candidate.listing_id AND state='ready' AND variants ? 'small' ORDER BY (kind='photo') DESC,created_at,id LIMIT 1) m ON true`,
           [rows.map((r) => r.id)],
         )
       : [];
@@ -185,6 +484,7 @@ export class Search {
     );
   }
   async validatePolygon(input: SearchInput) {
+    if (input.regionCode) this.regions.assertConfigured(input.regionCode);
     if (input.polygon) {
       const [row] = await this.db.rows<{ valid: boolean }>(
         'SELECT ST_IsValid(ST_SetSRID(ST_GeomFromGeoJSON($1),4326)) AS valid',
@@ -205,7 +505,9 @@ export class Search {
         ) as { hash: string; after: unknown[]; expires: number };
         if (
           c.hash !== fingerprint ||
-          c.expires < Date.now() ||
+          typeof c.expires !== 'number' ||
+          !Number.isSafeInteger(c.expires) ||
+          c.expires <= Date.now() ||
           !Array.isArray(c.after) ||
           c.after.length !== 2
         )
@@ -322,6 +624,7 @@ export class Search {
         .strict(),
       body,
     );
+    await this.validatePolygon(input.definition);
     return {
       items: await this.cards(
         (await this.eligible(input.ids, input.definition)).slice(0, 50),
@@ -450,6 +753,47 @@ export class Search {
 @Controller('v1/search')
 export class SearchController {
   constructor(readonly search: Search) {}
+  @Get('professional-profile') ownProfessional(@CurrentActor() actor: Actor) {
+    return this.search.ownProfessional(actor);
+  }
+  @Patch('professional-profile') saveProfessional(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+  ) {
+    return this.search.saveProfessional(actor, body);
+  }
+  @Get('professional-profile/agency/:id') agencyProfile(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+  ) {
+    return this.search.ownProfessional(actor, id);
+  }
+  @Patch('professional-profile/agency/:id') saveAgencyProfile(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.search.saveProfessional(actor, body, id);
+  }
+  @Public() @Get('professionals') professionals(@Query() query: unknown) {
+    return this.search.professionals(query);
+  }
+  @Public() @Get('professionals/:id') professional(
+    @Param('id') id: string,
+    @Query('regionCode') region: unknown,
+    @Query('page') page: unknown,
+  ) {
+    return this.search.professional(id, region, page);
+  }
+  @Public() @Get('region-counts') regionCounts() {
+    return this.search.regionCounts();
+  }
+  @Public() @Get('recent') recent() {
+    return this.search.recentWithPhotos();
+  }
+  @Public() @Get('locations') locations(@Query() query: unknown) {
+    return this.search.locations(query);
+  }
   @Public() @Get('sitemap/partitions') partitions() {
     return this.search.sitemapPartitions();
   }
@@ -467,7 +811,7 @@ export class SearchController {
   }
 }
 @Module({
-  imports: [PaidPlacementModule],
+  imports: [PaidPlacementModule, GeoModule, OrganizationsModule],
   controllers: [SearchController],
   providers: [Search, SearchIndex],
   exports: [Search, SearchIndex],

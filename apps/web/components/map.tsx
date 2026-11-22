@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import type { MapMarker, SearchDefinition } from '@raui/types/product';
 import MapCanvas from './map-canvas';
 import { api } from '../lib/client';
+import { searchMapBounds } from '../lib/map-bounds';
 export default function MapPanel({
   definition,
   onBounds,
@@ -22,8 +23,8 @@ export default function MapPanel({
     [truncated, setTruncated] = useState(false),
     [polygon, setPolygon] = useState('');
   const bounds = useMemo<[number, number, number, number]>(
-    () => definition.bounds ?? [37.3, 55.5, 37.9, 56.0],
-    [definition.bounds],
+    () => searchMapBounds(definition.regionCode, definition.bounds),
+    [definition.bounds, definition.regionCode],
   );
   useEffect(() => {
     let active = true;

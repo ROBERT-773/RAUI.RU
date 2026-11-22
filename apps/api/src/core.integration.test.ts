@@ -22,8 +22,14 @@ import { signIdentity } from '@raui/config/ingress';
 
 class CaptureDelivery extends VerificationDelivery {
   readonly messages: VerificationMessage[] = [];
+  resetUnavailable = false;
   async send(message: VerificationMessage) {
     this.messages.push(message);
+    if (this.resetUnavailable && message.purpose === 'reset') {
+      // Exercise the real gateway's timeout duration without external services.
+      await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+      throw new Error('fixture delivery outage');
+    }
   }
   latest(destination: string, purpose: VerificationMessage['purpose']) {
     return [...this.messages]
@@ -142,6 +148,11 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       { token: delivery.latest(phone, 'phone') },
       session,
     );
+    // These fixtures exercise business behavior, independently of onboarding.
+    await pool.query(
+      "UPDATE users SET registration_approval_state='approved' WHERE email=$1",
+      [email],
+    );
     return session;
   }
   async function property(
@@ -156,7 +167,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       {
         category: 'apartment',
         address,
-        attributes: { area: 55 },
+        attributes: { area: 55, kitchen_area: 10 },
         ...(organizationId ? { organizationId } : {}),
         ...extra,
       },
@@ -176,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '12',
+          '33',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -288,6 +299,11 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           displayName: 'unverified',
           role: 'owner',
         });
+        // Keep this assertion about missing contact verification specifically.
+        await pool.query(
+          "UPDATE users SET registration_approval_state='approved' WHERE email=$1",
+          ['unverified@example.test'],
+        );
         const unverified = await ok<Session>('/auth/login', 'POST', {
           email: 'unverified@example.test',
           password: 'correct-long-password',
@@ -620,9 +636,74 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           'PATCH',
           {
             version: physical.version,
-            address: { ...address, longitude: 37.6, latitude: 55.7 },
+            address: {
+              ...address,
+              longitude: 37.6,
+              latitude: 55.7,
+              regionCode: 'moscow',
+            },
           },
           owner,
+        );
+        assert.equal(
+          (
+            await ok<{ address: { regionCode: string } }>(
+              `/properties/${physical.id}`,
+              'GET',
+              undefined,
+              owner,
+            )
+          ).address.regionCode,
+          'moscow',
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT region_code FROM addresses a JOIN properties p ON p.address_id=a.id WHERE p.id=$1',
+              [physical.id],
+            )
+          ).rows[0].region_code,
+          'moscow',
+        );
+        assert.equal(
+          (
+            await call(
+              '/properties',
+              'POST',
+              {
+                category: 'apartment',
+                address: { ...address, regionCode: 'unknown' },
+              },
+              owner,
+              'unknown-region',
+            )
+          ).status,
+          400,
+        );
+        physical = await ok<Entity>(
+          `/properties/${physical.id}`,
+          'PATCH',
+          {
+            version: physical.version,
+            address: {
+              ...address,
+              longitude: 37.6,
+              latitude: 55.7,
+              regionCode: 'moscow_oblast',
+            },
+          },
+          owner,
+        );
+        assert.equal(
+          (
+            await ok<{ address: { regionCode: string } }>(
+              `/properties/${physical.id}`,
+              'GET',
+              undefined,
+              owner,
+            )
+          ).address.regionCode,
+          'moscow_oblast',
         );
         assert.equal(
           (
@@ -677,7 +758,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             version: before,
             title: 'Квартира в Москве',
             price: 15000000,
-            description: 'Описание',
+            description: 'Светлая квартира в Москве.',
           },
           owner,
         );
@@ -786,6 +867,21 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             .status,
           403,
         );
+        for (let number = 2; number <= 5; number++) {
+          await ok(
+            '/media',
+            'POST',
+            {
+              listingId: listing.id,
+              filename: `photo-${number}.jpg`,
+              mime: 'image/jpeg',
+              base64: image.toString('base64'),
+            },
+            owner,
+            `upload-photo-${number}`,
+          );
+          assert.ok(await worker.once());
+        }
         listing = await ok<Entity>(
           `/listings/${listing.id}`,
           'GET',
@@ -797,6 +893,12 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
     await t.test(
       'moderation gate allows only authorized publication and records immutable history/audit',
       async () => {
+        await pool.query(
+          `INSERT INTO listing_history(listing_id,actor_id,event,after_data)
+           SELECT $1,$2,'listing.fields.changed',jsonb_build_object('fixtureEdit', edit)
+           FROM generate_series(1,250) AS edits(edit)`,
+          [listing.id, owner.user.id],
+        );
         listing = await ok<Entity>(
           `/listings/${listing.id}/transitions`,
           'POST',
@@ -841,6 +943,41 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           ).status,
           403,
         );
+        const originalDescription = (
+          await pool.query<{ description: string }>(
+            'SELECT description FROM listings WHERE id=$1',
+            [listing.id],
+          )
+        ).rows[0]!.description;
+        await pool.query('UPDATE listings SET description=$2 WHERE id=$1', [
+          listing.id,
+          'Кратко',
+        ]);
+        assert.equal(
+          (
+            await call(
+              `/admin/moderation/${id}/decision`,
+              'POST',
+              { decision: 'approve', reason: 'Legacy case review' },
+              admin,
+              'approve-invalid-legacy-case',
+            )
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await pool.query<{ state: string }>(
+              'SELECT state FROM moderation_cases WHERE id=$1',
+              [id],
+            )
+          ).rows[0]?.state,
+          'pending',
+        );
+        await pool.query('UPDATE listings SET description=$2 WHERE id=$1', [
+          listing.id,
+          originalDescription,
+        ]);
         const decision = await ok<{ status: string }>(
           `/admin/moderation/${id}/decision`,
           'POST',
@@ -857,7 +994,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           (await fetch(`${base}/v1/media/${mediaId}/thumb`)).status,
           200,
         );
-        const history = await ok<Array<{ event: string }>>(
+        const history = await ok<Array<{ id: string; event: string }>>(
           `/listings/${listing.id}/history`,
           'GET',
           undefined,
@@ -865,6 +1002,13 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         );
         assert.ok(history.some((h) => h.event === 'listing.fields.changed'));
         assert.ok(history.some((h) => h.event === 'moderation.decided'));
+        assert.equal(history.length, 200);
+        assert.ok(
+          history.every(
+            (event, index) =>
+              index === 0 || BigInt(event.id) > BigInt(history[index - 1]!.id),
+          ),
+        );
         assert.ok(
           (await ok<unknown[]>('/admin/audit', 'GET', undefined, admin))
             .length > 0,
@@ -904,6 +1048,17 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           { version: listing.version, status: 'paused' },
           owner,
           'pause-listing',
+        );
+        assert.equal(
+          (
+            await call(
+              `/properties/${physical.id}`,
+              'PATCH',
+              { version: physical.version, address },
+              owner,
+            )
+          ).status,
+          403,
         );
         assert.equal(
           (await call(`/listings/${listing.id}/public`)).status,
@@ -989,7 +1144,10 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         physical = await ok<Entity>(
           `/properties/${physical.id}`,
           'PATCH',
-          { version: physical.version, attributes: { area: 60 } },
+          {
+            version: physical.version,
+            attributes: { area: 60, kitchen_area: 10 },
+          },
           owner,
         );
         assert.equal(
@@ -1102,12 +1260,59 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           ).status,
           403,
         );
-        await ok(
-          `/organizations/${organization.id}/members`,
-          'PATCH',
-          { userId: other.user.id, role: 'member', active: false },
-          developer,
-        );
+        for (const ineligible of [
+          {
+            sql: 'UPDATE users SET active=false WHERE id=$1',
+            reactivate: true,
+          },
+          {
+            sql: 'UPDATE users SET email_verified_at=NULL WHERE id=$1',
+            reactivate: true,
+          },
+          {
+            sql: 'UPDATE users SET phone_verified_at=NULL WHERE id=$1',
+            reactivate: false,
+          },
+        ]) {
+          await pool.query(ineligible.sql, [other.user.id]);
+          await ok(
+            `/organizations/${organization.id}/members`,
+            'PATCH',
+            { userId: other.user.id, role: 'member', active: false },
+            developer,
+          );
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT active FROM memberships WHERE organization_id=$1 AND user_id=$2',
+                [organization.id, other.user.id],
+              )
+            ).rows[0].active,
+            false,
+          );
+          assert.equal(
+            (
+              await call(
+                `/organizations/${organization.id}/members`,
+                'PATCH',
+                { userId: other.user.id, role: 'member', active: true },
+                developer,
+              )
+            ).status,
+            404,
+          );
+          await pool.query(
+            'UPDATE users SET active=true,email_verified_at=now(),phone_verified_at=now() WHERE id=$1',
+            [other.user.id],
+          );
+          if (ineligible.reactivate)
+            await ok(
+              `/organizations/${organization.id}/members`,
+              'PATCH',
+              { userId: other.user.id, role: 'member', active: true },
+              developer,
+            );
+        }
         assert.equal(
           (await call(`/listings/${offer.id}`, 'GET', undefined, other)).status,
           403,
@@ -1238,6 +1443,58 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'reset outage has identical acceptance and masks the provider timeout for known and unknown accounts',
+      async () => {
+        delivery.resetUnavailable = true;
+        try {
+          const results = await Promise.all(
+            ['owner@example.test', 'unknown-outage@example.test'].map(
+              async (email) => {
+                const started = performance.now();
+                const result = await call('/auth/password-reset', 'POST', {
+                  email,
+                });
+                return {
+                  result: { status: result.status, data: result.data },
+                  elapsed: performance.now() - started,
+                };
+              },
+            ),
+          );
+          assert.deepEqual(results[0]!.result, results[1]!.result);
+          assert.deepEqual(results[0]!.result, {
+            status: 201,
+            data: { accepted: true },
+          });
+          for (const result of results)
+            assert.ok(
+              result.elapsed >= 5000,
+              `response returned early: ${result.elapsed}ms`,
+            );
+          assert.ok(
+            Math.abs(results[0]!.elapsed - results[1]!.elapsed) < 1000,
+            'timeout creates a multi-second timing distinction',
+          );
+          const failedToken = delivery.latest('owner@example.test', 'reset');
+          await pool.query(
+            "UPDATE auth_challenges SET expires_at=now()-interval '1 second' WHERE token_hash=$1",
+            [hash(failedToken)],
+          );
+          assert.equal(
+            (
+              await call('/auth/password-reset/confirm', 'POST', {
+                token: failedToken,
+                password: 'expired-reset-password',
+              })
+            ).status,
+            400,
+          );
+        } finally {
+          delivery.resetUnavailable = false;
+        }
+      },
+    );
+    await t.test(
       'cookie auth has CSRF protection; logout and password reset revoke sessions; tokens are single-use',
       async () => {
         const email = 'owner@example.test';
@@ -1259,6 +1516,113 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             })
           ).status,
           403,
+        );
+        const recover = () =>
+          call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+            Cookie: cookie,
+          });
+        const recovered = await Promise.all([recover(), recover()]);
+        for (const response of recovered) {
+          assert.equal(response.status, 200);
+          assert.equal(response.headers.get('cache-control'), 'no-store');
+        }
+        const recoveredToken = (recovered[0]!.data as { csrfToken: string })
+          .csrfToken;
+        assert.match(recoveredToken, /^[A-Za-z0-9_-]{43}$/);
+        assert.equal(
+          (recovered[1]!.data as { csrfToken: string }).csrfToken,
+          recoveredToken,
+        );
+        const secondLogin = await call('/auth/login', 'POST', {
+          email,
+          password: 'correct-long-password',
+        });
+        const secondCookie = secondLogin.headers
+          .get('set-cookie')!
+          .split(';')[0]!;
+        const secondRecovery = await call(
+          '/auth/csrf',
+          'GET',
+          undefined,
+          undefined,
+          undefined,
+          { Cookie: secondCookie },
+        );
+        const secondToken = (secondRecovery.data as { csrfToken: string })
+          .csrfToken;
+        assert.notEqual(secondToken, recoveredToken);
+        assert.equal((await call('/auth/csrf', 'GET')).status, 401);
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Authorization: 'Bearer ' + secondCookie.split('=')[1]!,
+            })
+          ).status,
+          401,
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: 'https://attacker.test',
+            })
+          ).status,
+          403,
+        );
+        const secondHash = hash(secondCookie.split('=')[1]!);
+        await db.rows(
+          "UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE token_hash=$1",
+          [secondHash],
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+            })
+          ).status,
+          401,
+        );
+        await db.rows(
+          "UPDATE sessions SET expires_at=now()+interval '1 day' WHERE token_hash=$1",
+          [secondHash],
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: process.env.WEB_ORIGIN!,
+              'X-CSRF-Token': recoveredToken,
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: 'https://attacker.test',
+              'X-CSRF-Token': secondToken,
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await call('/auth/logout', 'POST', {}, undefined, undefined, {
+              Cookie: secondCookie,
+              Origin: process.env.WEB_ORIGIN!,
+              'X-CSRF-Token': secondToken,
+            })
+          ).status,
+          201,
+        );
+        assert.equal(
+          (
+            await call('/auth/csrf', 'GET', undefined, undefined, undefined, {
+              Cookie: secondCookie,
+            })
+          ).status,
+          401,
         );
         const csrf = (login.data as { csrfToken: string }).csrfToken;
         assert.equal(
@@ -1331,6 +1695,9 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       };
       assert.ok(schema.paths['/v1/auth/register']);
       assert.ok(schema.paths['/v1/properties']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/capabilities']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/otp']);
+      assert.ok(schema.paths['/v1/auth/verification/phone/otp/confirm']);
       const propertyContract = schema.paths['/v1/properties'] as {
         post: {
           requestBody: {
@@ -1344,6 +1711,40 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         ].schema.required.includes('address'),
       );
       assert.ok(schema.paths['/v1/admin/moderation/{id}/decision']);
+      assert.ok(schema.paths['/v1/admin/registration-approvals']);
+      assert.ok(schema.paths['/v1/admin/registration-approvals/{id}']);
+      const approvalContract = schema.paths[
+        '/v1/admin/registration-approvals/{id}/decision'
+      ] as {
+        post: {
+          description: string;
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  required: string[];
+                  additionalProperties: boolean;
+                  properties: {
+                    decision: { enum: string[] };
+                    reason: { minLength: number; maxLength: number };
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+      const approvalBody =
+        approvalContract.post.requestBody.content['application/json'].schema;
+      assert.deepEqual(approvalBody.required.sort(), ['decision', 'reason']);
+      assert.equal(approvalBody.additionalProperties, false);
+      assert.deepEqual(approvalBody.properties.decision.enum, [
+        'approve',
+        'reject',
+      ]);
+      assert.equal(approvalBody.properties.reason.minLength, 3);
+      assert.equal(approvalBody.properties.reason.maxLength, 2000);
+      assert.match(approvalContract.post.description, /registration\.decide/);
       const anonymous = new Set(
         `get /health
 get /health/ready
@@ -1353,6 +1754,11 @@ get /v1/listings/{id}/public
 get /v1/media/{id}/{variant}
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
+get /v1/search/locations
+get /v1/search/recent
+get /v1/search/region-counts
+get /v1/search/professionals
+get /v1/search/professionals/{id}
 post /v1/search
 post /v1/search/selection
 post /v1/search/map
@@ -1370,7 +1776,8 @@ post /v1/partner/feeds/{id}/apply
 post /v1/partner/listings/bulk-pause`.split('\n'),
       );
       const keys = new Set(
-        `post /v1/organizations
+        `post /v1/auth/verification/phone/otp
+post /v1/organizations
 post /v1/properties
 post /v1/listings
 post /v1/listings/{id}/transitions
@@ -1381,6 +1788,7 @@ post /v1/structures/sections
 post /v1/structures/floors
 post /v1/admin/media-jobs/{id}/retry
 post /v1/admin/moderation/{id}/decision
+post /v1/admin/registration-approvals/{id}/decision
 post /v1/trust/listings/{id}/scan
 post /v1/admin/trust/listings/{id}/decision
 post /v1/admin/trust/candidates/{id}/decision
@@ -1430,7 +1838,9 @@ patch /v1/commerce/promotions/{code}/{version}`.split('\n'),
               ? []
               : partner.has(id)
                 ? [{ partner: [] }]
-                : [{ bearer: [] }, { cookie: [] }],
+                : id === 'get /v1/auth/csrf'
+                  ? [{ cookie: [] }]
+                  : [{ bearer: [] }, { cookie: [] }],
             id,
           );
           const headers = (operation.parameters ?? []).filter(

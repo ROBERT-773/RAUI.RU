@@ -29,6 +29,7 @@ export const listingMapping = {
       address: { type: 'text', analyzer: 'raui_text' },
       category: { type: 'keyword' },
       deal_type: { type: 'keyword' },
+      region_code: { type: 'keyword' },
       locality: { type: 'keyword' },
       district: { type: 'keyword' },
       seller_type: { type: 'keyword' },
@@ -87,7 +88,13 @@ export class SearchIndex {
     }
   }
   async initialize() {
-    if (await this.exists()) return;
+    if (await this.exists()) {
+      // Expand existing strict mappings before workers emit the new field.
+      await this.request('/' + this.alias + '/_mapping', 'PUT', {
+        properties: { region_code: { type: 'keyword' } },
+      });
+      return;
+    }
     const name = this.alias + '-v3-' + Date.now();
     await this.request('/' + name, 'PUT', listingMapping);
     await this.request('/_aliases', 'POST', {

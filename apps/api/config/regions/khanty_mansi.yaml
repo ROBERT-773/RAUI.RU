@@ -1,0 +1,9 @@
+code: khanty_mansi
+name: Ханты-Мансийский автономный округ — Югра
+type: autonomous_okrug
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Yekaterinburg
+currency: RUB
+geo_bounds: null

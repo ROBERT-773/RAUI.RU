@@ -901,7 +901,7 @@ export class CommerceService {
        FROM advertising_campaigns c
        JOIN advertising_placements p ON p.id=c.placement_id
        WHERE p.code=$1
-         AND EXISTS(SELECT 1 FROM public_search_listings s WHERE s.id=a.listing_id)
+         AND p.enabled
          AND c.status='active'
          AND c.starts_at<=now()
          AND c.ends_at>now()

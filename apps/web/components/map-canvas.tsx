@@ -9,12 +9,14 @@ export default function MapCanvas({
   onBounds,
   onSelect,
   onPolygon,
+  scrollWheelZoom = true,
 }: {
   bounds: [number, number, number, number];
   markers: MapMarker[];
   onBounds: (b: [number, number, number, number]) => void;
   onSelect: (ids: string[]) => void;
-  onPolygon: (p: [number, number][]) => void;
+  onPolygon?: (p: [number, number][]) => void;
+  scrollWheelZoom?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null),
     map = useRef<L.Map | null>(null),
@@ -30,6 +32,7 @@ export default function MapCanvas({
     if (!element.current) return;
     const instance = L.map(element.current, {
       zoomControl: true,
+      scrollWheelZoom,
       worldCopyJump: false,
       minZoom: 2,
       maxZoom: 19,
@@ -64,7 +67,7 @@ export default function MapCanvas({
       map.current = null;
       layer.current = null;
     };
-  }, []);
+  }, [scrollWheelZoom]);
   useEffect(() => {
     const instance = map.current;
     if (!instance) return;
@@ -121,37 +124,41 @@ export default function MapCanvas({
         className="leaflet-map"
         aria-label="Карта недвижимости"
       />
-      <div className="actions">
-        <button
-          onClick={() => {
-            if (!map.current) return;
-            if (drawingLayer.current)
-              map.current.removeLayer(drawingLayer.current);
-            drawing.current = [];
-            drawingLayer.current = L.polyline([], { color: '#07537b' }).addTo(
-              map.current,
-            );
-          }}
-        >
-          Нарисовать область
-        </button>
-        <button
-          onClick={() => {
-            if (drawing.current.length < 3) return;
-            const points = [...drawing.current, drawing.current[0]!];
-            onPolygon(points);
-            if (map.current && drawingLayer.current)
-              map.current.removeLayer(drawingLayer.current);
-            drawingLayer.current = null;
-          }}
-        >
-          Завершить область
-        </button>
-      </div>
-      <p>
-        Перемещайте карту мышью, касанием или клавишами стрелок. Для области
-        отметьте минимум три точки и завершите контур.
-      </p>
+      {onPolygon && (
+        <>
+          <div className="actions">
+            <button
+              onClick={() => {
+                if (!map.current) return;
+                if (drawingLayer.current)
+                  map.current.removeLayer(drawingLayer.current);
+                drawing.current = [];
+                drawingLayer.current = L.polyline([], {
+                  color: '#07537b',
+                }).addTo(map.current);
+              }}
+            >
+              Нарисовать область
+            </button>
+            <button
+              onClick={() => {
+                if (drawing.current.length < 3) return;
+                const points = [...drawing.current, drawing.current[0]!];
+                onPolygon(points);
+                if (map.current && drawingLayer.current)
+                  map.current.removeLayer(drawingLayer.current);
+                drawingLayer.current = null;
+              }}
+            >
+              Завершить область
+            </button>
+          </div>
+          <p>
+            Перемещайте карту мышью, касанием или клавишами стрелок. Для области
+            отметьте минимум три точки и завершите контур.
+          </p>
+        </>
+      )}
     </>
   );
 }

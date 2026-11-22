@@ -30,6 +30,8 @@ import { Audit, AuditModule } from '../audit/audit';
 import { ProfessionalImports, ProfessionalImportsModule } from './imports';
 import { Structures, StructuresModule } from '../properties/structures';
 import { Database } from '../database/database';
+import { ListingAccess, ListingAccessModule } from '../listings/access';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 import {
   Organizations,
   OrganizationsModule,
@@ -44,6 +46,7 @@ export class ProfessionalPlatform {
     private readonly organizations: Organizations,
     private readonly audit: Audit,
     private readonly idem: Idempotency,
+    private readonly access: ListingAccess,
   ) {}
 
   async createPortfolio(
@@ -184,13 +187,29 @@ export class ProfessionalPlatform {
           throw new BadRequestException(
             'Bulk pause requires published listings',
           );
-        await sql.query(
+        const visible = new Set<string>();
+        for (const row of rows) {
+          if (await this.access.visible(row.id, sql)) visible.add(row.id);
+        }
+        const updated = await this.db.rows<{ id: string; version: number }>(
           `UPDATE listings
          SET status='paused',version=version+1,updated_at=now()
-         WHERE id=ANY($1::uuid[])`,
+         WHERE id=ANY($1::uuid[]) RETURNING id,version`,
           [[...new Set(input.listingIds)]],
+          sql,
         );
         for (const row of rows) {
+          if (visible.has(row.id)) {
+            const version = updated.find((item) => item.id === row.id)!.version;
+            await enqueueImmediateListingNotifications(sql, {
+              listingId: row.id,
+              version,
+              publicBefore: true,
+              publicAfter: false,
+              previousPrice: '',
+              price: '',
+            });
+          }
           await this.audit.history(
             sql,
             actor.id,
@@ -289,6 +308,39 @@ export class ProfessionalPlatform {
     if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(raw))
       throw new ForbiddenException('Partner token required');
     return this.db.transaction(async (sql) => {
+      const digest = hash(raw);
+      const [candidate] = await this.db.rows<{
+        id: string;
+        organization_id: string;
+        created_by: string;
+      }>(
+        'SELECT id,organization_id,created_by FROM partner_clients WHERE token_digest=$1',
+        [digest],
+        sql,
+      );
+      if (!candidate) throw new ForbiddenException('Partner scope required');
+      // Serialize creator eligibility with account updates before tenant/client locks.
+      // SHARE blocks non-key eligibility updates while remaining FK KEY SHARE compatible.
+      const [creator] = await this.db.rows<{ id: string }>(
+        'SELECT id FROM users WHERE id=$1 AND active AND email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL FOR SHARE',
+        [candidate.created_by],
+        sql,
+      );
+      if (!creator) throw new ForbiddenException('Partner scope required');
+      const [organization] = await this.db.rows<{ id: string }>(
+        'SELECT id FROM organizations WHERE id=$1 AND active FOR SHARE',
+        [candidate.organization_id],
+        sql,
+      );
+      const [membership] = organization
+        ? await this.db.rows<{ role: string }>(
+            "SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2 AND active AND role IN ('owner','admin') FOR SHARE",
+            [candidate.organization_id, candidate.created_by],
+            sql,
+          )
+        : [];
+      if (!organization || !membership)
+        throw new ForbiddenException('Partner scope required');
       const [client] = await this.db.rows<{
         id: string;
         organization_id: string;
@@ -296,11 +348,25 @@ export class ProfessionalPlatform {
         requests_per_minute: number;
         created_by: string;
       }>(
-        `SELECT k.id,k.organization_id,k.scopes,k.requests_per_minute,k.created_by FROM partner_clients k JOIN organizations o ON o.id=k.organization_id JOIN memberships m ON m.organization_id=k.organization_id AND m.user_id=k.created_by JOIN users u ON u.id=k.created_by WHERE k.token_digest=$1 AND k.active AND (k.expires_at IS NULL OR k.expires_at>now()) AND o.active AND m.active AND m.role IN ('owner','admin') AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL FOR UPDATE OF k FOR SHARE OF o,m`,
-        [hash(raw)],
+        `SELECT k.id,k.organization_id,k.scopes,k.requests_per_minute,k.created_by
+         FROM partner_clients k JOIN users u ON u.id=k.created_by
+         WHERE k.id=$1 AND k.token_digest=$2 AND k.organization_id=$3 AND k.created_by=$4
+           AND k.active AND (k.expires_at IS NULL OR k.expires_at>now())
+           AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL
+         FOR UPDATE OF k`,
+        [candidate.id, digest, candidate.organization_id, candidate.created_by],
         sql,
       );
       if (!client || !client.scopes.includes(requiredScope))
+        throw new ForbiddenException('Partner scope required');
+      // Locks may outlast the token expiry; now() is fixed at transaction start.
+      const [validity] = await this.db.rows<{ valid: boolean }>(
+        `SELECT EXISTS(SELECT 1 FROM partner_clients WHERE id=$1 AND active
+           AND (expires_at IS NULL OR expires_at>clock_timestamp())) AS valid`,
+        [client.id],
+        sql,
+      );
+      if (!validity?.valid)
         throw new ForbiddenException('Partner scope required');
       const [usage] = await this.db.rows<{ count: number }>(
         `INSERT INTO partner_client_usage(client_id,count,reset_at)
@@ -363,30 +429,44 @@ export class ProfessionalPlatform {
   ) {
     seller(actor);
     return this.db.transaction(async (sql) => {
-      const [row] = await this.db.rows<{
-        organization_id: string;
-        active: boolean;
-      }>(
-        'SELECT organization_id,active FROM partner_clients WHERE id=$1 FOR UPDATE',
-        [parse(uuid, id)],
+      const clientId = parse(uuid, id);
+      const [candidate] = await this.db.rows<{ organization_id: string }>(
+        'SELECT organization_id FROM partner_clients WHERE id=$1',
+        [clientId],
         sql,
       );
-      if (!row) throw new BadRequestException('Partner client not found');
+      if (!candidate) throw new BadRequestException('Partner client not found');
       if (
         organizationId !== undefined &&
-        row.organization_id !== parse(uuid, organizationId)
+        candidate.organization_id !== parse(uuid, organizationId)
       )
         throw new ForbiddenException();
       if (admin) {
         verified(actor);
         if (actor.role !== 'admin') throw new ForbiddenException();
+        const [organization] = await this.db.rows<{ id: string }>(
+          'SELECT id FROM organizations WHERE id=$1 FOR SHARE',
+          [candidate.organization_id],
+          sql,
+        );
+        if (!organization)
+          throw new BadRequestException('Organization not found');
       } else
         await this.organizations.permission(
           actor,
-          row.organization_id,
+          candidate.organization_id,
           true,
           sql,
         );
+      const [row] = await this.db.rows<{
+        organization_id: string;
+        active: boolean;
+      }>(
+        'SELECT organization_id,active FROM partner_clients WHERE id=$1 AND organization_id=$2 FOR UPDATE',
+        [clientId, candidate.organization_id],
+        sql,
+      );
+      if (!row) throw new BadRequestException('Partner client not found');
       if (row.active) {
         await sql.query('UPDATE partner_clients SET active=false WHERE id=$1', [
           id,
@@ -433,15 +513,21 @@ export class ProfessionalPlatform {
         .strict(),
       body,
     );
-    const [row] = await this.db.rows(
-      `INSERT INTO notification_preferences(user_id,email,push,transactional,updated_at)
-       VALUES($1,$2,$3,$4,now())
-       ON CONFLICT(user_id) DO UPDATE SET
-         email=$2,push=$3,transactional=$4,updated_at=now()
-       RETURNING user_id,email,push,transactional,updated_at`,
-      [actor.id, input.email, input.push, input.transactional],
-    );
-    return row;
+    return this.db.transaction(async (sql) => {
+      await sql.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [
+        actor.id,
+      ]);
+      const [row] = await this.db.rows(
+        `INSERT INTO notification_preferences(user_id,email,push,transactional,updated_at)
+         VALUES($1,$2,$3,$4,now())
+         ON CONFLICT(user_id) DO UPDATE SET
+           email=$2,push=$3,transactional=$4,updated_at=now()
+         RETURNING user_id,email,push,transactional,updated_at`,
+        [actor.id, input.email, input.push, input.transactional],
+        sql,
+      );
+      return row;
+    });
   }
   async adminClients(actor: Actor) {
     verified(actor);
@@ -613,6 +699,7 @@ export class PartnerAdminController {
 @Module({
   imports: [
     OrganizationsModule,
+    ListingAccessModule,
     ProfessionalImportsModule,
     StructuresModule,
     AuditModule,

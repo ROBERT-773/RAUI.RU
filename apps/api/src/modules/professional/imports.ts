@@ -464,6 +464,8 @@ export class ProfessionalImports {
         validateAttributes(
           await this.catalog.definitions(item.categoryCode, sql),
           item.attributes,
+          false,
+          item.categoryCode,
         );
         await sql.query(
           'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',

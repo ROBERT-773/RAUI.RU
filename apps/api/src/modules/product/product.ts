@@ -1,3 +1,5 @@
+import { eligibleInboxRows, InboxRow } from './subscription-inbox';
+import { ListingSubscriptions } from './subscriptions';
 import {
   Body,
   Controller,
@@ -23,11 +25,26 @@ import { Database, Sql } from '../database/database';
 import { ListingAccess, ListingAccessModule } from '../listings/access';
 import { Search, SearchModule } from '../search/search';
 import { searchSchema } from '../search/contracts';
+import {
+  PublicationQuotaModule,
+  PublicationQuotas,
+} from '../listings/publication-quota';
 const collection = z.enum(['favorite', 'compare', 'recent']);
 const page = z.object({
   cursor: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
+// PostgreSQL bigint IDs stay decimal strings; never coerce through JS numbers.
+const notificationId = z
+  .string()
+  .regex(/^[1-9][0-9]{0,18}$/)
+  .refine((value) => BigInt(value) <= 9223372036854775807n);
+const inboxPage = z
+  .object({
+    cursor: notificationId.optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+  })
+  .strict();
 const saved = z
   .object({
     name: z.string().trim().min(1).max(100),
@@ -102,6 +119,8 @@ export class Product {
   }
   async save(actor: Actor, body: unknown, id?: string) {
     const input = parse(saved, body);
+    if (input.definition.regionCode)
+      this.search.regions.assertConfigured(input.definition.regionCode);
     if (id) {
       const [row] = await this.db.rows(
         'UPDATE saved_searches SET name=$3,definition=$4,version=version+1 WHERE id=$1 AND user_id=$2 RETURNING *',
@@ -244,23 +263,62 @@ export class Product {
     };
   }
   async notifications(actor: Actor, query: unknown) {
-    const q = parse(page, query);
-    const items = await this.db.rows(
-      'SELECT id,thread_id,kind,read_at,created_at FROM notifications WHERE user_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT $3',
-      [actor.id, q.cursor ?? null, q.limit],
-    );
-    return {
-      items,
-      cursor: items.length === q.limit ? items.at(-1)!.id : null,
-    };
+    const q = parse(inboxPage, query);
+    return this.db.transaction(async (sql) => {
+      const rows = await this.db.rows<InboxRow>(
+        `SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at,captured_frequency,daily_run_id,
+        EXISTS(SELECT 1 FROM listing_daily_items i JOIN listing_daily_runs r ON r.id=i.run_id AND r.user_id=i.user_id
+          JOIN listing_daily_candidates c ON c.id=i.candidate_id AND c.user_id=i.user_id
+          WHERE i.notification_id=notifications.id AND i.user_id=notifications.user_id AND i.outcome='released'
+            AND r.id=notifications.daily_run_id AND r.released_at IS NOT NULL AND r.released_at<=clock_timestamp()
+            AND c.listing_id=notifications.listing_id AND c.listing_version=notifications.listing_version
+            AND c.subscription_version=notifications.subscription_version AND c.kind=notifications.kind
+            AND c.dedupe_key=notifications.dedupe_key AND c.payload=notifications.payload) AS daily_released
+        FROM notifications WHERE user_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT $3`,
+        [actor.id, q.cursor ?? null, q.limit],
+        sql,
+      );
+      return {
+        items: await eligibleInboxRows(
+          this.db,
+          this.access,
+          actor.id,
+          rows,
+          sql,
+        ),
+        cursor: rows.length === q.limit ? String(rows.at(-1)!.id) : null,
+      };
+    });
   }
   async read(actor: Actor, id: string) {
-    const [row] = await this.db.rows(
-      'UPDATE notifications SET read_at=COALESCE(read_at,now()) WHERE user_id=$1 AND id=$2 RETURNING id',
-      [actor.id, parse(z.coerce.number().int().positive(), id)],
-    );
-    if (!row) throw new NotFoundException();
-    return { ok: true };
+    const parsedId = parse(notificationId, id);
+    return this.db.transaction(async (sql) => {
+      const rows = await this.db.rows<InboxRow>(
+        `SELECT id::text,thread_id,kind,listing_id,subscription_version,listing_version,payload,read_at,created_at,captured_frequency,daily_run_id,
+        EXISTS(SELECT 1 FROM listing_daily_items i JOIN listing_daily_runs r ON r.id=i.run_id AND r.user_id=i.user_id
+          JOIN listing_daily_candidates c ON c.id=i.candidate_id AND c.user_id=i.user_id
+          WHERE i.notification_id=notifications.id AND i.user_id=notifications.user_id AND i.outcome='released'
+            AND r.id=notifications.daily_run_id AND r.released_at IS NOT NULL AND r.released_at<=clock_timestamp()
+            AND c.listing_id=notifications.listing_id AND c.listing_version=notifications.listing_version
+            AND c.subscription_version=notifications.subscription_version AND c.kind=notifications.kind
+            AND c.dedupe_key=notifications.dedupe_key AND c.payload=notifications.payload) AS daily_released
+        FROM notifications WHERE user_id=$1 AND id=$2::bigint`,
+        [actor.id, parsedId],
+        sql,
+      );
+      if (
+        !(await eligibleInboxRows(this.db, this.access, actor.id, rows, sql))
+          .length
+      )
+        throw new NotFoundException();
+      const [row] = await this.db.rows(
+        'UPDATE notifications SET read_at=COALESCE(read_at,now()) WHERE user_id=$1 AND id=$2::bigint RETURNING id',
+        [actor.id, parsedId],
+        sql,
+      );
+      if (!row) throw new NotFoundException();
+      return { ok: true };
+    });
   }
   async preferences(actor: Actor, body?: unknown) {
     if (body === undefined)
@@ -283,17 +341,49 @@ export class Product {
         .strict(),
       body,
     );
-    return (
-      await this.db.rows(
-        'INSERT INTO notification_preferences(user_id,in_app,email,sms,push) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET in_app=$2,email=$3,sms=$4,push=$5 RETURNING in_app,email,sms,push',
-        [actor.id, p.in_app, p.email, p.sms, p.push],
-      )
-    )[0];
+    return this.db.transaction(async (sql) => {
+      await sql.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [
+        actor.id,
+      ]);
+      return (
+        await this.db.rows(
+          'INSERT INTO notification_preferences(user_id,in_app,email,sms,push) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET in_app=$2,email=$3,sms=$4,push=$5 RETURNING in_app,email,sms,push',
+          [actor.id, p.in_app, p.email, p.sms, p.push],
+          sql,
+        )
+      )[0];
+    });
   }
 }
 @Controller('v1/account')
 export class ProductController {
-  constructor(readonly product: Product) {}
+  constructor(
+    readonly product: Product,
+    readonly quotas: PublicationQuotas,
+    readonly subscriptions: ListingSubscriptions,
+  ) {}
+  @Get('listing-subscriptions') listingSubscriptions(
+    @CurrentActor() actor: Actor,
+  ) {
+    return this.subscriptions.list(actor);
+  }
+  @Post('listing-subscriptions/:id') subscribe(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.subscriptions.subscribe(actor, id, body);
+  }
+  @Post('listing-subscriptions/:id/disable') disableSubscription(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.subscriptions.disable(actor, id, body);
+  }
+  @Get('publication-quota') publicationQuota(@CurrentActor() actor: Actor) {
+    return this.quotas.own(actor);
+  }
   @Get('collections/:kind') collections(
     @CurrentActor() a: Actor,
     @Param('kind') k: string,
@@ -378,10 +468,11 @@ export class ProductController {
   }
 }
 @Module({
-  imports: [ListingAccessModule, SearchModule],
+  imports: [ListingAccessModule, SearchModule, PublicationQuotaModule],
   controllers: [ProductController],
   providers: [
     Product,
+    ListingSubscriptions,
     {
       provide: NotificationTransport,
       useClass: UnconfiguredNotificationTransport,

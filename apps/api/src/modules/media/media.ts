@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Injectable,
@@ -13,6 +14,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { ApiOperation } from '@nestjs/swagger';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { z } from 'zod';
@@ -113,6 +115,17 @@ export class Media {
           );
           if (!['draft', 'paused', 'rejected'].includes(listing.status))
             throw new ConflictException('Listing must be editable');
+          if (input.kind === 'photo') {
+            const [photos] = await this.db.rows<{ count: string }>(
+              "SELECT count(*) AS count FROM media WHERE listing_id=$1 AND kind='photo'",
+              [listing.id],
+              sql,
+            );
+            if (Number(photos!.count) >= 21)
+              throw new ConflictException(
+                'A listing may have at most 21 photos',
+              );
+          }
           const id = randomUUID(),
             objectKey = `originals/${id}.${input.mime.split('/')[1]}`;
           await this.storage.put(objectKey, bytes, input.mime);
@@ -154,9 +167,67 @@ export class Media {
       [listingId],
     );
   }
+  async removeImage(actor: Actor, mediaId: string) {
+    seller(actor);
+    const id = parse(uuid, mediaId);
+    const keys = await this.db.transaction(async (sql) => {
+      const [media] = await this.db.rows<MediaRow>(
+        'SELECT * FROM media WHERE id=$1',
+        [id],
+        sql,
+      );
+      if (!media) throw new NotFoundException('Media not found');
+      const listing = await this.access.get(actor, media.listing_id, sql, true);
+      if (!['draft', 'paused', 'rejected'].includes(listing.status))
+        throw new ConflictException('Listing must be editable');
+      if (!['ready', 'failed'].includes(media.state))
+        throw new ConflictException('Image processing must finish first');
+      const job = await sql.query(
+        'DELETE FROM media_jobs WHERE media_id=$1 AND state=$2 RETURNING id',
+        [id, media.state === 'ready' ? 'done' : 'dead'],
+      );
+      if (!job.rowCount) {
+        const remaining = await sql.query(
+          'SELECT id FROM media_jobs WHERE media_id=$1',
+          [id],
+        );
+        if (media.state === 'failed' || remaining.rowCount)
+          throw new ConflictException('Image processing must finish first');
+      }
+      const removed = await sql.query(
+        'DELETE FROM media WHERE id=$1 RETURNING id',
+        [id],
+      );
+      if (!removed.rowCount) throw new NotFoundException('Media not found');
+      await sql.query(
+        'UPDATE listings SET version=version+1,updated_at=now() WHERE id=$1',
+        [listing.id],
+      );
+      await this.audit.history(
+        sql,
+        actor.id,
+        listing.id,
+        'listing.media.removed',
+        { mediaId: id, version: listing.version },
+        { version: listing.version + 1 },
+      );
+      return new Set([
+        media.original_key,
+        ...Object.values(media.variants).map(({ key }) => key),
+      ]);
+    });
+    await Promise.all(
+      [...keys].map((key) =>
+        this.storage
+          .delete(key)
+          .catch(() => console.error('media_orphan_cleanup_failed')),
+      ),
+    );
+    return { ok: true };
+  }
   async publicAssets(sql: Sql, listingId: string) {
     const rows = await this.db.rows<MediaRow & { kind: string }>(
-      "SELECT id,kind,variants FROM media WHERE listing_id=$1 AND state='ready' ORDER BY created_at LIMIT 100",
+      "SELECT id,kind,variants FROM media WHERE listing_id=$1 AND state='ready' ORDER BY (kind='photo') DESC, created_at, id LIMIT 100",
       [listingId],
       sql,
     );
@@ -178,13 +249,17 @@ export class Media {
   }
   async ready(sql: Sql, listingId: string) {
     const [row] = await this.db.rows<{ ready: string; pending: string }>(
-      "SELECT count(*) FILTER(WHERE state='ready') AS ready,count(*) FILTER(WHERE state<>'ready') AS pending FROM media WHERE listing_id=$1",
+      "SELECT count(*) FILTER(WHERE state='ready' AND kind='photo') AS ready,count(*) FILTER(WHERE state<>'ready') AS pending FROM media WHERE listing_id=$1",
       [listingId],
       sql,
     );
-    if (Number(row!.ready) < 1 || Number(row!.pending) > 0)
+    if (
+      Number(row!.ready) < 5 ||
+      Number(row!.ready) > 21 ||
+      Number(row!.pending) > 0
+    )
       throw new ConflictException(
-        'At least one ready image and no pending/failed media required',
+        '5 to 21 ready photos and no pending/failed media required',
       );
   }
   async content(
@@ -224,6 +299,13 @@ export class MediaController {
     @Param('id') id: string,
   ) {
     return this.media.list(actor, parse(uuid, id));
+  }
+  @ApiOperation({
+    summary: 'Remove a processed photo or floor plan from an editable listing',
+  })
+  @Delete(':id')
+  removeImage(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.media.removeImage(actor, id);
   }
   @Public() @Get(':id/:variant') content(
     @CurrentActor() actor: Actor,

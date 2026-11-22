@@ -2,12 +2,53 @@
 import { Button } from '@raui/ui';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import type { ListingCard, SearchDefinition } from '@raui/types/product';
+import type {
+  AccountNotification,
+  ListingCard,
+  SearchDefinition,
+} from '@raui/types/product';
 import { api, setCsrf, track } from '../lib/client';
 import { attributeLabels } from '../lib/labels';
+import { savedSearchSummary } from '../lib/saved-search-summary';
 import { Card } from './card';
+import AgencyPublicProfiles from './agency-public-profiles';
+import AgentPublicProfile from './agent-public-profile';
+import AccountProfile from './account-profile';
+import AccountSubscriptions from './account-subscriptions';
+interface AccountUser {
+  id: string;
+  role: string;
+  display_name: string;
+  public_id: string;
+  email_verified_at?: string | null;
+  phone_verified_at?: string | null;
+  registration_approval_state?: 'pending' | 'approved' | 'rejected';
+  registration_approval_reason?: string | null;
+}
+const cabinetTitles = new Map([
+  ['buyer', 'Кабинет покупателя'],
+  ['owner', 'Кабинет собственника'],
+  ['agent', 'Кабинет риелтора'],
+  ['agency', 'Кабинет агентства'],
+  ['developer', 'Кабинет застройщика'],
+]);
+const inboxPrice = (minor: number) => {
+  const value = BigInt(minor);
+  return `${(value / 100n).toLocaleString('ru-RU')},${(value % 100n).toString().padStart(2, '0')} ₽`;
+};
+const sessionExpired = (error: unknown) =>
+  error instanceof Error && 'status' in error && error.status === 401;
+const approved = (user: AccountUser) =>
+  !user.registration_approval_state ||
+  user.registration_approval_state === 'approved';
 type Tab =
-  'favorite' | 'compare' | 'recent' | 'saved' | 'messages' | 'notifications';
+  | 'favorite'
+  | 'compare'
+  | 'recent'
+  | 'saved'
+  | 'messages'
+  | 'notifications'
+  | 'subscriptions';
 interface Saved {
   id: string;
   name: string;
@@ -22,13 +63,13 @@ interface Message {
   body: string;
   created_at: string;
 }
-interface Notification {
-  id: string;
-  thread_id: string;
-  read_at: string | null;
-}
-export default function Account() {
-  const [user, setUser] = useState<{ display_name: string } | null>(null),
+export default function Account({
+  continueListing = false,
+}: {
+  continueListing?: boolean;
+} = {}) {
+  const [user, setUser] = useState<AccountUser | null>(null),
+    [profileOpen, setProfileOpen] = useState(false),
     [checking, setChecking] = useState(true),
     [tab, setTab] = useState<Tab>('favorite'),
     [notice, setNotice] = useState(''),
@@ -36,7 +77,7 @@ export default function Account() {
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
     [threads, setThreads] = useState<Thread[]>([]),
-    [notifications, setNotifications] = useState<Notification[]>([]),
+    [notifications, setNotifications] = useState<AccountNotification[]>([]),
     [activeThread, setActiveThread] = useState(''),
     [messages, setMessages] = useState<Message[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
@@ -46,6 +87,7 @@ export default function Account() {
   const collectionRequest = useRef(0);
   const navigationEpoch = useRef(0);
   const threadRequest = useRef(0);
+  const profileRequest = useRef(0);
   function selectTab(next: Tab) {
     const navigation = ++navigationEpoch.current;
     threadRequest.current++;
@@ -60,6 +102,7 @@ export default function Account() {
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab('favorite');
+    setProfileOpen(false);
     setNotice('');
     setRegister(false);
     setItems([]);
@@ -76,11 +119,11 @@ export default function Account() {
   useEffect(() => {
     const epochRef = identityEpoch;
     const epoch = identityEpoch.current;
-    api<{ display_name: string }>('v1/auth/me')
+    api<AccountUser>('v1/auth/me')
       .then((u) => {
         if (epoch !== identityEpoch.current) return;
         setUser(u);
-        void load('favorite');
+        if (approved(u)) void load('favorite');
       })
       .catch(() => {})
       .finally(() => {
@@ -91,6 +134,7 @@ export default function Account() {
     };
   }, []);
   async function load(t: Tab, after?: string) {
+    if (t === 'subscriptions') return;
     const epoch = identityEpoch.current;
     const request = ++collectionRequest.current;
     try {
@@ -128,9 +172,10 @@ export default function Account() {
         setThreads((previous) => (after ? [...previous, ...r.items] : r.items));
         setCursor(r.cursor);
       } else {
-        const r = await api<{ items: Notification[]; cursor: string | null }>(
-          'v1/account/notifications' + (after ? '?cursor=' + after : ''),
-        );
+        const r = await api<{
+          items: AccountNotification[];
+          cursor: string | null;
+        }>('v1/account/notifications' + (after ? '?cursor=' + after : ''));
         if (
           epoch !== identityEpoch.current ||
           request !== collectionRequest.current
@@ -194,6 +239,40 @@ export default function Account() {
       return false;
     }
   }
+  function expireIdentity(epoch: number) {
+    if (epoch !== identityEpoch.current) return;
+    clearPrivateState();
+    setCsrf('');
+    setUser(null);
+    setNotice('Войдите в аккаунт, чтобы продолжить.');
+  }
+  async function refreshProfile() {
+    const epoch = identityEpoch.current;
+    const request = ++profileRequest.current;
+    try {
+      const current = await api<AccountUser>('v1/auth/me');
+      if (epoch !== identityEpoch.current || request !== profileRequest.current)
+        return;
+      collectionRequest.current++;
+      navigationEpoch.current++;
+      threadRequest.current++;
+      setUser(current);
+      setItems([]);
+      setSaved([]);
+      setThreads([]);
+      setNotifications([]);
+      setActiveThread('');
+      setMessages([]);
+      setCursor(null);
+      setMessageCursor(null);
+      if (approved(current)) void load(tab);
+    } catch (error) {
+      if (epoch !== identityEpoch.current || request !== profileRequest.current)
+        return;
+      if (sessionExpired(error)) expireIdentity(epoch);
+      else setNotice((error as Error).message);
+    }
+  }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
   if (!user)
     return (
@@ -206,17 +285,23 @@ export default function Account() {
             const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
-              if (register)
-                await api('v1/auth/register', 'POST', {
+              let deliveryUnavailable = false;
+              if (register) {
+                const created = await api<{
+                  verificationDelivery?: 'accepted' | 'unavailable';
+                }>('v1/auth/register', 'POST', {
                   email: d.get('email'),
                   password: d.get('password'),
                   displayName: d.get('name'),
-                  role: 'buyer',
+                  role: d.get('role'),
                 });
+                deliveryUnavailable =
+                  created.verificationDelivery === 'unavailable';
+              }
               if (epoch !== identityEpoch.current) return;
               const result = await api<{
                 csrfToken: string;
-                user: { display_name: string };
+                user: AccountUser;
               }>('v1/auth/login', 'POST', {
                 email: d.get('email'),
                 password: d.get('password'),
@@ -226,7 +311,11 @@ export default function Account() {
               clearPrivateState();
               setCsrf(result.csrfToken);
               setUser(result.user);
-              void load('favorite');
+              if (deliveryUnavailable)
+                setNotice(
+                  'Аккаунт создан. Не удалось подтвердить отправку письма. Запросите письмо повторно в профиле.',
+                );
+              if (approved(result.user)) void load('favorite');
             } catch (error) {
               if (epoch !== identityEpoch.current) return;
               setNotice((error as Error).message);
@@ -234,10 +323,41 @@ export default function Account() {
           }}
         >
           {register && (
-            <label>
-              Имя
-              <input name="name" autoComplete="name" required maxLength={100} />
-            </label>
+            <>
+              <label>
+                Кто вы?
+                <select
+                  name="role"
+                  defaultValue=""
+                  required
+                  aria-describedby="registration-role-help"
+                >
+                  <option value="" disabled>
+                    Выберите роль
+                  </option>
+                  <option value="buyer">Ищу недвижимость</option>
+                  <option value="owner">Собственник</option>
+                  <option value="agent">Агент</option>
+                  <option value="agency">Агентство</option>
+                  <option value="developer">Застройщик</option>
+                </select>
+              </label>
+              <p id="registration-role-help">
+                Покупаете или арендуете — «Ищу недвижимость». Размещаете свой
+                объект — «Собственник». Работаете риелтором — «Агент».
+                Представляете агентство — «Агентство», строительную компанию —
+                «Застройщик».
+              </p>
+              <label>
+                Имя
+                <input
+                  name="name"
+                  autoComplete="name"
+                  required
+                  maxLength={100}
+                />
+              </label>
+            </>
           )}
           <label>
             Email
@@ -257,33 +377,96 @@ export default function Account() {
             {register ? 'Создать и войти' : 'Войти'}
           </Button>
         </form>
+        {!register && (
+          <p>
+            <Link href="/account/forgot-password">Забыли пароль?</Link>
+          </p>
+        )}
         <Button onClick={() => setRegister(!register)}>
           {register ? 'Уже есть аккаунт' : 'Регистрация'}
         </Button>
         {notice && <p role="alert">{notice}</p>}
       </>
     );
+  const logoutButton = (
+    <Button
+      onClick={async () => {
+        const epoch = clearPrivateState();
+        try {
+          await api('v1/auth/logout', 'POST');
+          if (epoch !== identityEpoch.current) return;
+          clearPrivateState();
+          setCsrf('');
+          setUser(null);
+        } catch (e) {
+          if (epoch !== identityEpoch.current) return;
+          if (sessionExpired(e)) expireIdentity(epoch);
+          else setNotice((e as Error).message);
+        }
+      }}
+    >
+      Выйти
+    </Button>
+  );
+  const profileEpoch = identityEpoch.current;
+  const heading = cabinetTitles.get(user.role) ?? 'Мой аккаунт';
+  const canList = ['owner', 'agent', 'agency', 'developer', 'admin'].includes(
+    user.role,
+  );
+  const canContinueListing = Boolean(
+    user.email_verified_at && user.phone_verified_at,
+  );
+  if (!approved(user) || profileOpen)
+    return (
+      <>
+        <h1>{heading}</h1>
+        <p>{user.display_name}</p>
+        <p>ID: {user.public_id}</p>
+        {logoutButton}
+        {approved(user) && (
+          <Button onClick={() => setProfileOpen(false)}>
+            Вернуться к разделам аккаунта
+          </Button>
+        )}
+        {notice && <p role="status">{notice}</p>}
+        <AccountProfile
+          key={identityEpoch.current}
+          onRefresh={refreshProfile}
+          onSessionExpired={() => expireIdentity(profileEpoch)}
+        />
+      </>
+    );
   return (
     <>
-      <h1>Мой аккаунт</h1>
+      <h1>{heading}</h1>
       <p>{user.display_name}</p>
-      <Button
-        onClick={async () => {
-          const epoch = clearPrivateState();
-          try {
-            await api('v1/auth/logout', 'POST');
-            if (epoch !== identityEpoch.current) return;
-            clearPrivateState();
-            setCsrf('');
-            setUser(null);
-          } catch (e) {
-            if (epoch !== identityEpoch.current) return;
-            setNotice((e as Error).message);
-          }
-        }}
-      >
-        Выйти
-      </Button>
+      <p>ID: {user.public_id}</p>
+      {continueListing &&
+        canList &&
+        (canContinueListing ? (
+          <Link href="/account/listings#new-listing">
+            Продолжить подачу объявления
+          </Link>
+        ) : (
+          <Button onClick={() => setProfileOpen(true)}>
+            Подтвердить контакты для подачи
+          </Button>
+        ))}
+      {canList && <Link href="/account/listings">Мои объявления</Link>}
+      {user.role === 'agent' && <AgentPublicProfile key={user.public_id} />}
+      {(user.role === 'agent' || user.role === 'agency') && (
+        <AgencyPublicProfiles
+          key={user.public_id}
+          userId={user.id}
+          canCreate={user.role === 'agency'}
+        />
+      )}
+      {logoutButton}
+      {(!continueListing || !canList || canContinueListing) && (
+        <Button onClick={() => setProfileOpen(true)}>
+          Профиль и подтверждение контактов
+        </Button>
+      )}
       <nav className="toolbar" aria-label="Разделы аккаунта">
         {(
           [
@@ -293,6 +476,7 @@ export default function Account() {
             ['saved', 'Сохранённые поиски'],
             ['messages', 'Сообщения'],
             ['notifications', 'Уведомления'],
+            ['subscriptions', 'Подписки'],
           ] as const
         ).map(([key, label]) => (
           <Button
@@ -395,6 +579,9 @@ export default function Account() {
           {saved.map((s) => (
             <article className="panel" key={s.id}>
               <h2>{s.name}</h2>
+              <p style={{ overflowWrap: 'anywhere' }}>
+                {savedSearchSummary(s.definition)}
+              </p>
               <Link
                 href={
                   '/search?definition=' +
@@ -542,6 +729,7 @@ export default function Account() {
           )}
         </>
       )}
+      {tab === 'subscriptions' && <AccountSubscriptions key={user.public_id} />}
       {tab === 'notifications' && (
         <>
           <label>
@@ -573,52 +761,111 @@ export default function Account() {
             />{' '}
             Получать уведомления в аккаунте
           </label>
-          {notifications.length === 0 && <p>Новых уведомлений нет.</p>}
+          {notifications.length === 0 && !cursor && (
+            <p>Новых уведомлений нет.</p>
+          )}
           {notifications.map((n) => (
             <article className="panel" key={n.id}>
-              <p>
-                Новое сообщение · {n.read_at ? 'прочитано' : 'не прочитано'}
-              </p>
-              <Button
-                onClick={async () => {
-                  const epoch = identityEpoch.current;
-                  const navigation = navigationEpoch.current;
-                  let selectedNavigation = navigation;
-                  let selectedThread = threadRequest.current;
-                  try {
-                    await api(
-                      'v1/account/notifications/' + n.id + '/read',
-                      'POST',
-                    );
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    selectedNavigation = selectTab('messages');
-                    selectedThread = threadRequest.current;
-                    await load('messages');
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    await openThread(n.thread_id);
-                  } catch (e) {
-                    if (
-                      epoch !== identityEpoch.current ||
-                      selectedNavigation !== navigationEpoch.current ||
-                      selectedThread !== threadRequest.current
-                    )
-                      return;
-                    setNotice((e as Error).message);
-                  }
-                }}
-              >
-                Прочитать
-              </Button>
+              {n.kind === 'message' ? (
+                <>
+                  <p>
+                    Новое сообщение · {n.read_at ? 'прочитано' : 'не прочитано'}
+                  </p>
+                  <Button
+                    onClick={async () => {
+                      const epoch = identityEpoch.current;
+                      const navigation = navigationEpoch.current;
+                      let selectedNavigation = navigation;
+                      let selectedThread = threadRequest.current;
+                      try {
+                        await api(
+                          'v1/account/notifications/' + n.id + '/read',
+                          'POST',
+                        );
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        selectedNavigation = selectTab('messages');
+                        selectedThread = threadRequest.current;
+                        await load('messages');
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        await openThread(n.thread_id);
+                      } catch (e) {
+                        if (
+                          epoch !== identityEpoch.current ||
+                          selectedNavigation !== navigationEpoch.current ||
+                          selectedThread !== threadRequest.current
+                        )
+                          return;
+                        setNotice((e as Error).message);
+                      }
+                    }}
+                  >
+                    Прочитать
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p>
+                    {n.event.kind === 'price_drop'
+                      ? `Цена снизилась до ${inboxPrice(n.event.priceMinor)}`
+                      : n.event.available
+                        ? 'Объявление снова доступно'
+                        : 'Объявление больше недоступно'}
+                  </p>
+                  <p>{n.read_at ? 'прочитано' : 'не прочитано'}</p>
+                  {(n.event.kind === 'price_drop' || n.event.available) && (
+                    <Link href={'/listings/' + n.listing_id}>
+                      Открыть объявление
+                    </Link>
+                  )}
+                  <Button
+                    disabled={Boolean(n.read_at)}
+                    onClick={async () => {
+                      const epoch = identityEpoch.current;
+                      const navigation = navigationEpoch.current;
+                      const request = collectionRequest.current;
+                      try {
+                        await api(
+                          'v1/account/notifications/' + n.id + '/read',
+                          'POST',
+                        );
+                        if (
+                          epoch !== identityEpoch.current ||
+                          navigation !== navigationEpoch.current ||
+                          request !== collectionRequest.current
+                        )
+                          return;
+                        setNotifications((previous) =>
+                          previous.map((item) =>
+                            item.id === n.id
+                              ? { ...item, read_at: new Date().toISOString() }
+                              : item,
+                          ),
+                        );
+                      } catch (error) {
+                        if (
+                          epoch !== identityEpoch.current ||
+                          navigation !== navigationEpoch.current ||
+                          request !== collectionRequest.current
+                        )
+                          return;
+                        setNotice((error as Error).message);
+                      }
+                    }}
+                  >
+                    Отметить прочитанным
+                  </Button>
+                </>
+              )}
             </article>
           ))}
         </>

@@ -15,9 +15,16 @@ if (
 for (const testFile of [
   'migration.integration.test.js',
   'core.integration.test.js',
+  'staff-permissions.integration.test.js',
+  'public-id.integration.test.js',
+  'registration-approval.integration.test.js',
+  'publication-quota.integration.test.js',
+  'phone-otp.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',
   'professional.integration.test.js',
+  'subscription-daily.integration.test.js',
+  'subscription-visibility.integration.test.js',
   'ai-trust.integration.test.js',
 ]) {
   const name = `raui_test_${randomBytes(8).toString('hex')}`;

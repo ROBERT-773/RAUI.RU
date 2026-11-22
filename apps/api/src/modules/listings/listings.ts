@@ -24,6 +24,7 @@ import {
   uuid,
 } from '../../common/security';
 import { Database, Sql } from '../database/database';
+import { visibleProfessionals } from '../professional/public-profile-visibility';
 import { Audit } from '../audit/audit';
 import {
   Listing,
@@ -36,7 +37,9 @@ import {
   Organizations,
   OrganizationsModule,
 } from '../organizations/organizations';
+import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
+import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
   processing: ['draft', 'moderation'],
@@ -65,10 +68,28 @@ export const fields = {
   title: z.string().trim().max(200),
   price: z.number().positive().max(99_999_999_999_999).multipleOf(0.01),
   description: z.string().max(10000),
-  terms: z.record(
-    z.string().max(50),
-    z.union([z.string().max(1000), z.number(), z.boolean()]),
-  ),
+  terms: z
+    .record(
+      z.string().max(50),
+      z.union([z.string().max(1000), z.number(), z.boolean()]),
+    )
+    .refine(
+      (terms) =>
+        terms.guestCapacity === undefined ||
+        z.number().int().min(1).max(9999).safeParse(terms.guestCapacity)
+          .success,
+      { path: ['guestCapacity'], message: 'Invalid guest capacity' },
+    )
+    .refine(
+      ({ availableFrom, availableUntil }) =>
+        (availableFrom === undefined && availableUntil === undefined) ||
+        (typeof availableFrom === 'string' &&
+          typeof availableUntil === 'string' &&
+          z.iso.date().safeParse(availableFrom).success &&
+          z.iso.date().safeParse(availableUntil).success &&
+          availableFrom < availableUntil),
+      { path: ['availableUntil'], message: 'Invalid availability period' },
+    ),
 };
 @Injectable()
 export class Listings {
@@ -81,6 +102,19 @@ export class Listings {
     private readonly audit: Audit,
     private readonly idem: Idempotency,
   ) {}
+  /** Internal capture at the authoritative public-policy query, in caller's transaction. */
+  async publicPriceSnapshot(id: string, sql: Sql, capturedAt: Date) {
+    const listing = await this.access.visible(id, sql);
+    if (!listing) return null;
+    if (listing.price === null)
+      throw new Error('Invalid public price snapshot');
+    return buildPublicPriceSnapshot({
+      price: listing.price,
+      currency: 'RUB',
+      listingVersion: listing.version,
+      capturedAt,
+    });
+  }
   async create(actor: Actor, body: unknown, key: unknown) {
     seller(actor);
     const input = parse(
@@ -165,13 +199,25 @@ export class Listings {
       'SELECT p.id,p.category_code,p.attributes,a.formatted,a.locality,ST_X(a.point) AS longitude,ST_Y(a.point) AS latitude FROM properties p JOIN addresses a ON a.id=p.address_id WHERE p.id=$1',
       [listing.property_id],
     );
-    const media = await this.media.publicAssets(this.db.pool, id);
+    const [media, professionals] = await Promise.all([
+      this.media.publicAssets(this.db.pool, id),
+      this.db.rows<{ id: string; name: string; kind: 'agent' | 'agency' }>(
+        `SELECT DISTINCT p.id, p.display_name AS name,
+                CASE WHEN p.agent_id IS NULL THEN 'agency' ELSE 'agent' END AS kind
+         ${visibleProfessionals}
+         AND (p.agent_id = $1 OR p.agency_id = $2)
+         ORDER BY kind, p.id`,
+        [listing.seller_id, listing.organization_id],
+      ),
+    ]);
     return {
       id: listing.id,
       title: listing.title,
       price: listing.price,
       dealType: listing.deal_type,
       description: listing.description,
+      rentalTerms: publicRentalTerms(listing.deal_type, listing.terms),
+      professionals,
       property,
       media,
     };
@@ -232,6 +278,10 @@ export class Listings {
     });
   }
   async validate(sql: Sql, listing: Listing, actor: Actor) {
+    if (listing.description.trim().length < 15)
+      throw new BadRequestException(
+        'Description must contain at least 15 characters',
+      );
     const property = await this.properties.access(
       actor,
       listing.property_id,
@@ -239,8 +289,8 @@ export class Listings {
     );
     await this.properties.complete(property, sql);
     if (
-      listing.title.length < 3 ||
-      !listing.price ||
+      listing.title.trim().length < 3 ||
+      !Number.isFinite(Number(listing.price)) ||
       Number(listing.price) <= 0
     )
       throw new BadRequestException('Title and price required for publication');
@@ -289,11 +339,25 @@ export class Listings {
             "UPDATE moderation_cases SET state='cancelled',resolved_at=now(),reason='withdrawn' WHERE listing_id=$1 AND state='pending'",
             [id],
           );
+        const publicBefore =
+          listing.status === 'published'
+            ? await this.access.visible(id, sql)
+            : null;
         const [updated] = await this.db.rows<Listing>(
           'UPDATE listings SET status=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',
           [id, input.status],
           sql,
         );
+        if (publicBefore) {
+          await enqueueImmediateListingNotifications(sql, {
+            listingId: id,
+            version: updated!.version,
+            publicBefore: true,
+            publicAfter: false,
+            previousPrice: '',
+            price: '',
+          });
+        }
         await this.audit.history(
           sql,
           actor.id,
@@ -318,10 +382,50 @@ export class Listings {
   async history(actor: Actor, id: string) {
     await this.access.get(actor, id);
     return this.db.rows(
-      'SELECT * FROM listing_history WHERE listing_id=$1 ORDER BY id LIMIT 200',
+      `SELECT * FROM (
+        SELECT * FROM listing_history WHERE listing_id=$1 ORDER BY id DESC LIMIT 200
+      ) AS recent ORDER BY id`,
       [id],
     );
   }
+}
+
+export function publicRentalTerms(
+  deal: Listing['deal_type'],
+  terms: Listing['terms'],
+) {
+  if (!terms || (deal !== 'long_rent' && deal !== 'short_rent')) return {};
+  const deposit = z.number().min(0).max(999999999).safeParse(terms.deposit);
+  const result: import('@raui/types/product').PublicRentalTerms = {};
+  if (deposit.success) result.deposit = deposit.data;
+  if (deal === 'long_rent') {
+    const commission = z.number().min(0).max(100).safeParse(terms.commission);
+    if (commission.success) result.commission = commission.data;
+    if (typeof terms.utilitiesIncluded === 'boolean')
+      result.utilitiesIncluded = terms.utilitiesIncluded;
+  } else {
+    const guests = z
+      .number()
+      .int()
+      .min(1)
+      .max(9999)
+      .safeParse(terms.guestCapacity);
+    const nights = z
+      .number()
+      .int()
+      .min(1)
+      .max(365)
+      .safeParse(terms.minimumNights);
+    if (guests.success) result.guestCapacity = guests.data;
+    if (nights.success) result.minimumNights = nights.data;
+    const from = z.iso.date().safeParse(terms.availableFrom);
+    const until = z.iso.date().safeParse(terms.availableUntil);
+    if (from.success && until.success && from.data < until.data) {
+      result.availableFrom = from.data;
+      result.availableUntil = until.data;
+    }
+  }
+  return result;
 }
 @Controller('v1/listings')
 export class ListingController {

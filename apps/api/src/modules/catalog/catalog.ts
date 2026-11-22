@@ -29,6 +29,7 @@ export function validateAttributes(
   definitions: Attribute[],
   values: Record<string, unknown>,
   complete = false,
+  category?: string,
 ) {
   for (const code of Object.keys(values)) {
     const definition = definitions.find((d) => d.code === code);
@@ -42,15 +43,46 @@ export function validateAttributes(
     if (
       !valid ||
       (typeof value === 'number' &&
-        (!Number.isFinite(value) || (code === 'area' && value <= 0))) ||
+        (!Number.isFinite(value) ||
+          (['area', 'land_area'].includes(code) && value <= 0))) ||
       (typeof value === 'string' && value.length > 2000)
     )
       throw new BadRequestException(`Invalid attribute: ${code}`);
   }
+  const { floor, floors, area, kitchen_area: kitchen } = values;
+  if (
+    (category !== 'commercial' ||
+      definitions.some(
+        ({ code, required }) => code === 'kitchen_area' && required,
+      )) &&
+    typeof kitchen === 'number' &&
+    (kitchen < 0 || (typeof area === 'number' && kitchen > area))
+  )
+    throw new BadRequestException('Invalid attribute: kitchen_area');
+  const land =
+    category === 'land' ||
+    (category === 'commercial' &&
+      values.commercial_property_type === 'Коммерческая земля');
+  if (
+    (!land ||
+      ['floor', 'floors'].every((key) =>
+        definitions.some(({ code, required }) => code === key && required),
+      )) &&
+    typeof floor === 'number' &&
+    typeof floors === 'number' &&
+    floor > floors
+  )
+    throw new BadRequestException('Floor exceeds building floor count');
   if (complete)
-    for (const definition of definitions)
-      if (definition.required && !(definition.code in values))
-        throw new BadRequestException(`Required attribute: ${definition.code}`);
+    for (const { code, required } of definitions) {
+      const value = values[code];
+      if (
+        required &&
+        (!Object.hasOwn(values, code) ||
+          (typeof value === 'string' && value.trim() === ''))
+      )
+        throw new BadRequestException(`Required attribute: ${code}`);
+    }
 }
 @Injectable()
 export class Catalog {

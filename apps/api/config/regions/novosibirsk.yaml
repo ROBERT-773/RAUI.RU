@@ -1,0 +1,9 @@
+code: novosibirsk
+name: Новосибирская область
+type: oblast
+search_entities: [district, locality, street, house, metro]
+metro_available: true
+directions_available: false
+timezone: Asia/Novosibirsk
+currency: RUB
+geo_bounds: null

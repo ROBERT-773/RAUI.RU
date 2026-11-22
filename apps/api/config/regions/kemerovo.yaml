@@ -1,0 +1,9 @@
+code: kemerovo
+name: Кемеровская область — Кузбасс
+type: oblast
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Novokuznetsk
+currency: RUB
+geo_bounds: null

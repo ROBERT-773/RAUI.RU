@@ -1,0 +1,9 @@
+code: altai_krai
+name: Алтайский край
+type: krai
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Barnaul
+currency: RUB
+geo_bounds: null

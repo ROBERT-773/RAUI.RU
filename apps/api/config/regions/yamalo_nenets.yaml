@@ -1,0 +1,9 @@
+code: yamalo_nenets
+name: Ямало-Ненецкий автономный округ
+type: autonomous_okrug
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Yekaterinburg
+currency: RUB
+geo_bounds: null

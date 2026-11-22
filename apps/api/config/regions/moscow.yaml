@@ -1,0 +1,10 @@
+code: moscow
+name: Москва
+type: city
+search_entities: [okrug, district, metro, street, house]
+metro_available: true
+directions_available: false
+timezone: Europe/Moscow
+currency: RUB
+# Verified region boundaries will be bound in the geo/search integration phase.
+geo_bounds: null

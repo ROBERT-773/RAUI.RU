@@ -1,0 +1,9 @@
+code: sakha
+name: Республика Саха (Якутия)
+type: republic
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Yakutsk
+currency: RUB
+geo_bounds: null

@@ -8,11 +8,18 @@ import {
   CanActivate,
   ExecutionContext,
   SetMetadata,
+  applyDecorators,
   createParamDecorator,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  scrypt,
+  timingSafeEqual,
+} from 'node:crypto';
 import { z } from 'zod';
 import { Database, Sql } from '../modules/database/database';
 import { loadConfig } from '../config';
@@ -26,10 +33,26 @@ export interface Actor {
   email_verified_at: string | null;
   phone_verified_at: string | null;
   session_id: string;
+  registration_approval_state?: 'pending' | 'approved' | 'rejected';
 }
-export type AuthRequest = Request & { actor?: Actor };
+export type AuthRequest = Request & {
+  actor?: Actor;
+  csrfRecoveryToken?: string;
+};
 export const Public = () => SetMetadata('public', true);
 export const AdminOnly = () => SetMetadata('admin', true);
+export const staffPermissions = [
+  'moderation.read',
+  'moderation.decide',
+  'registration.read',
+  'registration.decide',
+] as const;
+export type StaffPermission = (typeof staffPermissions)[number];
+export const StaffPermissionOnly = (permission: StaffPermission) =>
+  applyDecorators(
+    SetMetadata('admin', false),
+    SetMetadata('staffPermission', permission),
+  );
 export const CurrentActor = createParamDecorator(
   (_data: unknown, context: ExecutionContext): Actor =>
     context.switchToHttp().getRequest<AuthRequest>().actor!,
@@ -37,6 +60,10 @@ export const CurrentActor = createParamDecorator(
 export const hash = (value: string | Buffer) =>
   createHash('sha256').update(value).digest('hex');
 export const token = () => randomBytes(32).toString('base64url');
+export const sessionCsrf = (secret: string) =>
+  createHmac('sha256', secret)
+    .update('raui:session-csrf:v1')
+    .digest('base64url');
 export const uuid = z.uuid();
 export function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -114,16 +141,51 @@ export class SessionGuard implements CanActivate {
       throw new UnauthorizedException();
     }
     const [actor] = await this.db.rows<Actor & { csrf_hash: string }>(
-      `SELECT u.id,u.role,u.email_verified_at,u.phone_verified_at,s.id AS session_id,s.csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.active`,
+      `SELECT u.id,u.role,u.email_verified_at,u.phone_verified_at,u.registration_approval_state,s.id AS session_id,s.csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.active`,
       [hash(secret)],
     );
     if (!actor) throw new UnauthorizedException();
-    if (!bearer && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    if (actor.registration_approval_state === 'rejected')
+      throw new ForbiddenException('Registration rejected');
+    if (actor.registration_approval_state === 'pending') {
+      const path = req.url.split('?')[0];
+      const onboarding = new Set([
+        'GET /v1/auth/me',
+        'GET /v1/auth/csrf',
+        'GET /v1/auth/sessions',
+        'POST /v1/auth/logout',
+        'POST /v1/auth/logout-all',
+        'POST /v1/auth/verification/email',
+        'POST /v1/auth/verification/phone',
+        'POST /v1/auth/verification/phone/confirm',
+        'GET /v1/auth/verification/phone/capabilities',
+        'POST /v1/auth/verification/phone/otp',
+        'POST /v1/auth/verification/phone/otp/confirm',
+      ]);
       if (
-        req.headers.origin !== loadConfig().WEB_ORIGIN ||
-        typeof req.headers['x-csrf-token'] !== 'string' ||
-        hash(req.headers['x-csrf-token']) !== actor.csrf_hash
+        !onboarding.has(`${req.method} ${path}`) &&
+        !(
+          req.method === 'DELETE' &&
+          /^\/v1\/auth\/sessions\/[0-9a-f-]{36}$/i.test(path!)
+        )
       )
+        throw new ForbiddenException('Registration approval pending');
+    }
+    if (!bearer) req.csrfRecoveryToken = sessionCsrf(secret);
+    if (!bearer && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const supplied = req.headers['x-csrf-token'];
+      const validToken =
+        typeof supplied === 'string' &&
+        /^[A-Za-z0-9_-]{43}$/.test(supplied) &&
+        (timingSafeEqual(
+          Buffer.from(hash(supplied), 'hex'),
+          Buffer.from(actor.csrf_hash, 'hex'),
+        ) ||
+          timingSafeEqual(
+            Buffer.from(supplied),
+            Buffer.from(req.csrfRecoveryToken!),
+          ));
+      if (req.headers.origin !== loadConfig().WEB_ORIGIN || !validToken)
         throw new ForbiddenException('CSRF validation failed');
     }
     if (
@@ -135,6 +197,20 @@ export class SessionGuard implements CanActivate {
       if (actor.role !== 'admin') throw new ForbiddenException();
       verified(actor);
     }
+    const permission = this.reflector.getAllAndOverride<StaffPermission>(
+      'staffPermission',
+      [context.getHandler(), context.getClass()],
+    );
+    if (permission) {
+      verified(actor);
+      if (actor.role !== 'admin') {
+        const [grant] = await this.db.rows<{ user_id: string }>(
+          'SELECT user_id FROM staff_permission_grants WHERE user_id=$1 AND permission=$2',
+          [actor.id, permission],
+        );
+        if (!grant) throw new ForbiddenException('Staff permission required');
+      }
+    }
     req.actor = actor;
     return true;
   }
@@ -145,7 +221,9 @@ export class RateGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<Request>();
     if (!req.url.startsWith('/v1/')) return true;
-    const sensitive = req.url.startsWith('/v1/auth/');
+    const recoveryRead =
+      req.method === 'GET' && req.url.split('?')[0] === '/v1/auth/csrf';
+    const sensitive = req.url.startsWith('/v1/auth/') && !recoveryRead;
     const cfg = loadConfig();
     const peer = normalizeIp(req.socket?.remoteAddress ?? req.ip);
     const trusted = cfg.TRUSTED_PROXY_PEERS.split(',')

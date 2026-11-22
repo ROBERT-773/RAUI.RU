@@ -31,7 +31,23 @@ async function run() {
     ]);
   let failed = false;
   let cleanupFailed = false;
-  const name = 'raui_test_' + randomBytes(8).toString('hex'),
+  const precreated = process.env.RAUI_E2E_PRECREATED_DATABASE;
+  const publicationOnly = process.argv.includes('--publication-only');
+  const onboardingOnly = process.argv.includes('--onboarding-only');
+  if (publicationOnly && onboardingOnly)
+    throw new Error('Select one focused E2E scenario');
+  const focusedSpecs = publicationOnly
+    ? ['e2e/owner-publication.spec.ts']
+    : onboardingOnly
+      ? ['e2e/registration-onboarding.spec.ts']
+      : [];
+  if (
+    precreated !== undefined &&
+    (!/^raui_test_[a-f0-9]{16}$/.test(precreated) ||
+      source.pathname !== '/' + precreated)
+  )
+    throw new Error('Invalid precreated E2E database');
+  const name = precreated ?? 'raui_test_' + randomBytes(8).toString('hex'),
     admin = new Pool({
       connectionString: source.toString(),
       connectionTimeoutMillis: 3000,
@@ -91,25 +107,55 @@ async function run() {
     await mkdir(directory, { recursive: true });
     // Resource allocation must settle before cleanup can decide ownership.
     // An idle error is sticky but cannot race successful CREATE registration.
-    await admin.query(`CREATE DATABASE "${name}"`);
-    databaseCreated = true;
+    stage = 'fixture-database';
+    if (!precreated) {
+      await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
+      databaseCreated = true;
+    }
+    const {
+      rows: [database],
+    } = await monitor.run(() =>
+      pool.query(
+        "SELECT current_database() AS name, NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public') AS empty",
+      ),
+    );
+    if (database?.name !== name || !database.empty)
+      throw new Error('E2E database isolation unavailable');
+    stage = 'fixture-migrations';
     await monitor.run(() => migrate(pool));
+    stage = 'fixture-records';
     const seller = randomUUID(),
       buyer = randomUUID();
-    for (const [id, email, role] of [
+    for (const [id, email, role, verified = true] of [
       [seller, 'seller@e2e.test', 'owner'],
       [buyer, 'buyer@e2e.test', 'buyer'],
       [randomUUID(), 'outsider@e2e.test', 'buyer'],
+      [randomUUID(), 'admin@e2e.test', 'admin'],
+      [randomUUID(), 'unverified@e2e.test', 'owner', false],
+      // Keep quota journeys isolated from legacy catalog listings and from
+      // each browser's three-publications-per-month counter.
+      ...[
+        'chromium',
+        'firefox',
+        'webkit',
+        'ios-webkit',
+        'android-chromium',
+      ].flatMap((project) => [
+        [randomUUID(), `quota-${project}@e2e.test`, 'owner'],
+        [randomUUID(), `agency-${project}@e2e.test`, 'agency'],
+        [randomUUID(), `agent-${project}@e2e.test`, 'agent'],
+      ]),
     ])
       await monitor.run(async () =>
         pool.query(
-          'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,now(),now())',
+          'INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $6 THEN now() END,CASE WHEN $6 THEN now() END)',
           [
             id,
             email,
             await passwordHash('E2E-only-password-42!'),
             'Тестовый пользователь',
             role,
+            verified,
           ],
         ),
       );
@@ -152,6 +198,7 @@ async function run() {
         ),
       );
     }
+    stage = 'fixture-index';
     await monitor.run(() => index.initialize());
     const rows = (
       await monitor.run(async () =>
@@ -163,7 +210,10 @@ async function run() {
     await monitor.run(() =>
       index.request('/' + index.alias + '/_refresh', 'POST'),
     );
+    stage = 'fixture-services';
     start(['dist/main.js'], process.cwd(), 'e2e-api');
+    start(['dist/worker.js'], process.cwd(), 'e2e-media-worker');
+    start(['dist/search-worker.js'], process.cwd(), 'e2e-search-worker');
     start(
       [
         'node_modules/next/dist/bin/next',
@@ -183,62 +233,65 @@ async function run() {
     ]) {
       await monitor.run(() => waitService(url, children));
     }
-    stage = 'load-authentication';
-    const authentication = await monitor.run(async () => {
-      const response = await fetch('http://127.0.0.1:3101/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'buyer@e2e.test',
-          password: 'E2E-only-password-42!',
-          transport: 'bearer',
-        }),
-        signal: AbortSignal.timeout(5000),
-        redirect: 'error',
-      });
-      if (response.status !== 201) throw new Error('Load fixture login failed');
-      const login = await readLoadJson(response);
-      if (login.user?.id !== buyer || typeof login.sessionToken !== 'string')
-        throw new Error('Load fixture identity failed');
-      const sessionsResponse = await fetch(
-        'http://127.0.0.1:3101/v1/auth/sessions',
-        {
-          headers: { Authorization: 'Bearer ' + login.sessionToken },
+    if (!focusedSpecs.length) {
+      stage = 'load-authentication';
+      const authentication = await monitor.run(async () => {
+        const response = await fetch('http://127.0.0.1:3101/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'buyer@e2e.test',
+            password: 'E2E-only-password-42!',
+            transport: 'bearer',
+          }),
           signal: AbortSignal.timeout(5000),
           redirect: 'error',
-        },
-      );
-      if (sessionsResponse.status !== 200)
-        throw new Error('Load fixture session failed');
-      const sessions = await readLoadJson(sessionsResponse);
-      if (!Array.isArray(sessions) || sessions.length !== 1)
-        throw new Error('Load fixture session inventory failed');
-      return {
-        token: login.sessionToken,
-        buyerId: buyer,
-        sessionId: sessions[0].id,
-        listingIds: rows.map((row) => row.id),
-      };
-    });
-    stage = 'load';
-    const clients = createLoopbackLoadClients();
-    try {
-      await monitor.run(() =>
-        measureLoad(
-          'http://127.0.0.1:3101',
-          rows[0].id,
-          resolve(directory, 'phase4d-load.json'),
-          authentication,
-          { fetch: clients.fetch },
-        ),
-      );
-    } finally {
-      clients.close();
+        });
+        if (response.status !== 201)
+          throw new Error('Load fixture login failed');
+        const login = await readLoadJson(response);
+        if (login.user?.id !== buyer || typeof login.sessionToken !== 'string')
+          throw new Error('Load fixture identity failed');
+        const sessionsResponse = await fetch(
+          'http://127.0.0.1:3101/v1/auth/sessions',
+          {
+            headers: { Authorization: 'Bearer ' + login.sessionToken },
+            signal: AbortSignal.timeout(5000),
+            redirect: 'error',
+          },
+        );
+        if (sessionsResponse.status !== 200)
+          throw new Error('Load fixture session failed');
+        const sessions = await readLoadJson(sessionsResponse);
+        if (!Array.isArray(sessions) || sessions.length !== 1)
+          throw new Error('Load fixture session inventory failed');
+        return {
+          token: login.sessionToken,
+          buyerId: buyer,
+          sessionId: sessions[0].id,
+          listingIds: rows.map((row) => row.id),
+        };
+      });
+      stage = 'load';
+      const clients = createLoopbackLoadClients();
+      try {
+        await monitor.run(() =>
+          measureLoad(
+            'http://127.0.0.1:3101',
+            rows[0].id,
+            resolve(directory, 'phase4d-load.json'),
+            authentication,
+            { fetch: clients.fetch },
+          ),
+        );
+      } finally {
+        clients.close();
+      }
     }
     stage = 'browser-regression';
     const child = spawn(
       process.execPath,
-      ['node_modules/@playwright/test/cli.js', 'test'],
+      ['node_modules/@playwright/test/cli.js', 'test', ...focusedSpecs],
       { cwd: resolve('../web'), env, stdio: 'inherit' },
     );
     const browser = trackProcess(child, 'browser');
@@ -250,8 +303,12 @@ async function run() {
       children.slice(0, -1).some((record) => record.outcome || record.logFailed)
     )
       failed = true;
-  } catch {
+  } catch (error) {
     failed = true;
+    if (/^[A-Z0-9]{5,20}$/.test(error?.code ?? ''))
+      console.error('E2E failure code: ' + error.code);
+    if (/^[a-z][a-z0-9_]{0,62}$/.test(error?.constraint ?? ''))
+      console.error('E2E constraint: ' + error.constraint);
     // Bounded identifiers only: no URLs, credentials, private rows or raw errors.
     if (process.env.GITHUB_ACTIONS === 'true')
       console.error(`::error title=E2E preflight::Failed stage: ${stage}`);
@@ -312,7 +369,14 @@ async function run() {
       cleanupFailed = true;
     }
     await writeFile(
-      resolve(directory, 'phase4d-e2e-summary.json'),
+      resolve(
+        directory,
+        publicationOnly
+          ? 'publication-e2e-summary.json'
+          : onboardingOnly
+            ? 'onboarding-e2e-summary.json'
+            : 'phase4d-e2e-summary.json',
+      ),
       JSON.stringify(
         {
           version: 1,

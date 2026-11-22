@@ -1,0 +1,882 @@
+import { afterEach, expect, test, vi } from 'vitest';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import NewListing from './new-listing';
+import { api, ApiError } from '../lib/client';
+vi.mock('../lib/client', async (original) => ({
+  ...(await original<typeof import('../lib/client')>()),
+  api: vi.fn(),
+}));
+afterEach(() => {
+  cleanup();
+  vi.resetAllMocks();
+});
+function setup(fail: boolean | ApiError = false) {
+  let failed = false;
+  vi.mocked(api).mockImplementation(async (path, method) => {
+    if (path.startsWith('v1/geo/geocode?'))
+      return [
+        {
+          formatted: 'Москва, улица 1',
+          locality: 'Москва',
+          regionCode: 'moscow',
+          longitude: 37.6,
+          latitude: 55.7,
+        },
+        {
+          formatted: 'Тула, улица 1',
+          locality: 'Тула',
+          regionCode: 'tula',
+          longitude: 37.6,
+          latitude: 54.2,
+        },
+      ];
+    if (path === 'v1/organizations')
+      return [
+        {
+          id: 'agency-1',
+          name: 'Город',
+          kind: 'agency',
+          active: true,
+          membership_active: true,
+        },
+        {
+          id: 'agency-2',
+          name: 'Архивное агентство',
+          kind: 'agency',
+          active: true,
+          membership_active: false,
+        },
+      ];
+    if (path === 'v1/categories')
+      return [
+        { code: 'apartment', name: 'Квартира' },
+        { code: 'land', name: 'Участок' },
+        { code: 'commercial', name: 'Коммерческая недвижимость' },
+      ];
+    if (path === 'v1/categories/commercial/attributes')
+      return [
+        {
+          code: 'commercial_property_type',
+          name: 'Тип коммерческого помещения',
+          kind: 'enum',
+          required: true,
+          options: ['Офис', 'Склад', 'Коммерческая земля'],
+        },
+        {
+          code: 'area',
+          name: 'Площадь',
+          kind: 'number',
+          required: true,
+          options: [],
+        },
+        {
+          code: 'floor',
+          name: 'Этаж',
+          kind: 'number',
+          required: false,
+          options: [],
+        },
+        {
+          code: 'floors',
+          name: 'Этажей',
+          kind: 'number',
+          required: false,
+          options: [],
+        },
+      ];
+    if (path.endsWith('/attributes'))
+      return [
+        {
+          code: 'area',
+          name: 'Площадь',
+          kind: 'number',
+          required: true,
+          options: [],
+        },
+        {
+          code: 'floor',
+          name: 'Этаж',
+          kind: 'number',
+          required: false,
+          options: [],
+        },
+        {
+          code: 'floors',
+          name: 'Этажей',
+          kind: 'number',
+          required: false,
+          options: [],
+        },
+      ];
+    if (path === 'v1/properties' && method === 'POST')
+      return { id: 'property-1' };
+    if (path === 'v1/listings' && method === 'POST') {
+      if (fail && !failed) {
+        failed = true;
+        throw fail instanceof ApiError ? fail : new Error('Недоступно');
+      }
+      return { id: 'listing-1' };
+    }
+    throw new Error(path);
+  });
+}
+async function fill(
+  deal = 'sale',
+  agency?: string,
+  region?: string,
+  checkFloors = false,
+) {
+  await screen.findByRole('option', { name: 'Квартира' });
+  if (agency) {
+    await screen.findByRole('option', { name: 'Город' });
+    expect(
+      screen.queryByRole('option', { name: 'Архивное агентство' }),
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText('От чьего имени'), {
+      target: { value: agency },
+    });
+  }
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  fireEvent.change(screen.getByLabelText('Сделка'), {
+    target: { value: deal },
+  });
+  await screen.findByLabelText('Площадь *');
+  const next = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  next();
+  if (region) {
+    fireEvent.change(screen.getByLabelText('Регион'), {
+      target: { value: region },
+    });
+  }
+  for (const [label, value] of [
+    ['Адрес', 'Москва, улица 1'],
+    ['Населённый пункт', 'Москва'],
+    ['Долгота', '0'],
+    ['Широта', '0'],
+  ] as const)
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  next();
+  if (checkFloors) {
+    const form = screen.getByLabelText('Площадь *').closest('form');
+    if (!form) throw new Error('Listing form is missing');
+    fireEvent.submit(form);
+    expect(screen.getByRole('alert').textContent).toBe('Заполните: Площадь');
+    fireEvent.change(screen.getByLabelText('Площадь *'), {
+      target: { value: '0' },
+    });
+    next();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Укажите значение больше нуля в поле «Площадь».',
+    );
+  }
+  fireEvent.change(screen.getByLabelText('Площадь *'), {
+    target: { value: '40' },
+  });
+  if (checkFloors) {
+    fireEvent.change(screen.getByLabelText('Этаж'), { target: { value: '8' } });
+    fireEvent.change(screen.getByLabelText('Этажей'), {
+      target: { value: '5' },
+    });
+    next();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Этаж не может быть больше количества этажей в доме.',
+    );
+    fireEvent.change(screen.getByLabelText('Этаж'), { target: { value: '5' } });
+  }
+  next();
+  for (const [label, value] of [
+    ['Заголовок', 'Квартира рядом с парком'],
+    [
+      deal === 'long_rent'
+        ? 'Цена, ₽ в месяц'
+        : deal === 'short_rent'
+          ? 'Цена, ₽ за сутки'
+          : 'Цена, ₽',
+      deal === 'long_rent'
+        ? '50000'
+        : deal === 'short_rent'
+          ? '5000'
+          : '5000000',
+    ],
+  ] as const)
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+test('an expired session during creation keeps the typed fields and offers sign-in', async () => {
+  setup();
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, ...args) => {
+    if (path === 'v1/properties')
+      throw new ApiError('Войдите в аккаунт, чтобы продолжить.', 401);
+    return respond(path, ...args);
+  });
+  render(<NewListing onCreated={vi.fn()} />);
+  await fill();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  const link = await screen.findByRole('link', { name: 'Войти снова' });
+  expect(link.getAttribute('href')).toBe('/account?action=publish');
+  expect(screen.getByLabelText<HTMLInputElement>('Заголовок').value).toBe(
+    'Квартира рядом с парком',
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Повторить сохранение',
+    }).disabled,
+  ).toBe(true);
+  expect(
+    vi.mocked(api).mock.calls.some(([path]) => path === 'v1/listings'),
+  ).toBe(false);
+});
+test('an agency without an organization can open its setup section', async () => {
+  setup();
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, ...args) =>
+    path === 'v1/organizations' ? [] : respond(path, ...args),
+  );
+  render(<NewListing onCreated={vi.fn()} sellerRole="agency" />);
+  const link = await screen.findByRole('link', {
+    name: 'создайте агентство в кабинете',
+  });
+  expect(link.getAttribute('href')).toBe('/account#agencies');
+  expect(
+    (screen.getByRole('button', { name: 'Далее' }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});
+test('a revoked agency selection refreshes choices and keeps entered fields', async () => {
+  setup();
+  const respond = vi.mocked(api).getMockImplementation()!;
+  let revoked = false;
+  vi.mocked(api).mockImplementation(async (path, method, ...args) => {
+    if (path === 'v1/properties') {
+      revoked = true;
+      throw new ApiError('Forbidden', 403);
+    }
+    if (path === 'v1/organizations' && revoked) return [];
+    return respond(path, method, ...args);
+  });
+  render(<NewListing onCreated={vi.fn()} sellerRole="agent" />);
+  await fill('sale', 'agency-1');
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'Введённые данные сохранены в форме.',
+  );
+  await waitFor(() =>
+    expect(
+      vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/organizations'),
+    ).toHaveLength(2),
+  );
+  const next = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  next();
+  expect((screen.getByLabelText('Адрес') as HTMLInputElement).value).toBe(
+    'Москва, улица 1',
+  );
+  next();
+  next();
+  expect((screen.getByLabelText('Заголовок') as HTMLInputElement).value).toBe(
+    'Квартира рядом с парком',
+  );
+});
+test('an agency account with multiple organizations submits the explicitly selected one', async () => {
+  setup();
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, ...args) => {
+    const result = await respond(path, ...args);
+    if (path !== 'v1/organizations' || !Array.isArray(result)) return result;
+    return [
+      ...result,
+      {
+        id: 'agency-3',
+        name: 'Квартал',
+        kind: 'agency',
+        active: true,
+        membership_active: true,
+      },
+    ];
+  });
+  const created = vi.fn();
+  render(<NewListing onCreated={created} sellerRole="agency" />);
+  await screen.findByRole('option', { name: 'Квартал' });
+  const representation = screen.getByLabelText(
+    'От чьего имени',
+  ) as HTMLSelectElement;
+  expect(representation.value).toBe('');
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  await screen.findByLabelText('Площадь *');
+  expect(
+    (screen.getByRole('button', { name: 'Далее' }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  await fill('sale', 'agency-3');
+  expect(screen.getByText('Агентство: Квартал', { exact: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/properties',
+    'POST',
+    expect.objectContaining({ organizationId: 'agency-3' }),
+    expect.any(Object),
+  );
+});
+test.each([
+  { initialAgencyId: 'agency-1', expected: 'agency-1' },
+  { initialAgencyId: 'agency-2', expected: '' },
+])(
+  'an agent link preselects only an active agency ($initialAgencyId)',
+  async ({ initialAgencyId, expected }) => {
+    setup();
+    render(
+      <NewListing
+        onCreated={vi.fn()}
+        sellerRole="agent"
+        initialAgencyId={initialAgencyId}
+      />,
+    );
+    await screen.findByRole('option', { name: 'Город' });
+    expect(
+      (screen.getByLabelText('От чьего имени') as HTMLSelectElement).value,
+    ).toBe(expected);
+  },
+);
+test('an agency account defaults to its only active organization', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} sellerRole="agency" />);
+  await screen.findByRole('option', { name: 'Город' });
+  expect(
+    (screen.getByLabelText('От чьего имени') as HTMLSelectElement).value,
+  ).toBe('agency-1');
+  expect(
+    screen.queryByRole('option', { name: 'Архивное агентство' }),
+  ).toBeNull();
+  await fill();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/properties',
+    'POST',
+    expect.objectContaining({ organizationId: 'agency-1' }),
+    expect.any(Object),
+  );
+});
+test('commercial offers select their subtype before moving to the address', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  await screen.findByRole('option', { name: 'Коммерческая недвижимость' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'commercial' },
+  });
+  const subtype = await screen.findByLabelText('Тип коммерческого помещения *');
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  expect(screen.getByRole('group', { name: 'Сделка и объект' })).toBeTruthy();
+  fireEvent.change(subtype, { target: { value: 'Склад' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  expect(screen.getByRole('group', { name: 'Расположение' })).toBeTruthy();
+  for (const [label, value] of [
+    ['Адрес', 'Москва, улица 1'],
+    ['Населённый пункт', 'Москва'],
+    ['Долгота', '37.6'],
+    ['Широта', '55.7'],
+  ])
+    fireEvent.change(screen.getByLabelText(label!), { target: { value } });
+  const next = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  const back = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+  next();
+  fireEvent.change(screen.getByLabelText('Площадь *'), {
+    target: { value: '40' },
+  });
+  fireEvent.change(screen.getByLabelText('Этаж'), { target: { value: '8' } });
+  fireEvent.change(screen.getByLabelText('Этажей'), { target: { value: '5' } });
+  back();
+  back();
+  fireEvent.change(screen.getByLabelText('Тип коммерческого помещения *'), {
+    target: { value: 'Коммерческая земля' },
+  });
+  next();
+  next();
+  const landArea = screen.getByLabelText('Площадь участка, м² *');
+  const landForm = landArea.closest('form');
+  if (!landForm) throw new Error('Listing form is missing');
+  fireEvent.change(landArea, { target: { value: '' } });
+  fireEvent.submit(landForm);
+  expect(screen.getByRole('alert').textContent).toBe(
+    'Заполните: Площадь участка, м²',
+  );
+  fireEvent.change(landArea, { target: { value: '0' } });
+  next();
+  expect(screen.getByRole('alert').textContent).toBe(
+    'Укажите значение больше нуля в поле «Площадь участка, м²».',
+  );
+  fireEvent.change(landArea, { target: { value: '40' } });
+  next();
+  expect(screen.getByRole('group', { name: 'Цена и условия' })).toBeTruthy();
+  expect(screen.queryByLabelText('Описание')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Заголовок'), {
+    target: { value: 'Коммерческий участок' },
+  });
+  fireEvent.change(screen.getByLabelText('Цена, ₽'), {
+    target: { value: '5000000' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/properties',
+    'POST',
+    expect.objectContaining({
+      attributes: { area: 40, commercial_property_type: 'Коммерческая земля' },
+    }),
+    expect.any(Object),
+  );
+});
+
+test('selecting a geocoded address fills its locality and coordinates', async () => {
+  setup();
+  render(<NewListing onCreated={vi.fn()} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  await screen.findByLabelText('Площадь *');
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  fireEvent.change(screen.getByLabelText('Адрес'), {
+    target: { value: 'улица 1' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Найти адрес' }));
+  const suggestion = await screen.findByRole('button', {
+    name: 'Москва, улица 1',
+  });
+  expect(screen.queryByRole('button', { name: 'Тула, улица 1' })).toBeNull();
+  fireEvent.click(suggestion);
+  expect(
+    (screen.getByLabelText('Населённый пункт') as HTMLInputElement).value,
+  ).toBe('Москва');
+  expect((screen.getByLabelText('Долгота') as HTMLInputElement).value).toBe(
+    '37.6',
+  );
+  expect((screen.getByLabelText('Широта') as HTMLInputElement).value).toBe(
+    '55.7',
+  );
+  fireEvent.change(screen.getByLabelText('Адрес'), {
+    target: { value: 'Москва, улица 2' },
+  });
+  expect((screen.getByLabelText('Долгота') as HTMLInputElement).value).toBe('');
+  expect((screen.getByLabelText('Широта') as HTMLInputElement).value).toBe('');
+});
+test('the location step rejects a blank locality before continuing', async () => {
+  setup();
+  render(<NewListing onCreated={vi.fn()} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  await screen.findByLabelText('Площадь *');
+  const next = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  next();
+  for (const [label, value] of [
+    ['Адрес', 'Москва, улица 1'],
+    ['Населённый пункт', '   '],
+    ['Долгота', '0'],
+    ['Широта', '0'],
+  ] as const)
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  next();
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'Укажите адрес, населённый пункт и корректные координаты объекта.',
+  );
+  fireEvent.change(screen.getByLabelText('Населённый пункт'), {
+    target: { value: 'Москва' },
+  });
+  next();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(
+    screen.getByRole('group', { name: 'Характеристики объекта' }),
+  ).toBeTruthy();
+});
+test('a pending address lookup is ignored after the region changes', async () => {
+  setup();
+  const respond = vi.mocked(api).getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  vi.mocked(api).mockImplementation(async (path, ...args) =>
+    path.startsWith('v1/geo/geocode?') ? pending : respond(path, ...args),
+  );
+  render(<NewListing onCreated={vi.fn()} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  await screen.findByLabelText('Площадь *');
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  fireEvent.change(screen.getByLabelText('Адрес'), {
+    target: { value: 'улица 1' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Найти адрес' }));
+  await screen.findByRole('button', { name: 'Ищем адрес…' });
+  fireEvent.change(screen.getByLabelText('Регион'), {
+    target: { value: 'moscow_oblast' },
+  });
+  await act(async () => {
+    finish([
+      {
+        formatted: 'Москва, улица 1',
+        locality: 'Москва',
+        longitude: 37.6,
+        latitude: 55.7,
+      },
+    ]);
+  });
+  expect(screen.queryByRole('list', { name: 'Найденные адреса' })).toBeNull();
+  expect((screen.getByLabelText('Адрес') as HTMLInputElement).value).toBe(
+    'улица 1',
+  );
+  expect((screen.getByLabelText('Долгота') as HTMLInputElement).value).toBe('');
+  expect(screen.getByRole('button', { name: 'Найти адрес' })).toBeTruthy();
+});
+test('long rental offers use rent-specific terms when saving a draft', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  await fill('long_rent');
+  expect(screen.queryByLabelText('Возможен торг')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Залог, ₽'), {
+    target: { value: '10000' },
+  });
+  fireEvent.click(screen.getByLabelText('Коммунальные платежи включены'));
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/listings',
+    'POST',
+    expect.objectContaining({
+      dealType: 'long_rent',
+      terms: { deposit: 10000, utilitiesIncluded: true },
+    }),
+    expect.any(Object),
+  );
+});
+test('short rental drafts save guest capacity and the minimum stay', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  await fill('short_rent');
+  fireEvent.change(screen.getByLabelText('Максимум гостей'), {
+    target: { value: '4' },
+  });
+  fireEvent.change(screen.getByLabelText('Минимум ночей'), {
+    target: { value: '2' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/listings',
+    'POST',
+    expect.objectContaining({
+      dealType: 'short_rent',
+      terms: { guestCapacity: 4, minimumNights: 2 },
+    }),
+    expect.any(Object),
+  );
+});
+test('creates a draft with explicit region and zero coordinates', async () => {
+  setup();
+  const created = vi.fn();
+  render(
+    <NewListing
+      onCreated={created}
+      regions={[
+        { code: 'moscow', name: 'Москва' },
+        { code: 'novosibirsk', name: 'Новосибирская область' },
+      ]}
+    />,
+  );
+  await fill('sale', undefined, 'novosibirsk');
+  expect(screen.getByText('Регион: Новосибирская область')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(api).toHaveBeenCalledWith(
+    'v1/properties',
+    'POST',
+    expect.objectContaining({
+      address: expect.objectContaining({
+        regionCode: 'novosibirsk',
+        longitude: 0,
+        latitude: 0,
+      }),
+      attributes: { area: 40 },
+    }),
+    expect.objectContaining({ idempotencyKey: expect.any(String) }),
+  );
+});
+test('an invalid floor keeps the user on the characteristics step until corrected', async () => {
+  setup();
+  render(<NewListing onCreated={vi.fn()} />);
+  await fill('sale', undefined, undefined, true);
+  expect(
+    screen.getByRole('button', { name: 'Сохранить черновик' }),
+  ).toBeTruthy();
+});
+test.each([undefined, 'agency-1'])(
+  'retains created property on retry for agency %s',
+  async (agency) => {
+    setup(agency ? new ApiError('Forbidden', 403) : true);
+    const created = vi.fn();
+    render(
+      <NewListing
+        onCreated={created}
+        sellerRole={agency ? 'agent' : 'owner'}
+      />,
+    );
+    await fill('sale', agency);
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+    const alert = await screen.findByRole('alert');
+    if (agency)
+      expect(alert.textContent).toContain('Проверьте доступ к агентству');
+    expect(
+      (screen.getByLabelText('Заголовок') as HTMLInputElement).closest(
+        'fieldset',
+      )?.disabled,
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Повторить сохранение' }),
+    );
+    await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+    const calls = vi.mocked(api).mock.calls;
+    expect(calls.filter(([path]) => path === 'v1/properties')).toHaveLength(1);
+    const listingCalls = calls.filter(([path]) => path === 'v1/listings');
+    expect(listingCalls[0]).toEqual(listingCalls[1]);
+  },
+);
+test('the final step identifies an invalid title and price', async () => {
+  setup();
+  render(<NewListing onCreated={vi.fn()} />);
+  await fill();
+  const title = screen.getByLabelText('Заголовок');
+  const form = title.closest('form');
+  if (!form) throw new Error('Listing form is missing');
+  fireEvent.change(title, { target: { value: '   ' } });
+  fireEvent.submit(form);
+  expect(screen.getByRole('alert').textContent).toBe(
+    'Введите заголовок длиной не менее трёх символов.',
+  );
+  fireEvent.change(title, { target: { value: 'Квартира рядом с парком' } });
+  fireEvent.change(screen.getByLabelText('Цена, ₽'), {
+    target: { value: '0' },
+  });
+  fireEvent.submit(form);
+  expect(screen.getByRole('alert').textContent).toBe(
+    'Укажите цену больше нуля.',
+  );
+  expect(
+    vi.mocked(api).mock.calls.some(([path]) => path === 'v1/properties'),
+  ).toBe(false);
+});
+test('the address can be reviewed and corrected without losing the price or title', async () => {
+  setup();
+  render(<NewListing onCreated={vi.fn()} />);
+  await fill();
+  expect(screen.getByText('Адрес объекта: Москва, улица 1')).toBeTruthy();
+  expect(document.activeElement).toBe(
+    screen.getByText('Цена и условия', { selector: 'legend' }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Исправить адрес' }));
+  expect(document.activeElement).toBe(
+    screen.getByText('Расположение', { selector: 'legend' }),
+  );
+  fireEvent.change(screen.getByLabelText('Адрес'), {
+    target: { value: 'Москва, улица 2' },
+  });
+  for (let step = 0; step < 2; step++)
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+  expect(screen.getByText('Адрес объекта: Москва, улица 2')).toBeTruthy();
+  expect((screen.getByLabelText('Цена, ₽') as HTMLInputElement).value).toBe(
+    '5000000',
+  );
+  expect((screen.getByLabelText('Заголовок') as HTMLInputElement).value).toBe(
+    'Квартира рядом с парком',
+  );
+});
+test('changing category clears category-specific values', async () => {
+  setup();
+  render(<NewListing onCreated={() => {}} />);
+  await fill();
+  for (let step = 0; step < 3; step++)
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'land' },
+  });
+  await waitFor(() =>
+    expect((screen.getByLabelText('Площадь *') as HTMLInputElement).value).toBe(
+      '',
+    ),
+  );
+});
+
+test('ignores late definitions from a previous category', async () => {
+  let release: ((value: unknown) => void) | undefined;
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path === 'v1/categories')
+      return [
+        { code: 'apartment', name: 'Квартира' },
+        { code: 'land', name: 'Участок' },
+      ];
+    if (path === 'v1/categories/apartment/attributes')
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    return [
+      {
+        code: 'area',
+        name: 'Площадь участка',
+        kind: 'number',
+        required: true,
+        options: [],
+      },
+    ];
+  });
+  render(<NewListing onCreated={() => {}} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'land' },
+  });
+  await screen.findByLabelText('Площадь участка *');
+  release?.([
+    {
+      code: 'rooms',
+      name: 'Комнаты квартиры',
+      kind: 'number',
+      required: true,
+      options: [],
+    },
+  ]);
+  await waitFor(() =>
+    expect(screen.queryByLabelText('Комнаты квартиры *')).toBeNull(),
+  );
+  expect(screen.getByLabelText('Площадь участка *')).toBeTruthy();
+});
+
+test('completed creation cannot resubmit and explicit reset creates a new attempt', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  await fill();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await screen.findByRole('status');
+  fireEvent.submit(screen.getByLabelText('Заголовок').closest('form')!);
+  expect(created).toHaveBeenCalledTimes(1);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Создать ещё объявление' }),
+  );
+  await fill();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledTimes(2));
+  const properties = vi
+    .mocked(api)
+    .mock.calls.filter(([path]) => path === 'v1/properties');
+  expect(properties).toHaveLength(2);
+  expect(properties[0]?.[3]).not.toEqual(properties[1]?.[3]);
+});
+test('parent disabled state prevents new requests', async () => {
+  setup();
+  render(<NewListing disabled onCreated={() => {}} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  expect(
+    (screen.getByLabelText('Категория') as HTMLSelectElement).closest(
+      'fieldset',
+    )?.disabled,
+  ).toBe(true);
+});
+test('unmount during property creation does not create a listing or notify parent', async () => {
+  setup();
+  const created = vi.fn();
+  const view = render(<NewListing onCreated={created} />);
+  await fill();
+  let release: ((value: unknown) => void) | undefined;
+  vi.mocked(api).mockImplementation(
+    async () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  view.unmount();
+  await act(async () => {
+    release?.({ id: 'property-1' });
+  });
+  expect(created).not.toHaveBeenCalled();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/listings'),
+  ).toHaveLength(0);
+});
+
+test('parent disabling while property request is pending pauses before listing creation', async () => {
+  setup();
+  const created = vi.fn();
+  const view = render(<NewListing onCreated={created} />);
+  await fill();
+  let release: ((value: unknown) => void) | undefined;
+  vi.mocked(api).mockImplementation(async (path) =>
+    path === 'v1/properties'
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : { id: 'listing-1' },
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  view.rerender(<NewListing disabled onCreated={created} />);
+  await act(async () => {
+    release?.({ id: 'property-1' });
+  });
+  expect(created).not.toHaveBeenCalled();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/listings'),
+  ).toHaveLength(0);
+  view.rerender(<NewListing onCreated={created} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить сохранение' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+});
+
+test('reports busy until the final listing request settles', async () => {
+  setup();
+  const created = vi.fn();
+  const busy = vi.fn();
+  render(<NewListing onCreated={created} onBusyChange={busy} />);
+  await fill();
+  let release: ((value: unknown) => void) | undefined;
+  vi.mocked(api).mockImplementation(async (path) =>
+    path === 'v1/properties'
+      ? { id: 'property-1' }
+      : new Promise((resolve) => {
+          release = resolve;
+        }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(release).toBeDefined());
+  expect(busy.mock.calls).toEqual([[true]]);
+  await act(async () => {
+    release?.({ id: 'listing-1' });
+  });
+  expect(created).toHaveBeenCalledWith('listing-1');
+  expect(busy.mock.calls).toEqual([[true], [false]]);
+});
