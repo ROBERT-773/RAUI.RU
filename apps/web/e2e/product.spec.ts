@@ -284,7 +284,9 @@ test('search → filter → detail → favorite and comparison', async ({ page }
 test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {
-  await page.goto('/search');
+  // Publication scenarios share this database and can leave other listings.
+  const query = new URLSearchParams({ q: 'Квартира' });
+  await page.goto(`/search?${query}`);
   await page.getByRole('button', { name: 'Карта', exact: true }).click();
   const map = page.locator('.leaflet-map'),
     marker = page.locator('.price-marker').first(),
