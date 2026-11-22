@@ -53,7 +53,7 @@ export function validateRuntimeReceipt(receipt, expectedSha, expectedRunId) {
     receipt.sourceState !== 'committed' ||
     receipt.contract !== 'passed' ||
     receipt.serviceSmoke !== 'passed' ||
-    receipt.migrationCount !== 22 ||
+    receipt.migrationCount !== migrationNames.length ||
     receipt.siteUrl !== 'http://127.0.0.1:3000' ||
     receipt.deploymentEnvironment !== 'staging' ||
     receipt.network !== 'linux-host' ||

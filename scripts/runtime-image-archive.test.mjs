@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { migrationNames } from './runtime-image-verification.mjs';
 
 async function fixture(run) {
   const root = await mkdtemp(join(tmpdir(), 'raui-archive-test-'));
@@ -20,7 +21,7 @@ async function fixture(run) {
     deploymentEnvironment: 'staging',
     contract: 'passed',
     serviceSmoke: 'passed',
-    migrationCount: 22,
+    migrationCount: migrationNames.length,
     network: 'linux-host',
     adapters: 'local-development',
     stagingAcceptance: 'not_executed',
@@ -69,6 +70,19 @@ test('saved archive rejects a receipt for another source or CI run', async () =>
     );
     await assert.rejects(
       verifyRuntimeArchive(root, 'a'.repeat(40), '456'),
+      /Invalid runtime image evidence/,
+    );
+  });
+});
+test('saved archive rejects a receipt with an incomplete migration count', async () => {
+  const { verifyRuntimeArchive } = await import('./runtime-image-archive.mjs');
+  await fixture(async (root, receipt) => {
+    await writeFile(
+      join(root, '.cache/runtime-image-receipt.json'),
+      JSON.stringify({ ...receipt, migrationCount: migrationNames.length - 1 }),
+    );
+    await assert.rejects(
+      verifyRuntimeArchive(root, 'a'.repeat(40), '123'),
       /Invalid runtime image evidence/,
     );
   });
