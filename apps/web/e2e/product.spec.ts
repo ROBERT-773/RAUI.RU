@@ -241,6 +241,7 @@ async function savedArticle(page: Page, id: string): Promise<Locator | null> {
 test('search → filter → detail → favorite and comparison', async ({ page }) => {
   await login(page);
   await page.goto('/');
+  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -283,7 +284,7 @@ test('search → filter → detail → favorite and comparison', async ({ page }
 test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/search');
   await page.getByRole('button', { name: 'Карта', exact: true }).click();
   const map = page.locator('.leaflet-map'),
     marker = page.locator('.price-marker').first(),
@@ -376,7 +377,7 @@ test('saved search create, rename, reopen and delete persist', async ({
   page,
 }, info) => {
   await login(page);
-  await page.goto('/');
+  await page.goto('/search');
   await page.getByLabel('Цена до', { exact: true }).fill('15000000');
   await page.getByRole('button', { name: 'Найти', exact: true }).click();
   await expect(
@@ -454,7 +455,7 @@ test('saved search create, rename, reopen and delete persist', async ({
 test('inquiry and account messages', async ({ page }, testInfo) => {
   const text = 'Можно посмотреть квартиру? ' + testInfo.project.name;
   await login(page);
-  await page.goto('/');
+  await page.goto('/search');
   await page
     .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
     .click();
@@ -494,7 +495,7 @@ for (const delayed of [false, true]) {
         };
       });
     await login(page);
-    await page.goto('/');
+    await page.goto('/search');
     await page
       .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
       .click();
@@ -600,7 +601,7 @@ for (const delayed of [false, true]) {
 }
 
 test('accessibility and responsive search baseline', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/search');
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -618,7 +619,7 @@ test('accessibility and responsive search baseline', async ({ page }) => {
 test('listing SEO metadata and unavailable pages are safe', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/search');
   await page
     .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
     .click();
@@ -710,6 +711,7 @@ test('HTML uses fresh CSP nonces and protected browser headers', async ({
   expect(second?.headers()['content-security-policy']).not.toContain(
     "'nonce-" + nonce + "'",
   );
+  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -725,7 +727,7 @@ test('Cookie session survives a fresh tab without CSRF storage and permits searc
     const searchResponse = restored.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/search'),
     );
-    await restored.goto('/');
+    await restored.goto('/search');
     expect(
       await restored.evaluate(() => sessionStorage.getItem('raui_csrf')),
     ).toBeNull();
