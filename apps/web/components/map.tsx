@@ -19,6 +19,8 @@ export default function MapPanel({
 }) {
   const [markers, setMarkers] = useState<MapMarker[]>([]),
     [error, setError] = useState(''),
+    [requestError, setRequestError] = useState(''),
+    [attempt, setAttempt] = useState(0),
     [loading, setLoading] = useState(true),
     [truncated, setTruncated] = useState(false),
     [polygon, setPolygon] = useState('');
@@ -37,11 +39,15 @@ export default function MapPanel({
         if (active) {
           setMarkers(r.markers);
           setTruncated(r.truncated);
-          setError('');
+          setRequestError('');
         }
       })
       .catch((e) => {
-        if (active) setError((e as Error).message);
+        if (active) {
+          setMarkers([]);
+          setTruncated(false);
+          setRequestError((e as Error).message);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -49,7 +55,7 @@ export default function MapPanel({
     return () => {
       active = false;
     };
-  }, [definition, bounds]);
+  }, [definition, bounds, attempt]);
   function move(dx: number, dy: number, scale = 1) {
     const [w, s, e, n] = bounds,
       cx = (w + e) / 2 + dx,
@@ -100,6 +106,20 @@ export default function MapPanel({
       </div>
       {loading && <p role="status">Загрузка карты…</p>}
       {error && <p role="alert">{error}</p>}
+      {requestError && (
+        <>
+          <p role="alert">{requestError}</p>
+          <Button
+            onClick={() => {
+              setRequestError('');
+              setLoading(true);
+              setAttempt((value) => value + 1);
+            }}
+          >
+            Повторить загрузку карты
+          </Button>
+        </>
+      )}
       {truncated && (
         <p role="status">Приблизьте карту: показана часть результатов.</p>
       )}
