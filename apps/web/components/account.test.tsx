@@ -52,6 +52,27 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+test('shows and hides the password without submitting and masks it on mode change', async () => {
+  const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+  vi.stubGlobal('fetch', fetch);
+  render(<Account />);
+  const field = (await screen.findByLabelText('Пароль')) as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'synthetic-password' } });
+  expect(field.type).toBe('password');
+  const requests = fetch.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
+  expect(field.type).toBe('text');
+  expect(field.value).toBe('synthetic-password');
+  fireEvent.click(screen.getByRole('button', { name: 'Скрыть пароль' }));
+  expect(field.type).toBe('password');
+  fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Регистрация' }));
+  expect((screen.getByLabelText('Пароль') as HTMLInputElement).type).toBe(
+    'password',
+  );
+  expect(fetch.mock.calls).toHaveLength(requests);
+});
+
 for (const delayed of [false, true]) {
   test(`Account isolates private state across identities${delayed ? ' with an outstanding response' : ''}`, async () => {
     let identity = 'A';
