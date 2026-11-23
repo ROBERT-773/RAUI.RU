@@ -5,6 +5,11 @@ import { resolve } from 'node:path';
 test.skip(process.env.E2E_SMS !== 'true', 'requires the isolated SMS fixture');
 
 async function enterDeliveredCode(page: Page, phone: string) {
+  const capabilities = await page.request.get(
+    '/api/v1/auth/phone-sign-in/capabilities',
+  );
+  expect(capabilities.status()).toBe(200);
+  expect(await capabilities.json()).toEqual({ available: true });
   await page.goto('/account');
   await expect(
     page.getByRole('heading', { name: 'Вход или регистрация' }),

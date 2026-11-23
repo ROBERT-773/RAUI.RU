@@ -98,8 +98,6 @@ async function run() {
     E2E_SMS: smsOnly ? 'true' : 'false',
     ...(smsOnly
       ? {
-          PHONE_OTP_ENABLED: 'true',
-          PHONE_SIGN_IN_ENABLED: 'true',
           PHONE_OTP_PEPPER: randomBytes(32).toString('base64url'),
           PHONE_OTP_GATEWAY_URL: 'https://sms.example.test/dispatch',
           PHONE_OTP_GATEWAY_TOKEN: 'browser-fixture-only',
@@ -144,7 +142,8 @@ async function run() {
     env.VERIFICATION_GATEWAY_URL = undefined;
     env.VERIFICATION_GATEWAY_TOKEN = undefined;
     env.RESET_SMTP_ENABLED = 'false';
-    env.PHONE_OTP_ENABLED = 'false';
+    env.PHONE_OTP_ENABLED = smsOnly ? 'true' : 'false';
+    env.PHONE_SIGN_IN_ENABLED = smsOnly ? 'true' : 'false';
     // Resource allocation must settle before cleanup can decide ownership.
     // An idle error is sticky but cannot race successful CREATE registration.
     stage = 'fixture-database';
