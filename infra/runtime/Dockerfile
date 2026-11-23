@@ -14,6 +14,8 @@ COPY . .
 ARG SITE_URL
 ARG DEPLOYMENT_ENV=staging
 ARG SOURCE_REVISION
+ARG NEXT_PUBLIC_MAP_TILE_URL
+ARG NEXT_PUBLIC_MAP_ATTRIBUTION
 RUN --mount=type=secret,id=build_ca \
     if [ -f /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi; \
     node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE_REVISION || "")) throw Error("Full source revision required"); const u = new URL(process.env.SITE_URL); if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash || u.pathname !== "/") throw Error("Clean SITE_URL origin required"); if (!["staging", "production"].includes(process.env.DEPLOYMENT_ENV)) throw Error("Deployment environment required")' && \
@@ -56,12 +58,15 @@ ARG SOURCE_REVISION
 ARG SOURCE_STATE=candidate
 ARG SITE_URL
 ARG DEPLOYMENT_ENV=staging
+ARG NEXT_PUBLIC_MAP_TILE_URL
+ARG NEXT_PUBLIC_MAP_ATTRIBUTION
 LABEL org.opencontainers.image.source="https://github.com/ROBERT-773/RAUI.RU" \
       org.opencontainers.image.revision=$SOURCE_REVISION \
       raui.source-state=$SOURCE_STATE \
       raui.site-url=$SITE_URL \
       raui.deployment-env=$DEPLOYMENT_ENV
 ENV NODE_ENV=production SITE_URL=$SITE_URL DEPLOYMENT_ENV=$DEPLOYMENT_ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_MAP_TILE_URL=$NEXT_PUBLIC_MAP_TILE_URL NEXT_PUBLIC_MAP_ATTRIBUTION=$NEXT_PUBLIC_MAP_ATTRIBUTION
 COPY --from=assembled /app /app
 USER node
 ENTRYPOINT ["sh", "/app/infra/runtime/entrypoint.sh"]

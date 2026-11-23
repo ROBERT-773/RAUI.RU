@@ -137,6 +137,35 @@ test('build rejects credentialed and path-bearing public origins', () => {
   }
 });
 
+test('build rejects non-public tile settings before invoking Docker', () => {
+  for (const [url, attribution] of [
+    ['http://tiles.example.test/{z}/{x}/{y}.png', 'Tiles'],
+    ['https://tiles.example.test/{z}/{x}/{y}.png?token=private', 'Tiles'],
+    ['https://tiles.example.test/{z}/{x}/{y}.png', '<b>Tiles</b>'],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve('scripts/runtime-image-build.mjs'),
+        '--site-url',
+        'http://127.0.0.1:3000',
+      ],
+      {
+        env: {
+          ...process.env,
+          NEXT_PUBLIC_MAP_TILE_URL: url,
+          NEXT_PUBLIC_MAP_ATTRIBUTION: attribution,
+        },
+      },
+    );
+    assert.equal(result.status, 64);
+    assert.match(
+      result.stderr.toString(),
+      /Map tiles require a public HTTPS template/,
+    );
+  }
+});
+
 test('dispatcher rejects an origin that differs from baked web assets', () => {
   const root = mkdtempSync(join(tmpdir(), 'raui-runtime-origin-'));
   try {
@@ -195,13 +224,16 @@ const path = require('node:path');
 const context = process.argv.at(-1);
 fs.writeFileSync(process.env.WORKING_SOURCE, 'dirty');
 if (fs.existsSync(path.join(context, '.env'))) process.exit(2);
+for (const key of ['NEXT_PUBLIC_MAP_TILE_URL', 'NEXT_PUBLIC_MAP_ATTRIBUTION']) {
+  if (!process.argv.includes(key)) process.exit(3);
+}
 process.stdout.write(fs.readFileSync(path.join(context, 'source.txt'), 'utf8'));
 `,
       );
     } else {
       writeFileSync(
         join(root, 'bin/docker'),
-        '#!/bin/sh\nfor context do :; done\nprintf dirty > "$WORKING_SOURCE"\ntest ! -e "$context/.env" || exit 2\ncat "$context/source.txt"\n',
+        '#!/bin/sh\nfor context do :; done\nprintf dirty > "$WORKING_SOURCE"\ntest ! -e "$context/.env" || exit 2\nfor key in NEXT_PUBLIC_MAP_TILE_URL NEXT_PUBLIC_MAP_ATTRIBUTION; do\n  printf "%s\\n" "$@" | grep -Fxq "$key" || exit 3\ndone\ncat "$context/source.txt"\n',
         { mode: 0o755 },
       );
     }
@@ -218,6 +250,9 @@ process.stdout.write(fs.readFileSync(path.join(context, 'source.txt'), 'utf8'));
           ...env,
           DOCKER_CONFIG: join(root, 'bin/config'),
           WORKING_SOURCE: join(root, 'source.txt'),
+          NEXT_PUBLIC_MAP_TILE_URL:
+            'https://tiles.example.test/{z}/{x}/{y}.png',
+          NEXT_PUBLIC_MAP_ATTRIBUTION: 'Test map provider',
           PATH: [join(root, 'bin'), process.env.PATH].join(delimiter),
         },
       },

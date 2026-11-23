@@ -52,6 +52,37 @@ if (!['staging', 'production'].includes(environment))
   fail('Invalid deployment environment');
 if (!/^[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*$/.test(tag))
   fail('Local image tag required');
+const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL;
+const attribution = process.env.NEXT_PUBLIC_MAP_ATTRIBUTION;
+const mapArgs = [];
+if (tileUrl || attribution) {
+  try {
+    if (!tileUrl || !attribution?.trim() || /[<>&\r\n]/.test(attribution))
+      throw Error();
+    const url = new URL(tileUrl.replace('://{s}.', '://a.'));
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/\{z\}/.test(tileUrl) ||
+      !/\{x\}/.test(tileUrl) ||
+      !/\{y\}/.test(tileUrl)
+    )
+      throw Error();
+  } catch {
+    fail(
+      'Map tiles require a public HTTPS template and plain-text attribution',
+    );
+  }
+  mapArgs.push(
+    '--build-arg',
+    'NEXT_PUBLIC_MAP_TILE_URL',
+    '--build-arg',
+    'NEXT_PUBLIC_MAP_ATTRIBUTION',
+  );
+}
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], {
   encoding: 'utf8',
 }).trim();
@@ -107,6 +138,7 @@ try {
     [
       'build',
       ...network,
+      ...mapArgs,
       '-f',
       resolve(context, 'infra/runtime/Dockerfile'),
       '--build-arg',
