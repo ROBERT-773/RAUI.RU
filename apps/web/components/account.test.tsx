@@ -69,6 +69,32 @@ test('opens the requested messages tab for a signed-in visitor', async () => {
   ).toBe(true);
 });
 
+test('submits a user ID as the password login identifier', async () => {
+  const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+  stubFetch('fetch', fetch);
+  render(<Account />);
+  await screen.findByLabelText('Пароль');
+  fireEvent.click(screen.getByRole('button', { name: 'Войти по ID' }));
+  fireEvent.change(screen.getByLabelText('ID пользователя'), {
+    target: { value: '303' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'synthetic-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Войти', exact: true }));
+  await screen.findByRole('alert');
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/v1/auth/login',
+    expect.objectContaining({
+      body: JSON.stringify({
+        publicId: '303',
+        password: 'synthetic-password',
+        transport: 'cookie',
+      }),
+    }),
+  );
+});
+
 test('shows and hides the password without submitting and masks it on mode change', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
   vi.stubGlobal('fetch', fetch);
