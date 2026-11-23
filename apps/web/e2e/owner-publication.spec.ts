@@ -715,6 +715,27 @@ for (const [
           visitor.getByRole('link', { name: title, exact: true }),
         ).toBeVisible({ timeout: 2000 });
       }).toPass({ timeout: 20000 });
+
+      await page.reload();
+      await page.getByRole('button', { name: title, exact: true }).click();
+      await expect(
+        draft.getByText('Статус: Опубликовано', { exact: true }),
+      ).toBeVisible();
+      page.once('dialog', (dialog) => dialog.accept());
+      await draft.getByRole('button', { name: 'В архив', exact: true }).click();
+      await expect(
+        draft.getByText('Статус: В архиве', { exact: true }),
+      ).toBeVisible();
+      expect((await visitor.request.get(path)).status()).toBe(404);
+      await expect(async () => {
+        await visitor.goto(search);
+        await expect(
+          visitor.getByRole('status').filter({ hasText: 'Найдено около' }),
+        ).toBeVisible({ timeout: 3000 });
+        await expect(
+          visitor.getByRole('link', { name: title, exact: true }),
+        ).toHaveCount(0);
+      }).toPass({ timeout: 20000 });
     } finally {
       await staff.close();
       await guest.close();
