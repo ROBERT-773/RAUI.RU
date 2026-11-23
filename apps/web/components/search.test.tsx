@@ -73,6 +73,49 @@ async function submitReadySearch() {
   await vi.waitFor(() => expect(submit).toHaveProperty('disabled', false));
   fireEvent.click(submit);
 }
+test('selecting a metro station preserves region and price when switching to the map', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    json: async () =>
+      url.includes('/attributes')
+        ? [{ code: 'metro', name: 'Метро', kind: 'string', options: [] }]
+        : { items: [], total: 0, cursor: null, facets: {} },
+  }));
+  const view = render(
+    <SearchProduct
+      initialDefinition={{
+        category: 'apartment',
+        regionCode: 'saint_petersburg',
+        price: { max: 8500000 },
+      }}
+    />,
+  );
+  fireEvent.click(screen.getByText('Все фильтры', { exact: true }));
+  const metro = await screen.findByLabelText('Метро');
+  fireEvent.focus(metro);
+  fireEvent.change(metro, { target: { value: 'Авто' } });
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Автово · Кировско-Выборгская' }),
+  );
+  await submitReadySearch();
+  const list = routedDefinition();
+  expect(list.definition).toMatchObject({
+    regionCode: 'saint_petersburg',
+    price: { max: 8500000 },
+    attributes: { metro: 'Автово' },
+  });
+  window.history.replaceState({}, '', list.url);
+  view.rerender(<SearchProduct initialDefinition={list.definition} />);
+  fireEvent.click(screen.getByRole('button', { name: /^Карта$/ }));
+  const map = routedDefinition();
+  expect(map.url.searchParams.get('mode')).toBe('map');
+  expect(map.definition).toMatchObject({
+    regionCode: 'saint_petersburg',
+    price: { max: 8500000 },
+    attributes: { metro: 'Автово' },
+  });
+});
+
 test('short rental guest count uses a minimum capacity and clears on other deals', async () => {
   captureSearch();
   render(<SearchProduct initialDefinition={{ dealType: 'short_rent' }} />);

@@ -198,14 +198,24 @@ async function run() {
         listingSource = randomUUID();
       await monitor.run(async () =>
         pool.query(
-          "INSERT INTO addresses(id,formatted,locality,district,point) VALUES($1,'Москва, Тверская','Москва','Центр',ST_SetSRID(ST_MakePoint($2,$3),4326))",
+          "INSERT INTO addresses(id,formatted,locality,district,point,region_code) VALUES($1,'Москва, Тверская','Москва','Центр',ST_SetSRID(ST_MakePoint($2,$3),4326),'moscow')",
           [address, lon, lat],
         ),
       );
       await monitor.run(async () =>
         pool.query(
           "INSERT INTO properties(id,created_by,category_code,address_id,attributes) VALUES($1,$2,'apartment',$3,$4)",
-          [property, seller, address, { area: 50, rooms, elevator: true }],
+          [
+            property,
+            seller,
+            address,
+            {
+              area: 50,
+              rooms,
+              elevator: true,
+              metro: rooms === 2 ? 'Тверская' : 'ВДНХ',
+            },
+          ],
         ),
       );
       await monitor.run(async () =>

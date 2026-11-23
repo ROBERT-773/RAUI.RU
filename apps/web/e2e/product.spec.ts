@@ -281,6 +281,38 @@ test('search → filter → detail → favorite and comparison', async ({ page }
     page.getByRole('table', { name: 'Сравнение объектов' }),
   ).toBeVisible();
 });
+test('metro filter selects matching listings in the catalogue and on the map', async ({
+  page,
+}) => {
+  const initial = new URLSearchParams({
+    definition: JSON.stringify({ category: 'apartment', regionCode: 'moscow' }),
+  });
+  await page.goto('/search?' + initial);
+  await page.getByText('Все фильтры', { exact: true }).click();
+  await page.getByLabel('Метро', { exact: true }).fill('Твер');
+  await page.getByRole('button', { name: 'Тверская · Замоскворецкая' }).click();
+  await page.getByRole('button', { name: 'Найти', exact: true }).click();
+  const matching = page.getByRole('link', {
+    name: 'Квартира 2 комнаты',
+    exact: true,
+  });
+  const other = page.getByRole('link', {
+    name: 'Квартира 3 комнаты',
+    exact: true,
+  });
+  await expect(matching).toBeVisible();
+  await expect(other).toHaveCount(0);
+  const response = page.waitForResponse((value) =>
+    endpoint(value, 'POST', '/api/v1/search/map'),
+  );
+  await page.getByRole('button', { name: 'Карта', exact: true }).click();
+  const result = await response;
+  expect(result.status()).toBe(201);
+  expect(((await result.json()) as { matched: number }).matched).toBe(1);
+  await expect(matching).toBeVisible();
+  await expect(other).toHaveCount(0);
+});
+
 test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {

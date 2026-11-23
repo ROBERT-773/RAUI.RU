@@ -198,6 +198,20 @@ export default function AdvancedFilters({
             const v = sameCategory
               ? definition.attributes?.[f.code]
               : undefined;
+            if (f.code === 'metro')
+              return (
+                <div key={category + ':' + f.code}>
+                  <div>{f.name}</div>
+                  <LocationInput
+                    kind="metro"
+                    name="attribute:metro:string"
+                    label={f.name}
+                    initial={typeof v === 'string' ? v : ''}
+                    region={definition.regionCode}
+                    city={localityDraft}
+                  />
+                </div>
+              );
             return f.kind === 'number' ? (
               <fieldset key={category + ':' + f.code}>
                 <legend>{f.name}</legend>
@@ -248,14 +262,6 @@ export default function AdvancedFilters({
                       ),
                     )}
                   </select>
-                ) : f.code === 'metro' ? (
-                  <LocationInput
-                    kind="metro"
-                    name="attribute:metro:string"
-                    initial={typeof v === 'string' ? v : ''}
-                    region={definition.regionCode}
-                    city={localityDraft}
-                  />
                 ) : (
                   <input
                     name={'attribute:' + f.code + ':string'}
