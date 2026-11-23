@@ -661,7 +661,7 @@ for (const [
       ['Населённый пункт', 'Москва'],
       ['Долгота', '37.62'],
       ['Широта', '55.76'],
-    ]) {
+    ] as const) {
       await form.getByLabel(label, { exact: true }).fill(value);
     }
     await next.click();
