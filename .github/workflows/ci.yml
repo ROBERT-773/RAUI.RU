@@ -52,6 +52,8 @@ jobs:
           PGOPTIONS: -c log_min_duration_statement=100
       - name: Staff two-factor browser acceptance
         run: pnpm --filter @raui/api test:e2e --staff-totp-only
+      - name: SMS sign-in and registration browser acceptance
+        run: pnpm --filter @raui/api test:e2e --sms-only
       - run: pnpm db:migrate && pnpm db:migrate
       - run: pnpm recovery:drill
       - name: Production smoke

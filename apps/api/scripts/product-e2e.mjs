@@ -42,8 +42,10 @@ async function run() {
   const publicationOnly = process.argv.includes('--publication-only');
   const onboardingOnly = process.argv.includes('--onboarding-only');
   const staffTotpOnly = process.argv.includes('--staff-totp-only');
+  const smsOnly = process.argv.includes('--sms-only');
   if (
-    [publicationOnly, onboardingOnly, staffTotpOnly].filter(Boolean).length > 1
+    [publicationOnly, onboardingOnly, staffTotpOnly, smsOnly].filter(Boolean)
+      .length > 1
   )
     throw new Error('Select one focused E2E scenario');
   const focusedSpecs = publicationOnly
@@ -52,7 +54,9 @@ async function run() {
       ? ['e2e/registration-onboarding.spec.ts']
       : staffTotpOnly
         ? ['e2e/staff-two-factor.spec.ts']
-        : [];
+        : smsOnly
+          ? ['e2e/phone-sign-in.spec.ts']
+          : [];
   if (
     precreated !== undefined &&
     (!/^raui_test_[a-f0-9]{16}$/.test(precreated) ||
@@ -91,6 +95,16 @@ async function run() {
     STAFF_TOTP_ENCRYPTION_KEY: staffTotpOnly
       ? randomBytes(32).toString('hex')
       : undefined,
+    E2E_SMS: smsOnly ? 'true' : 'false',
+    ...(smsOnly
+      ? {
+          PHONE_OTP_ENABLED: 'true',
+          PHONE_SIGN_IN_ENABLED: 'true',
+          PHONE_OTP_PEPPER: randomBytes(32).toString('base64url'),
+          PHONE_OTP_GATEWAY_URL: 'https://sms.example.test/dispatch',
+          PHONE_OTP_GATEWAY_TOKEN: 'browser-fixture-only',
+        }
+      : {}),
   };
   process.env.OPENSEARCH_ALIAS = env.OPENSEARCH_ALIAS;
   const index = new SearchIndex(),
@@ -188,6 +202,12 @@ async function run() {
           ],
         ),
       );
+    if (smsOnly)
+      await monitor.run(() =>
+        pool.query(
+          "UPDATE users SET phone='+700000000'||lpad((length(split_part(email,'@',1))-6)::text,2,'0') WHERE email LIKE 'agent-%@e2e.test'",
+        ),
+      );
     for (const [price, lon, lat, rooms] of [
       [10000000, 37.61, 55.75, 2],
       [20000000, 37.7, 55.8, 3],
@@ -240,7 +260,11 @@ async function run() {
       index.request('/' + index.alias + '/_refresh', 'POST'),
     );
     stage = 'fixture-services';
-    start(['dist/main.js'], process.cwd(), 'e2e-api');
+    start(
+      [smsOnly ? 'scripts/e2e-sms-server.mjs' : 'dist/main.js'],
+      process.cwd(),
+      'e2e-api',
+    );
     start(['dist/worker.js'], process.cwd(), 'e2e-media-worker');
     start(['dist/search-worker.js'], process.cwd(), 'e2e-search-worker');
     start(
@@ -412,7 +436,9 @@ async function run() {
             ? 'onboarding-e2e-summary.json'
             : staffTotpOnly
               ? 'staff-totp-e2e-summary.json'
-              : 'phase4d-e2e-summary.json',
+              : smsOnly
+                ? 'sms-e2e-summary.json'
+                : 'phase4d-e2e-summary.json',
       ),
       JSON.stringify(
         {
