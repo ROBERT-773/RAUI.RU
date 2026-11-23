@@ -177,7 +177,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               'SELECT count(*) FROM schema_migrations',
             )
           )[0]!.count,
-          '34',
+          '35',
         );
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);

@@ -15,6 +15,7 @@ import AgencyPublicProfiles from './agency-public-profiles';
 import AgentPublicProfile from './agent-public-profile';
 import AccountProfile from './account-profile';
 import AccountSubscriptions from './account-subscriptions';
+import PhoneSignIn from './phone-sign-in';
 interface AccountUser {
   id: string;
   role: string;
@@ -66,9 +67,11 @@ interface Message {
 export default function Account({
   continueListing = false,
   initialTab = 'favorite',
+  smsAvailable = false,
 }: {
   continueListing?: boolean;
   initialTab?: 'favorite' | 'messages' | 'notifications';
+  smsAvailable?: boolean;
 } = {}) {
   const [user, setUser] = useState<AccountUser | null>(null),
     [profileOpen, setProfileOpen] = useState(false),
@@ -77,6 +80,7 @@ export default function Account({
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
     [loginById, setLoginById] = useState(false),
+    [smsSelected, setSmsSelected] = useState(smsAvailable),
     [passwordVisible, setPasswordVisible] = useState(false),
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
@@ -279,6 +283,22 @@ export default function Account({
     }
   }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
+  if (!user && smsAvailable && smsSelected)
+    return (
+      <PhoneSignIn<AccountUser>
+        onOther={() => setSmsSelected(false)}
+        onSession={({ user: next, csrfToken, verificationDelivery }) => {
+          clearPrivateState();
+          setCsrf(csrfToken);
+          setUser(next);
+          if (verificationDelivery === 'unavailable')
+            setNotice(
+              'Аккаунт создан. Запросите подтверждение почты повторно в профиле.',
+            );
+          if (approved(next)) void load(initialTab);
+        }}
+      />
+    );
   if (!user)
     return (
       <>
@@ -428,6 +448,17 @@ export default function Account({
           {register ? 'Уже есть аккаунт' : 'Регистрация'}
         </Button>
         {notice && <p role="alert">{notice}</p>}
+        {smsAvailable && (
+          <Button
+            onClick={() => {
+              setNotice('');
+              setPasswordVisible(false);
+              setSmsSelected(true);
+            }}
+          >
+            Войти по SMS
+          </Button>
+        )}
       </>
     );
   const logoutButton = (

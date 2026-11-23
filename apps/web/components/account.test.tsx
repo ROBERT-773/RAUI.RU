@@ -95,6 +95,58 @@ test('submits a user ID as the password login identifier', async () => {
   );
 });
 
+test('SMS registration opens the pending cabinet after completing the profile', async () => {
+  const fetch = vi.fn(async (url: string) => {
+    if (url.endsWith('/auth/me')) return { ok: false, status: 401 };
+    let value: unknown;
+    if (url.endsWith('/auth/phone-sign-in'))
+      value = { challengeId: 'sms-challenge', delivery: 'accepted' };
+    if (url.endsWith('/auth/phone-sign-in/confirm'))
+      value = { kind: 'signup', signupToken: 'sms-signup-proof' };
+    if (url.endsWith('/auth/phone-sign-in/register'))
+      value = {
+        csrfToken: 'sms-csrf',
+        user: {
+          id: 'sms-owner',
+          display_name: 'SMS Owner',
+          role: 'owner',
+          registration_approval_state: 'pending',
+        },
+      };
+    return { ok: true, status: 201, json: async () => value };
+  });
+  stubFetch('fetch', fetch);
+  render(<Account smsAvailable />);
+  const phone = await screen.findByLabelText('Мобильный телефон');
+  fireEvent.change(phone, { target: { value: '8 (999) 123-45-67' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Получить код' }));
+  fireEvent.change(await screen.findByLabelText('Код из SMS'), {
+    target: { value: '012345' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить код' }));
+  fireEvent.change(await screen.findByLabelText('Кто вы?'), {
+    target: { value: 'owner' },
+  });
+  fireEvent.change(screen.getByLabelText('Имя'), {
+    target: { value: 'SMS Owner' },
+  });
+  fireEvent.change(screen.getByLabelText('Email'), {
+    target: { value: 'sms@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'synthetic-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Создать аккаунт' }));
+  await screen.findByRole('heading', { name: 'Кабинет собственника' });
+  expect(sessionStorage.getItem('raui_csrf')).toBe('sms-csrf');
+  expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+    '/api/v1/auth/me',
+    '/api/v1/auth/phone-sign-in',
+    '/api/v1/auth/phone-sign-in/confirm',
+    '/api/v1/auth/phone-sign-in/register',
+  ]);
+});
+
 test('shows and hides the password without submitting and masks it on mode change', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
   vi.stubGlobal('fetch', fetch);

@@ -6,6 +6,10 @@ import { aiRequest, flagRequest } from '../modules/ai/contracts';
 import { trustDecision, duplicateDecision } from '../modules/trust/trust';
 import { analyticsEvent } from '../modules/analytics/analytics';
 import {
+  phoneSignInConfirmSchema,
+  phoneSignInRequestSchema,
+} from '../modules/auth/phone-sign-in';
+import {
   feedInput,
   feedConfig,
   importInput,
@@ -28,6 +32,7 @@ import type {
 } from '@nestjs/swagger';
 import {
   registerSchema,
+  registerWithPhoneSchema,
   loginSchema,
   passwordSchema,
 } from '../modules/auth/auth';
@@ -144,6 +149,9 @@ const bodyContracts: Record<string, z.ZodType> = {
   }),
   'post /v1/auth/register': registerSchema,
   'post /v1/auth/login': loginSchema,
+  'post /v1/auth/phone-sign-in': phoneSignInRequestSchema,
+  'post /v1/auth/phone-sign-in/confirm': phoneSignInConfirmSchema,
+  'post /v1/auth/phone-sign-in/register': registerWithPhoneSchema,
   'post /v1/auth/verification/phone': object({
     phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
   }),
@@ -281,6 +289,10 @@ post /v1/geo/layers
 post /v1/commerce/webhook
 post /v1/auth/register
 post /v1/auth/login
+get /v1/auth/phone-sign-in/capabilities
+post /v1/auth/phone-sign-in
+post /v1/auth/phone-sign-in/confirm
+post /v1/auth/phone-sign-in/register
 post /v1/auth/verification/email/confirm
 post /v1/auth/password-reset
 post /v1/auth/password-reset/confirm`.split('\n'),
@@ -292,6 +304,7 @@ post /v1/partner/listings/bulk-pause`.split('\n'),
 );
 const idempotentOperations = new Set(
   `post /v1/auth/verification/phone/otp
+post /v1/auth/phone-sign-in
 post /v1/organizations
 post /v1/properties
 post /v1/listings

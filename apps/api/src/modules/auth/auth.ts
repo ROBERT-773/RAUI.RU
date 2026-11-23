@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { Database } from '../database/database';
+import { Database, type Sql } from '../database/database';
 import { Audit } from '../audit/audit';
 import {
   Actor,
@@ -36,6 +36,11 @@ import {
 } from '../../common/security';
 import { isProduction, loadConfig } from '../../config';
 import { StaffTotpController } from './staff-totp-controller';
+import {
+  PhoneSignInService,
+  phoneSignInAvailable,
+  phoneSignInSignupProofSchema,
+} from './phone-sign-in';
 import {
   ConfiguredDelivery,
   VerificationDelivery,
@@ -64,6 +69,9 @@ export const registerSchema = z
     role: z.enum(['buyer', 'owner', 'agent', 'agency', 'developer']),
   })
   .strict();
+export const registerWithPhoneSchema = registerSchema.extend(
+  phoneSignInSignupProofSchema.shape,
+);
 const passwordLoginFields = {
   password: z.string().max(128),
   transport: z.enum(['cookie', 'bearer']).default('cookie'),
@@ -163,25 +171,63 @@ export class AuthService {
   async register(body: unknown) {
     const input = parse(registerSchema, body);
     const encoded = await passwordHash(input.password);
-    const user = await this.db.transaction(async (sql) => {
-      const [created] = await this.db.rows<User>(
-        "INSERT INTO users(email,password_hash,display_name,role,registration_approval_state) VALUES($1,$2,$3,$4,'pending') RETURNING *",
-        [input.email, encoded, input.displayName, input.role],
+    const user = await this.db.transaction((sql) =>
+      this.createPendingUser(sql, input, encoded),
+    );
+    return {
+      ...publicUser(user),
+      verificationDelivery: await this.sendRegistrationEmail(user),
+    };
+  }
+  async registerWithPhone(
+    body: unknown,
+    signIn: PhoneSignInService,
+    res: Response,
+  ) {
+    const input = parse(registerWithPhoneSchema, body);
+    if (!phoneSignInAvailable())
+      throw new ServiceUnavailableException('SMS sign-in unavailable');
+    const encoded = await passwordHash(input.password);
+    const session = await this.db.transaction(async (sql) => {
+      await signIn.consumeSignup(sql, input);
+      const user = await this.createPendingUser(
         sql,
+        input,
+        encoded,
+        input.phone,
       );
-      await sql.query(
-        'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
-        [created!.id],
-      );
-      await this.audit.record(
-        sql,
-        created!.id,
-        'auth.registered',
-        'user',
-        created!.id,
-      );
-      return created!;
+      return this.issueSession(sql, user.id);
     });
+    const verificationDelivery = await this.sendRegistrationEmail(session.user);
+    return { ...this.respondSession(res, session), verificationDelivery };
+  }
+  private async createPendingUser(
+    sql: Sql,
+    input: z.infer<typeof registerSchema>,
+    encoded: string,
+    phone: string | null = null,
+  ) {
+    const [created] = await this.db.rows<User>(
+      `INSERT INTO users(
+         email,password_hash,display_name,role,registration_approval_state,phone,phone_verified_at
+       ) VALUES($1,$2,$3,$4,'pending',$5,CASE WHEN $5::text IS NOT NULL THEN now() END) RETURNING *`,
+      [input.email, encoded, input.displayName, input.role, phone],
+      sql,
+    );
+    await sql.query(
+      'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
+      [created!.id],
+    );
+    await this.audit.record(
+      sql,
+      created!.id,
+      'auth.registered',
+      'user',
+      created!.id,
+    );
+    return created!;
+  }
+  private async sendRegistrationEmail(user: User) {
     let verificationDelivery: 'accepted' | 'unavailable' = 'accepted';
     try {
       await this.challenge(user, 'email', user.email);
@@ -189,7 +235,7 @@ export class AuthService {
       if (!(error instanceof ServiceUnavailableException)) throw error;
       verificationDelivery = 'unavailable';
     }
-    return { ...publicUser(user), verificationDelivery };
+    return verificationDelivery;
   }
   async login(body: unknown, res: Response) {
     const input = parse(loginSchema, body);
@@ -217,10 +263,7 @@ export class AuthService {
       user.registration_approval_state === 'rejected'
     )
       throw new UnauthorizedException('Invalid credentials');
-    const secret = token(),
-      csrf = token();
-    const days = loadConfig().SESSION_DAYS;
-    await this.db.transaction(async (sql) => {
+    const session = await this.db.transaction(async (sql) => {
       await sql.query(
         'SELECT id FROM users WHERE id=$1 AND active FOR UPDATE',
         [user.id],
@@ -237,13 +280,38 @@ export class AuthService {
         current.password_hash !== user.password_hash
       )
         throw new UnauthorizedException();
-      await sql.query(
-        "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
-        [user.id, hash(secret), hash(csrf), days],
-      );
-      await this.audit.record(sql, user.id, 'auth.login', 'user', user.id);
+      return this.issueSession(sql, current.id);
     });
-    if (input.transport === 'cookie')
+    return this.respondSession(res, session, input.transport);
+  }
+  async issueSession(sql: Sql, userId: string) {
+    const [user] = await this.db.rows<User>(
+      'SELECT * FROM users WHERE id=$1',
+      [userId],
+      sql,
+    );
+    if (!user) throw new UnauthorizedException();
+    const secret = token();
+    const csrf = token();
+    const days = loadConfig().SESSION_DAYS;
+    await sql.query(
+      "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
+      [userId, hash(secret), hash(csrf), days],
+    );
+    await this.audit.record(sql, userId, 'auth.login', 'user', userId);
+    return { user, secret, csrf, days };
+  }
+  respondSession(
+    res: Response,
+    {
+      user,
+      secret,
+      csrf,
+      days,
+    }: Awaited<ReturnType<AuthService['issueSession']>>,
+    transport: 'cookie' | 'bearer' = 'cookie',
+  ) {
+    if (transport === 'cookie')
       res.cookie('raui_session', secret, {
         httpOnly: true,
         secure: isProduction(loadConfig()),
@@ -255,7 +323,7 @@ export class AuthService {
     return {
       user: publicUser(user),
       csrfToken: csrf,
-      ...(input.transport === 'bearer' ? { sessionToken: secret } : {}),
+      ...(transport === 'bearer' ? { sessionToken: secret } : {}),
     };
   }
   async me(actor: Actor) {
@@ -431,6 +499,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly otp: PhoneOtpService,
+    private readonly phoneSignIn: PhoneSignInService,
   ) {}
   @Public() @Post('register') register(@Body() body: unknown) {
     return this.auth.register(body);
@@ -440,6 +509,51 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     return this.auth.login(body, res);
+  }
+  @Public() @Get('phone-sign-in/capabilities') phoneSignInCapabilities(
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return { available: phoneSignInAvailable() };
+  }
+  @Public() @Post('phone-sign-in') async requestPhoneSignIn(
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return await this.phoneSignIn.request(body, key);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
+  }
+  @Public() @Post('phone-sign-in/confirm') async confirmPhoneSignIn(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    const result = await this.phoneSignIn.confirm(body, (sql, userId) =>
+      this.auth.issueSession(sql, userId),
+    );
+    return result.kind === 'signup'
+      ? result
+      : {
+          kind: 'session' as const,
+          ...this.auth.respondSession(res, result.session),
+        };
+  }
+  @Public() @Post('phone-sign-in/register') registerPhoneSignIn(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.auth.registerWithPhone(body, this.phoneSignIn, res);
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);
@@ -547,6 +661,7 @@ export class AuthController {
   providers: [
     AuthService,
     PhoneOtpService,
+    PhoneSignInService,
     { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },
     { provide: VerificationDelivery, useClass: ConfiguredDelivery },
   ],

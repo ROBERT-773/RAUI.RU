@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -164,7 +164,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 34);
+    assert.equal(upgradedLedger.length, 35);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -187,6 +187,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [31, '032_required_commercial_type.sql'],
       [32, '033_commercial_automatic_gates.sql'],
       [33, '034_staff_totp.sql'],
+      [34, '035_phone_sign_in.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -199,6 +200,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     for (const table of [
       'phone_otp_challenges',
       'phone_otp_send_events',
+      'phone_sign_in_challenges',
       'listing_subscriptions',
       'listing_daily_candidates',
       'listing_daily_runs',

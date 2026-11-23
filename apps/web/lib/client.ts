@@ -16,6 +16,9 @@ export class ApiError extends Error {
 const publicMutations = new Set([
   'v1/auth/register',
   'v1/auth/login',
+  'v1/auth/phone-sign-in',
+  'v1/auth/phone-sign-in/confirm',
+  'v1/auth/phone-sign-in/register',
   'v1/auth/verification/email/confirm',
   'v1/auth/password-reset',
   'v1/auth/password-reset/confirm',

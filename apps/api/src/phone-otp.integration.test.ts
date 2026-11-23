@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing';
 import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { PhoneOtpService, phoneOtpDigest } from './modules/auth/phone-otp';
+import { PhoneSignInService } from './modules/auth/phone-sign-in';
 import { migrate } from './modules/database/migrate';
 import { hash, token } from './common/security';
 import {
@@ -36,6 +37,7 @@ interface Challenge {
 test('numeric phone OTP preserves committed security boundaries over real HTTP and PostgreSQL', async (t) => {
   assert.ok(process.env.TEST_DATABASE_URL?.includes('/raui_test_'));
   process.env.PHONE_OTP_ENABLED = 'true';
+  process.env.PHONE_SIGN_IN_ENABLED = 'true';
   process.env.PHONE_OTP_PEPPER = randomBytes(32).toString('base64url');
   process.env.PHONE_OTP_GATEWAY_URL = 'https://otp.example.test/dispatch';
   process.env.PHONE_OTP_GATEWAY_TOKEN = 'integration-test-only-token';
@@ -215,6 +217,135 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
   const code = (challenge: Challenge) =>
     messages.find((m) => m.challengeId === challenge.challengeId)!.code;
   try {
+    await t.test(
+      'verified phone signs in through HTTP and receives the ordinary session cookie',
+      async () => {
+        const account = await actor();
+        const destination = phone();
+        await pool.query(
+          'UPDATE users SET phone=$2,phone_verified_at=now() WHERE id=$1',
+          [account.id, destination],
+        );
+        const capabilities = await call('/auth/phone-sign-in/capabilities');
+        assert.deepEqual(await capabilities.json(), { available: true });
+        const body = { phone: destination, browserKey: token() };
+        const allocation = await call('/auth/phone-sign-in', undefined, body);
+        assert.equal(allocation.status, 201);
+        const { challengeId } = (await allocation.json()) as Challenge;
+        const { code } = messages.find(
+          (message) => message.challengeId === challengeId,
+        )!;
+        const confirmation = { ...body, challengeId, code };
+        const signedIn = await call(
+          '/auth/phone-sign-in/confirm',
+          undefined,
+          confirmation,
+        );
+        assert.equal(signedIn.status, 201);
+        assert.equal(signedIn.headers.get('cache-control'), 'no-store');
+        const result = (await signedIn.json()) as {
+          kind: string;
+          user: { id: string };
+        };
+        assert.equal(result.kind, 'session');
+        assert.equal(result.user.id, account.id);
+        const cookie = signedIn.headers.get('set-cookie')!;
+        assert.match(cookie, /HttpOnly/i);
+        const me = await fetch(base + '/v1/auth/me', {
+          headers: { Cookie: cookie.split(';')[0]! },
+        });
+        assert.equal(me.status, 200);
+        assert.equal(((await me.json()) as { id: string }).id, account.id);
+        assert.equal(
+          (await call('/auth/phone-sign-in/confirm', undefined, confirmation))
+            .status,
+          401,
+        );
+      },
+    );
+    await t.test(
+      'SMS sign-in allocates once and shares the destination budget',
+      async () => {
+        const signIn = module.get(PhoneSignInService);
+        const destination = phone();
+        const body = { phone: destination, browserKey: token() };
+        const key = randomUUID();
+        const first = await signIn.request(body, key);
+        assert.equal(first.delivery, 'accepted');
+        assert.deepEqual(await signIn.request(body, key), first);
+        const delivered = messages.find(
+          (m) => m.challengeId === first.challengeId,
+        )!;
+        const confirmation = {
+          ...body,
+          challengeId: first.challengeId,
+          code: delivered.code,
+        };
+        const issueSession = async () =>
+          assert.fail('A new phone must not issue a session');
+        await assert.rejects(
+          signIn.confirm(
+            { ...confirmation, browserKey: token() },
+            issueSession,
+          ),
+          { status: 401 },
+        );
+        const signup = await signIn.confirm(confirmation, issueSession);
+        assert.equal(signup.kind, 'signup');
+        if (signup.kind !== 'signup')
+          assert.fail('Expected registration proof');
+        const profile = {
+          ...body,
+          signupToken: signup.signupToken,
+          email: 'from-sms@example.test',
+          password: 'integration-only-password',
+          displayName: 'SMS owner',
+          role: 'owner',
+        };
+        const registration = await call(
+          '/auth/phone-sign-in/register',
+          undefined,
+          profile,
+        );
+        assert.equal(registration.status, 201);
+        const registered = (await registration.json()) as {
+          user: {
+            phone: string;
+            phone_verified_at: string;
+            email_verified_at: string | null;
+            registration_approval_state: string;
+          };
+        };
+        assert.equal(registered.user.phone, destination);
+        assert.ok(registered.user.phone_verified_at);
+        assert.equal(registered.user.email_verified_at, null);
+        assert.equal(registered.user.registration_approval_state, 'pending');
+        assert.equal(
+          (await call('/auth/phone-sign-in/register', undefined, profile))
+            .status,
+          401,
+        );
+        await assert.rejects(signIn.confirm(confirmation, issueSession), {
+          status: 401,
+        });
+        assert.equal(
+          messages.filter((m) => m.destination === destination).length,
+          1,
+        );
+        await assert.rejects(signIn.request(body, randomUUID()), {
+          status: 429,
+        });
+        const account = await actor();
+        await pool.query(
+          "UPDATE phone_otp_send_events SET created_at=clock_timestamp()-interval '2 minutes' WHERE user_id IS NULL",
+        );
+        const verification = await request(account, destination);
+        assert.equal(verification.delivery, 'accepted');
+        await assert.rejects(signIn.request(body, randomUUID()), {
+          status: 429,
+        });
+      },
+    );
     await t.test(
       'pending capabilities are private; unauthenticated, rejected, inactive and cookie CSRF mutations are denied',
       async () => {
@@ -1057,7 +1188,15 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
         }
         for (const message of messages) {
           assert.match(message.code, /^[0-9]{6}$/);
-          const stored = await row(message.challengeId);
+          const stored =
+            (await row(message.challengeId)) ??
+            (
+              await pool.query<{ code_digest: string }>(
+                'SELECT code_digest FROM phone_sign_in_challenges WHERE id=$1',
+                [message.challengeId],
+              )
+            ).rows[0];
+          assert.ok(stored);
           assert.notEqual(stored.code_digest, message.code);
           assert.equal(stored.code_digest.length, 64);
         }

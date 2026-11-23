@@ -142,6 +142,7 @@ export const envSchema = z
       }, 'CDN base requires clean credential-free HTTP(S) URL')
       .optional(),
     PHONE_OTP_ENABLED: z.enum(['true', 'false']).default('false'),
+    PHONE_SIGN_IN_ENABLED: z.enum(['true', 'false']).default('false'),
     STAFF_TOTP_REQUIRED: z.enum(['true', 'false']).default('false'),
     STAFF_TOTP_ENCRYPTION_KEY: z
       .string()
