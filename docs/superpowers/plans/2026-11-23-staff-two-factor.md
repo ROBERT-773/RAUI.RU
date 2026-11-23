@@ -30,7 +30,8 @@ instance without a delivery provider.
 Apply the additive migration with the normal migration command. Inject
 `STAFF_TOTP_ENCRYPTION_KEY` as a server secret containing 32 random bytes in
 hex. Set `STAFF_TOTP_REQUIRED=true` in the isolated environment and restart
-the API. Administrators and delegated moderators can enroll from their
+the API. Production configuration requires this setting and a valid key.
+Administrators and delegated moderators can enroll from their
 existing staff pages after entering their account password. Verify a fresh
 session requires an authenticator code and that normal public and account
 requests continue to work.

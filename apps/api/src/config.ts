@@ -181,6 +181,12 @@ export const envSchema = z
     const reject = (field: string, message: string) =>
       context.addIssue({ code: 'custom', path: [field], message });
     if (
+      production &&
+      value.DEPLOYMENT_ENV !== 'staging' &&
+      value.STAFF_TOTP_REQUIRED !== 'true'
+    )
+      reject('STAFF_TOTP_REQUIRED', 'Production requires staff second factor');
+    if (
       value.STAFF_TOTP_REQUIRED === 'true' &&
       !value.STAFF_TOTP_ENCRYPTION_KEY
     )
