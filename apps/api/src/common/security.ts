@@ -161,6 +161,7 @@ export class SessionGuard implements CanActivate {
         'GET /v1/auth/verification/phone/capabilities',
         'POST /v1/auth/verification/phone/otp',
         'POST /v1/auth/verification/phone/otp/confirm',
+        'POST /v1/auth/phone-sign-in/enroll',
       ]);
       if (
         !onboarding.has(`${req.method} ${path}`) &&

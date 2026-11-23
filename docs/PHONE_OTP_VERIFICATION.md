@@ -26,13 +26,17 @@ staging acceptance check.
   idempotency key and keep delivery outside the database transaction.
 - Use a short lifetime and limited attempts. Under locks, consume a valid
   code once and recheck the current account and verified number before
-  issuing the normal session. Staff retain the password and second-factor
-  flow. A disabled or rejected account cannot sign in or start a replacement
+  issuing the normal session. Existing accounts explicitly enroll the verified
+  number from their cabinet using the current password and a fresh code.
+  Migration 036 keeps existing accounts unenrolled and clears enrollment
+  when the phone changes or loses verification. Staff retain the password and
+  second-factor flow. A disabled or rejected account cannot sign in or start a replacement
   registration with the same number.
 - A new number yields a short-lived, one-time registration continuation.
   After SMS, collect role, name, email and password. The last two fields
   remain required by the existing user schema. Consume the continuation and
-  reserve the unique number in the same transaction as account creation.
+  reserve and enroll the unique number in the same transaction as account
+  creation.
   Keep email confirmation and registration approval independent.
 - Acceptance covers existing and new accounts, replay and throttling,
   concurrent registration, revoked eligibility, and the desktop and mobile
@@ -93,6 +97,10 @@ authorized controlled recipient. No secrets belong in chat, Git or browser code.
 Gateway acceptance is explicitly distinct from confirmed delivery.
 
 ## Rollback and retention
+
+Disable `PHONE_SIGN_IN_ENABLED` to stop SMS sign-in and SMS signup.
+Retain migrations 035 and 036 for rollback or a forward fix. Email and ID
+password sign-in remain available.
 
 Disable `PHONE_OTP_ENABLED` and retain migration017/tables. Old long-token routes
 remain available. Preserve registration approval guards during binary rollback.
