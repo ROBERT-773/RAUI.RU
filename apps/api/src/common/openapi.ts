@@ -1,3 +1,7 @@
+import {
+  listingSubscriptionSchema,
+  listingSubscriptionDisableSchema,
+} from '../modules/product/subscription-contract';
 import { aiRequest, flagRequest } from '../modules/ai/contracts';
 import { trustDecision, duplicateDecision } from '../modules/trust/trust';
 import { analyticsEvent } from '../modules/analytics/analytics';
@@ -31,7 +35,7 @@ import { uploadSchema } from '../modules/media/media';
 import { createSchema } from '../modules/properties/properties';
 import { fields } from '../modules/listings/listings';
 import { addressSchema } from '../modules/geo/geo';
-import { uuid } from './security';
+import { staffPermissions, uuid } from './security';
 const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
@@ -116,6 +120,9 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/account/threads/{id}/messages': object({
     body: z.string().min(1).max(4000),
   }),
+  'post /v1/account/listing-subscriptions/{id}': listingSubscriptionSchema,
+  'post /v1/account/listing-subscriptions/{id}/disable':
+    listingSubscriptionDisableSchema,
   'patch /v1/account/preferences': object({
     in_app: z.boolean(),
     email: z.boolean(),
@@ -123,10 +130,22 @@ const bodyContracts: Record<string, z.ZodType> = {
     push: z.boolean(),
   }),
 
+  'patch /v1/admin/users/{id}/permissions': object({
+    permission: z.enum(staffPermissions),
+    granted: z.boolean(),
+    reason: z.string().trim().min(3).max(2000),
+  }),
   'post /v1/auth/register': registerSchema,
   'post /v1/auth/login': loginSchema,
   'post /v1/auth/verification/phone': object({
     phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
+  }),
+  'post /v1/auth/verification/phone/otp': object({
+    phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
+  }),
+  'post /v1/auth/verification/phone/otp/confirm': object({
+    challengeId: uuid,
+    code: z.string().regex(/^[0-9]{6}$/),
   }),
   'post /v1/auth/verification/phone/confirm': object({
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -157,7 +176,11 @@ const bodyContracts: Record<string, z.ZodType> = {
         z.union([z.string().max(2000), z.number(), z.boolean()]),
       )
       .optional(),
-    address: addressSchema.optional(),
+    address: addressSchema
+      .optional()
+      .describe(
+        'Only an administrator may correct the address after a listing has been created.',
+      ),
   }),
   'post /v1/listings': object({
     propertyId: uuid,
@@ -211,6 +234,10 @@ const bodyContracts: Record<string, z.ZodType> = {
     decision: z.enum(['approve', 'reject']),
     reason: z.string().min(3).max(2000),
   }),
+  'post /v1/admin/registration-approvals/{id}/decision': object({
+    decision: z.enum(['approve', 'reject']),
+    reason: z.string().trim().min(3).max(2000),
+  }),
   'patch /v1/admin/users/{id}': object({
     active: z.boolean().optional(),
     role: z
@@ -235,6 +262,11 @@ get /v1/listings/{id}/public
 get /v1/media/{id}/{variant}
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
+get /v1/search/locations
+get /v1/search/recent
+get /v1/search/region-counts
+get /v1/search/professionals
+get /v1/search/professionals/{id}
 post /v1/search
 post /v1/search/selection
 post /v1/search/map
@@ -252,7 +284,8 @@ post /v1/partner/feeds/{id}/apply
 post /v1/partner/listings/bulk-pause`.split('\n'),
 );
 const idempotentOperations = new Set(
-  `post /v1/organizations
+  `post /v1/auth/verification/phone/otp
+post /v1/organizations
 post /v1/properties
 post /v1/listings
 post /v1/listings/{id}/transitions
@@ -263,6 +296,7 @@ post /v1/structures/sections
 post /v1/structures/floors
 post /v1/admin/media-jobs/{id}/retry
 post /v1/admin/moderation/{id}/decision
+post /v1/admin/registration-approvals/{id}/decision
 post /v1/trust/listings/{id}/scan
 post /v1/admin/trust/listings/{id}/decision
 post /v1/admin/trust/candidates/{id}/decision
@@ -382,6 +416,735 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/listings/{id}/history') {
+        const historyWindow =
+          'The 200 most recent listing events at most, returned in ascending event ID order.';
+        operation.description = historyWindow;
+        operation.responses['200'] = { description: historyWindow };
+      }
+      if (operationId === 'get /v1/listings/{id}/public') {
+        operation.responses['200'] = {
+          description:
+            'Published listing with any declared public rental terms',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  professionals: {
+                    type: 'array',
+                    maxItems: 2,
+                    items: {
+                      type: 'object',
+                      required: ['id', 'name', 'kind'],
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        kind: { type: 'string', enum: ['agent', 'agency'] },
+                      },
+                    },
+                  },
+                  rentalTerms: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      deposit: {
+                        type: 'number',
+                        minimum: 0,
+                        maximum: 999999999,
+                      },
+                      commission: { type: 'number', minimum: 0, maximum: 100 },
+                      utilitiesIncluded: { type: 'boolean' },
+                      availableFrom: { type: 'string', format: 'date' },
+                      availableUntil: { type: 'string', format: 'date' },
+                      guestCapacity: {
+                        type: 'integer',
+                        minimum: 1,
+                        maximum: 9999,
+                      },
+                      minimumNights: {
+                        type: 'integer',
+                        minimum: 1,
+                        maximum: 365,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (
+        [
+          'get /v1/auth/verification/phone/capabilities',
+          'post /v1/auth/verification/phone/otp',
+          'post /v1/auth/verification/phone/otp/confirm',
+        ].includes(operationId)
+      ) {
+        operation.description =
+          'Own-account phone verification for active pending or approved accounts; private, no-store. Contact verification never grants registration approval.';
+        const json = (schema: SchemaObject, description: string) => ({
+          description,
+          content: { 'application/json': { schema } },
+        });
+        const strict = (
+          properties: Record<string, SchemaObject>,
+        ): SchemaObject => ({
+          type: 'object',
+          additionalProperties: false,
+          required: Object.keys(properties),
+          properties,
+        });
+        if (method === 'get') {
+          operation.responses['200'] = json(
+            strict({
+              numericOtp: strict({
+                available: { type: 'boolean' },
+                reason: {
+                  type: 'string',
+                  enum: ['available', 'disabled', 'unconfigured'],
+                },
+              }),
+              legacyToken: strict({
+                available: { type: 'boolean', enum: [true] },
+              }),
+            }),
+            'Configuration availability, never proof of provider health or SMS delivery',
+          );
+        } else if (path.endsWith('/confirm')) {
+          operation.responses['201'] = json(
+            strict({ verified: { type: 'boolean', enum: [true] } }),
+            'Phone verified after committed contact update',
+          );
+          operation.responses['400'] = {
+            description:
+              'Invalid, wrong-user, consumed, expired or exhausted challenge: phone_otp_invalid. No attempt count is exposed.',
+          };
+          operation.responses['409'] = {
+            description:
+              'Claimed phone unavailable: phone_otp_contact_unavailable. No account details are exposed.',
+          };
+        } else {
+          operation.responses['201'] = json(
+            strict({
+              challengeId: { type: 'string', format: 'uuid' },
+              expiresAt: { type: 'string', format: 'date-time' },
+              resendAfter: { type: 'string', format: 'date-time' },
+              delivery: {
+                type: 'string',
+                enum: ['accepted', 'unavailable', 'unknown'],
+              },
+            }),
+            'Durable challenge allocation; acceptance does not confirm delivery; replay causes no new dispatch',
+          );
+          operation.responses['409'] = {
+            description: 'Idempotency key reused with a different phone',
+          };
+          operation.responses['429'] = {
+            ...json(
+              strict({
+                code: { type: 'string', enum: ['phone_otp_rate_limited'] },
+                message: { type: 'string' },
+                retryAfterSeconds: { type: 'integer', minimum: 1 },
+              }),
+              'Cooldown or rolling send quota exceeded',
+            ),
+            headers: {
+              'Retry-After': {
+                schema: { type: 'integer', minimum: 1 },
+                description: 'Seconds until retry',
+              },
+            },
+          };
+          operation.responses['503'] = {
+            description:
+              'Numeric OTP disabled or unconfigured: phone_otp_unavailable. No challenge, send event or dispatch is created.',
+          };
+        }
+      }
+      if (
+        operationId === 'get /v1/account/notifications' ||
+        operationId === 'post /v1/account/notifications/{id}/read'
+      ) {
+        const decimalId: SchemaObject = {
+          type: 'string',
+          pattern: '^[1-9][0-9]{0,18}$',
+          description:
+            'Exact positive PostgreSQL bigint decimal string, at most 9223372036854775807; never a JavaScript number',
+        };
+        operation.description =
+          'Owned account inbox. Message behavior is preserved. Immediate in-app subscription rows require current consent/channel/preferences, subscription version and latest full-public listing state; unavailable events are neutral. Daily digest is not implemented. Authorization is point-in-time; already received content cannot be recalled.';
+        if (method === 'get') {
+          const common: Record<string, SchemaObject> = {
+            id: decimalId,
+            read_at: { type: 'string', format: 'date-time', nullable: true },
+            created_at: { type: 'string', format: 'date-time' },
+          };
+          const shape = (
+            properties: Record<string, SchemaObject>,
+          ): SchemaObject => ({
+            type: 'object',
+            additionalProperties: false,
+            required: Object.keys(properties),
+            properties,
+          });
+          const priceEvent = shape({
+            kind: { type: 'string', enum: ['price_drop'] },
+            previousPriceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+            priceMinor: {
+              type: 'integer',
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+          });
+          const availabilityEvent = shape({
+            kind: { type: 'string', enum: ['availability'] },
+            available: { type: 'boolean' },
+          });
+          operation.parameters = [
+            {
+              in: 'query',
+              name: 'cursor',
+              required: false,
+              schema: decimalId,
+              description:
+                'Exclusive last scanned raw id. An empty filtered page may still have a cursor.',
+            },
+            {
+              in: 'query',
+              name: 'limit',
+              required: false,
+              schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            },
+          ];
+          operation.responses['200'] = {
+            description: 'Safe current inbox rows and advancing raw cursor',
+            content: {
+              'application/json': {
+                schema: shape({
+                  items: {
+                    type: 'array',
+                    items: {
+                      oneOf: [
+                        shape({
+                          ...common,
+                          kind: { type: 'string', enum: ['message'] },
+                          thread_id: { type: 'string', format: 'uuid' },
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.price_drop'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: priceEvent,
+                        }),
+                        shape({
+                          ...common,
+                          kind: {
+                            type: 'string',
+                            enum: ['subscription.listing.availability'],
+                          },
+                          listing_id: { type: 'string', format: 'uuid' },
+                          event: availabilityEvent,
+                        }),
+                      ],
+                    },
+                  },
+                  cursor: { ...decimalId, nullable: true },
+                }),
+              },
+            },
+          };
+        } else {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            { name: 'id', in: 'path', required: true, schema: decimalId },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Notification not owned or no longer eligible; read state unchanged',
+          };
+          operation.responses['201'] = {
+            description:
+              'Eligible notification marked read; repeated reads are idempotent',
+          };
+        }
+      }
+      if (path.startsWith('/v1/account/listing-subscriptions')) {
+        operation.description =
+          'Own-account listing subscriptions. Favorites do not imply consent. Saving preferences does not establish delivery; worker/channel configuration and current preferences govern notifications.';
+        if (path.includes('{id}')) {
+          operation.parameters = [
+            ...(operation.parameters ?? []).filter(
+              (parameter: ParameterObject | ReferenceObject) =>
+                !(
+                  'name' in parameter &&
+                  parameter.name === 'id' &&
+                  parameter.in === 'path'
+                ),
+            ),
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ];
+          operation.responses['404'] = {
+            description:
+              'Listing unavailable for subscription, or subscription not owned by current account',
+          };
+        }
+        if (path.endsWith('/disable')) {
+          operation.responses['409'] = {
+            description:
+              'Stale subscription version; reload current preferences',
+          };
+          operation.responses['201'] = {
+            description:
+              'Subscription disabled for current account. After successful disable, no new transport attempts for the previous subscription start. Messages already accepted by the provider cannot be recalled.',
+          };
+        }
+      }
+      if (operationId === 'patch /v1/organizations/{id}/members')
+        operation.description =
+          'Organization owner/admin membership management. Deactivation preserves the stored role, removes organization access and permanently revokes active partner clients created by that member. Reactivation does not restore prior credentials; reactivation or any role change revokes legacy active clients. Create a new partner client explicitly after the membership change.';
+      if (operationId === 'get /v1/account/publication-quota') {
+        const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
+        operation.description =
+          'Own-account informational capacity. Owners may have one published listing across all sources; drafts and nonpublic offers consume no active slot. Each transition into publication counts toward three publications per Moscow calendar month. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
+        operation.responses['200'] = {
+          description:
+            'Current owner capacity, or null quota fields for other roles',
+          content: {
+            'application/json': {
+              schema: {
+                oneOf: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    required,
+                    properties: {
+                      applies: { type: 'boolean', enum: [true] },
+                      limit: { type: 'integer', enum: [1] },
+                      publishedObjects: { type: 'integer', minimum: 0 },
+                      remaining: { type: 'integer', minimum: 0, maximum: 1 },
+                    },
+                  },
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    required,
+                    properties: {
+                      applies: { type: 'boolean', enum: [false] },
+                      limit: { type: 'integer', nullable: true, enum: [null] },
+                      publishedObjects: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                      remaining: {
+                        type: 'integer',
+                        nullable: true,
+                        enum: [null],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'post /v1/admin/moderation/{id}/decision') {
+        operation.responses['409'] = {
+          description:
+            'Stale case/version or owner publication quota exceeded. A quota denial leaves the current case pending; staff may retry after capacity is released.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['statusCode', 'message'],
+                properties: {
+                  statusCode: { type: 'integer', enum: [409] },
+                  message: { type: 'string' },
+                  code: {
+                    type: 'string',
+                    enum: ['OWNER_PUBLICATION_QUOTA_EXCEEDED'],
+                  },
+                  error: { type: 'string' },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (
+        [
+          'post /v1/auth/register',
+          'post /v1/auth/login',
+          'get /v1/auth/me',
+        ].includes(operationId)
+      ) {
+        const userSchema: SchemaObject = {
+          type: 'object',
+          required: [
+            'id',
+            'public_id',
+            'email',
+            'display_name',
+            'role',
+            'active',
+            'registration_approval_state',
+          ],
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            public_id: {
+              type: 'string',
+              pattern: '^[1-9][0-9]*$',
+              description:
+                'Permanent numeric identifier, encoded as a string; not an authentication secret',
+            },
+            email: { type: 'string', format: 'email' },
+            display_name: { type: 'string' },
+            role: {
+              type: 'string',
+              enum: ['buyer', 'owner', 'agent', 'agency', 'developer', 'admin'],
+            },
+            active: { type: 'boolean' },
+            registration_approval_state: {
+              type: 'string',
+              enum: ['pending', 'approved', 'rejected'],
+            },
+            registration_approval_reason: { type: 'string', nullable: true },
+            ...(operationId === 'post /v1/auth/register'
+              ? {
+                  verificationDelivery: {
+                    type: 'string' as const,
+                    enum: ['accepted', 'unavailable'],
+                  },
+                }
+              : {}),
+            phone: { type: 'string', nullable: true },
+            email_verified_at: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+            phone_verified_at: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+            ...(operationId === 'get /v1/auth/me'
+              ? {
+                  twoFactorEnabled: { type: 'boolean' as const, enum: [false] },
+                }
+              : {}),
+          },
+        };
+        operation.responses[operationId.startsWith('post') ? '201' : '200'] = {
+          description: 'Account identity; public_id is informational only',
+          content: {
+            'application/json': {
+              schema:
+                operationId === 'post /v1/auth/login'
+                  ? {
+                      type: 'object',
+                      required: ['user', 'csrfToken'],
+                      properties: {
+                        user: userSchema,
+                        csrfToken: { type: 'string' },
+                        sessionToken: {
+                          type: 'string',
+                          description: 'Bearer transport only',
+                        },
+                      },
+                    }
+                  : userSchema,
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/admin/moderation/{id}/materials') {
+        operation.description =
+          'Current pending-case materials for an administrator or staff with moderation.read; excludes private contacts, storage keys and authentication data.';
+      }
+      if (operationId.endsWith('/v1/admin/users/{id}/permissions')) {
+        operation.description =
+          'Administrator-only delegated moderation and registration permissions. Changes require an audit reason and do not change account roles.';
+      }
+      if (path.startsWith('/v1/admin/registration-approvals')) {
+        operation.description =
+          method === 'post'
+            ? 'Administrator or registration.decide staff: audited idempotent decision on pending registration; approval requires both verified contacts and active applicant. Authorization is rechecked before replay. No self-review.'
+            : 'Administrator or registration.read staff: private registration queue and contact evidence; excludes credentials, tokens and sessions.';
+      }
+      if (
+        operationId ===
+        'get /v1/admin/moderation/{id}/media/{mediaId}/{variant}'
+      ) {
+        operation.description =
+          'Administrator or staff with moderation.read may inspect ready images belonging to the current pending moderation case. No public access or storage keys.';
+        operation.parameters = [
+          ...(operation.parameters ?? []).filter(
+            (p: ParameterObject | ReferenceObject) =>
+              !('name' in p && p.name === 'variant'),
+          ),
+          {
+            name: 'variant',
+            in: 'path',
+            required: true,
+            schema: {
+              type: 'string',
+              enum: ['thumb', 'small', 'large', 'avif'],
+            },
+          },
+        ];
+        operation.responses['200'] = {
+          description:
+            'Ready image for the current pending moderation case; private, no-store',
+          content: {
+            'image/webp': { schema: { type: 'string', format: 'binary' } },
+            'image/avif': { schema: { type: 'string', format: 'binary' } },
+          },
+        };
+        operation.responses['404'] = {
+          description: 'Current pending case or matching ready image not found',
+        };
+      }
+      if (operationId === 'get /v1/auth/csrf') {
+        operation.security = [{ cookie: [] }];
+        operation.responses['200'] = {
+          description:
+            'Uncached cookie-session CSRF token; not an authentication token',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['csrfToken'],
+                additionalProperties: false,
+                properties: {
+                  csrfToken: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (
+        [
+          'patch /v1/search/professional-profile',
+          'patch /v1/search/professional-profile/agency/{id}',
+        ].includes(operationId)
+      ) {
+        operation.requestBody = {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['name', 'regionCodes', 'published'],
+                properties: {
+                  name: { type: 'string', minLength: 1, maxLength: 120 },
+                  regionCodes: {
+                    type: 'array',
+                    maxItems: 20,
+                    items: { type: 'string' },
+                  },
+                  published: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/search/professionals/{id}') {
+        operation.parameters = [
+          ...(operation.parameters ?? []),
+          { name: 'regionCode', in: 'query', schema: { type: 'string' } },
+          {
+            name: 'page',
+            in: 'query',
+            schema: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 999999999,
+              default: 1,
+            },
+          },
+        ];
+        operation.responses['200'] = {
+          description: 'Published professional profile and its work regions',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: [
+                  'id',
+                  'name',
+                  'kind',
+                  'regionCodes',
+                  'listings',
+                  'listingCount',
+                  'listingPageCount',
+                  'listingCountsByRegion',
+                ],
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  name: { type: 'string' },
+                  kind: { type: 'string', enum: ['agent', 'agency'] },
+                  regionCodes: { type: 'array', items: { type: 'string' } },
+                  listingCount: { type: 'integer', minimum: 0 },
+                  listingPageCount: { type: 'integer', minimum: 0 },
+                  listingCountsByRegion: {
+                    type: 'object',
+                    additionalProperties: { type: 'integer', minimum: 0 },
+                  },
+                  listings: {
+                    type: 'array',
+                    maxItems: 12,
+                    items: { type: 'object' },
+                  },
+                },
+              },
+            },
+          },
+        };
+        operation.responses['404'] = {
+          description: 'Public profile not found',
+        };
+      }
+      if (operationId === 'get /v1/search/professionals') {
+        operation.parameters = [
+          {
+            name: 'regionCode',
+            in: 'query',
+            required: true,
+            schema: { type: 'string' },
+          },
+          {
+            name: 'kind',
+            in: 'query',
+            schema: { type: 'string', enum: ['agent', 'agency'] },
+          },
+          {
+            name: 'page',
+            in: 'query',
+            schema: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 999999999,
+              default: 1,
+            },
+          },
+          {
+            name: 'q',
+            in: 'query',
+            schema: { type: 'string', maxLength: 120 },
+          },
+        ];
+        operation.responses['200'] = {
+          description:
+            'Up to twelve published profiles per professional type in the selected region',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['items', 'hasMore', 'counts'],
+                properties: {
+                  hasMore: { type: 'boolean' },
+                  counts: {
+                    type: 'object',
+                    required: ['agent', 'agency'],
+                    properties: {
+                      agent: { type: 'integer', minimum: 0 },
+                      agency: { type: 'integer', minimum: 0 },
+                    },
+                  },
+                  items: {
+                    type: 'array',
+                    maxItems: 24,
+                    items: {
+                      type: 'object',
+                      required: ['id', 'name', 'kind'],
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        kind: { type: 'string', enum: ['agent', 'agency'] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/search/region-counts') {
+        operation.responses['200'] = {
+          description: 'Published listing counts by configured region',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['items'],
+                properties: {
+                  items: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: ['code', 'count'],
+                      properties: {
+                        code: { type: 'string' },
+                        count: { type: 'integer', minimum: 0 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (operationId === 'get /v1/search/locations') {
+        operation.parameters = [
+          {
+            name: 'kind',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: ['city', 'metro'] },
+          },
+          {
+            name: 'q',
+            in: 'query',
+            schema: { type: 'string', maxLength: 100 },
+          },
+          { name: 'regionCode', in: 'query', schema: { type: 'string' } },
+          {
+            name: 'locality',
+            in: 'query',
+            schema: { type: 'string', maxLength: 150 },
+          },
+        ];
+      }
       if (operationId === 'get /v1/search/sitemap') {
         operation.parameters = [
           ...(operation.parameters ?? []).filter(

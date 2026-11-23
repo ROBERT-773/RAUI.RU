@@ -1,5 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
+import ListingSubscription from './listing-subscription';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, track } from '../lib/client';
@@ -32,6 +33,7 @@ export default function DetailActions({ id }: { id: string }) {
         <Button onClick={() => collect('compare')}>Сравнить</Button>
         <Link href="/account">Открыть аккаунт</Link>
       </div>
+      <ListingSubscription key={id} id={id} />
       <form
         onSubmit={async (e) => {
           e.preventDefault();

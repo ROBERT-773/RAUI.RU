@@ -6,33 +6,102 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
+import { searchMapBounds } from '../lib/map-bounds';
 import AdvancedFilters, { advancedDefinition } from './advanced-filters';
 import { Card } from './card';
+import LocationInput from './location-input';
 const MapPanel = dynamic(() => import('./map'), {
   loading: () => <p role="status">Загрузка карты…</p>,
   ssr: false,
 });
+
+function dateField(value: number | undefined) {
+  const date = String(value ?? '');
+  return /^\d{8}$/.test(date)
+    ? `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}`
+    : '';
+}
 export default function SearchProduct({
   initialDefinition = { limit: 20 },
   initialMode = 'list',
+  initialPage = null,
+  title = 'Найдите своё место',
 }: {
   initialDefinition?: SearchDefinition;
   initialMode?: 'list' | 'map';
+  initialPage?: SearchPage | null;
+  title?: string;
+}) {
+  // Next preserves client components during same-route navigation. Reset drafts
+  // and result state when the URL-provided definition or mode changes.
+  return (
+    <SearchView
+      key={JSON.stringify([initialDefinition, initialMode])}
+      definition={initialDefinition}
+      mode={initialMode}
+      initialPage={initialPage}
+      title={title}
+    />
+  );
+}
+function SearchView({
+  definition,
+  mode,
+  initialPage,
+  title,
+}: {
+  definition: SearchDefinition;
+  mode: 'list' | 'map';
+  initialPage: SearchPage | null;
+  title: string;
 }) {
   const router = useRouter();
   const [navigationPending, startNavigation] = useTransition();
-  const [definition, setDefinition] =
-      useState<SearchDefinition>(initialDefinition),
-    [page, setPage] = useState<SearchPage | null>(null),
+  const [requestRevision, setRequestRevision] = useState(0);
+  const [advancedCategory, setAdvancedCategory] = useState<string | null>(null);
+  const [page, setPage] = useState<SearchPage | null>(initialPage),
     [error, setError] = useState(''),
-    [loading, setLoading] = useState(true),
-    [mode, setMode] = useState<'list' | 'map'>(initialMode),
+    [loading, setLoading] = useState(!initialPage),
     [selected, setSelected] = useState<string[] | null>(null),
     [notice, setNotice] = useState(''),
     [filterCategory, setFilterCategory] = useState(
-      initialDefinition.category ?? 'apartment',
+      definition.category ?? 'apartment',
     );
+  const [regions, setRegions] = useState<{ code: string; name: string }[]>([]);
+  const [regionalCounts, setRegionalCounts] = useState<Record<string, number>>(
+    {},
+  );
+  const [regionError, setRegionError] = useState(false);
+  const [localityDraft, setLocalityDraft] = useState(definition.locality ?? '');
+  const [dealDraft, setDealDraft] = useState(definition.dealType ?? '');
   useEffect(() => {
+    let active = true;
+    api<{ items: { code: string; name: string }[] }>('v1/regions')
+      .then((result) => {
+        if (active) setRegions(result.items);
+      })
+      .catch(() => {
+        if (active) setRegionError(true);
+      });
+    api<{ items: { code: string; count: number }[] }>('v1/search/region-counts')
+      .then(({ items }) => {
+        if (active)
+          setRegionalCounts(
+            Object.fromEntries(items.map(({ code, count }) => [code, count])),
+          );
+      })
+      .catch(() => {
+        // Region selection remains available when totals cannot load.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (initialPage && requestRevision === 0) {
+      track({ type: 'search_performed', resultCount: initialPage.total });
+      return;
+    }
     let active = true;
     api<SearchPage>('v1/search', 'POST', definition)
       .then((r) => {
@@ -51,7 +120,7 @@ export default function SearchProduct({
     return () => {
       active = false;
     };
-  }, [definition]);
+  }, [definition, initialPage, requestRevision]);
   function update(d: SearchDefinition, nextMode = mode) {
     const next = { ...d, cursor: undefined };
     const query = new URLSearchParams({
@@ -61,9 +130,14 @@ export default function SearchProduct({
     const target = '/search?' + query.toString();
     if (window.location.pathname + window.location.search !== target)
       startNavigation(() => router.replace(target, { scroll: false }));
+    // A retry or selection reset can reuse the current URL definition.
+    if (
+      JSON.stringify(next) === JSON.stringify(definition) &&
+      nextMode === mode
+    )
+      setRequestRevision((revision) => revision + 1);
     setLoading(true);
     setSelected(null);
-    setDefinition({ ...d, cursor: undefined });
     track({ type: 'filter_changed', fields: Object.keys(d) });
   }
   async function save() {
@@ -79,15 +153,68 @@ export default function SearchProduct({
   }
   return (
     <>
-      <h1>Найдите своё место</h1>
+      <h1>{title}</h1>
       <form
         className="filters"
+        key={definition.regionCode ?? 'all'}
         onSubmit={(e) => {
           e.preventDefault();
           const data = new FormData(e.currentTarget);
+          // Guard Enter/programmatic submits as well as the disabled button.
+          if (
+            data.get('advancedCategory') !==
+            (data.get('category') || 'apartment')
+          ) {
+            setNotice('Дождитесь загрузки фильтров или повторите загрузку.');
+            return;
+          }
+          const advanced = advancedDefinition(
+            data,
+            filterCategory === (definition.category ?? 'apartment')
+              ? definition.attributes
+              : undefined,
+          );
+          if (dealDraft !== 'long_rent') {
+            delete advanced.attributes?.rent_commission;
+            delete advanced.attributes?.utilities_included;
+          }
+          if (dealDraft !== 'long_rent' && dealDraft !== 'short_rent')
+            delete advanced.attributes?.rent_deposit;
+          if (dealDraft !== 'short_rent')
+            delete advanced.attributes?.guest_capacity;
+          const arrival = String(data.get('arrival') ?? '');
+          const departure = String(data.get('departure') ?? '');
+          if (advanced.attributes) {
+            delete advanced.attributes.rental_available_from;
+            delete advanced.attributes.rental_available_until;
+            delete advanced.attributes.rental_minimum_nights;
+            if (dealDraft === 'short_rent' && (arrival || departure)) {
+              const nights =
+                (Date.parse(departure) - Date.parse(arrival)) / 86400000;
+              if (
+                !arrival ||
+                !departure ||
+                !Number.isInteger(nights) ||
+                nights < 1
+              ) {
+                setNotice(
+                  'Укажите даты заезда и выезда. Выезд должен быть позже заезда.',
+                );
+                return;
+              }
+              advanced.attributes.rental_available_from = {
+                max: Number(arrival.replaceAll('-', '')),
+              };
+              advanced.attributes.rental_available_until = {
+                min: Number(departure.replaceAll('-', '')),
+              };
+              advanced.attributes.rental_minimum_nights = { max: nights };
+            }
+          }
+          setNotice('');
           update({
             ...definition,
-            ...advancedDefinition(data),
+            ...advanced,
             q: String(data.get('q') ?? ''),
             category: String(data.get('category') || '') || undefined,
             dealType: (String(data.get('dealType') || '') ||
@@ -98,18 +225,24 @@ export default function SearchProduct({
             },
             locality: String(data.get('locality') || '') || undefined,
             attributes: {
-              ...advancedDefinition(data).attributes,
-              ...(data.get('rooms')
-                ? {
-                    rooms: {
-                      min: Number(data.get('rooms')),
-                      max: Number(data.get('rooms')),
-                    },
-                  }
-                : {}),
-              ...(data.get('area')
-                ? { area: { min: Number(data.get('area')) } }
-                : {}),
+              ...advanced.attributes,
+              ...Object.fromEntries(
+                ['rooms', 'area'].flatMap((attribute) => {
+                  const min = data.get(attribute + 'Min');
+                  const max = data.get(attribute + 'Max');
+                  return min || max
+                    ? [
+                        [
+                          attribute,
+                          {
+                            ...(min ? { min: Number(min) } : {}),
+                            ...(max ? { max: Number(max) } : {}),
+                          },
+                        ],
+                      ]
+                    : [];
+                }),
+              ),
             },
             sort: String(data.get('sort')) as NonNullable<
               SearchDefinition['sort']
@@ -117,6 +250,45 @@ export default function SearchProduct({
           });
         }}
       >
+        <label>
+          Регион
+          <select
+            name="regionCode"
+            value={definition.regionCode ?? ''}
+            disabled={regionError || regions.length === 0}
+            onChange={(event) => {
+              const attributes = { ...definition.attributes };
+              for (const code of [
+                'metro',
+                'metro_walk_minutes',
+                'okrug',
+                'highway',
+                'highway_distance',
+              ])
+                delete attributes[code];
+              const next = { ...definition };
+              delete next.bounds;
+              delete next.polygon;
+              update({
+                ...next,
+                regionCode: event.target.value || undefined,
+                locality: undefined,
+                district: undefined,
+                attributes,
+              });
+            }}
+          >
+            <option value="">Все регионы</option>
+            {regions.map((region) => (
+              <option key={region.code} value={region.code}>
+                {region.name}
+                {regionalCounts[region.code] !== undefined &&
+                  ` (${regionalCounts[region.code]!.toLocaleString('ru-RU')})`}
+              </option>
+            ))}
+          </select>
+        </label>
+        {regionError && <p role="alert">Не удалось загрузить регионы.</p>}
         <label>
           Поиск
           <input
@@ -130,7 +302,7 @@ export default function SearchProduct({
           Объект
           <select
             name="category"
-            defaultValue={initialDefinition.category ?? ''}
+            defaultValue={definition.category ?? ''}
             onChange={(e) => setFilterCategory(e.target.value || 'apartment')}
           >
             <option value="">Все объекты</option>
@@ -150,7 +322,8 @@ export default function SearchProduct({
           Сделка
           <select
             name="dealType"
-            defaultValue={initialDefinition.dealType ?? ''}
+            value={dealDraft}
+            onChange={(event) => setDealDraft(event.target.value)}
           >
             <option value="">Все сделки</option>
             <option value="sale">Купить</option>
@@ -159,7 +332,7 @@ export default function SearchProduct({
           </select>
         </label>
         <label>
-          Цена от
+          {dealDraft === 'short_rent' ? 'Цена за сутки от' : 'Цена от'}
           <input
             name="min"
             defaultValue={definition.price?.min}
@@ -168,7 +341,7 @@ export default function SearchProduct({
           />
         </label>
         <label>
-          Цена до
+          {dealDraft === 'short_rent' ? 'Цена за сутки до' : 'Цена до'}
           <input
             name="max"
             defaultValue={definition.price?.max}
@@ -176,17 +349,82 @@ export default function SearchProduct({
             min="0"
           />
         </label>
+        {dealDraft === 'short_rent' && (
+          <>
+            <label>
+              Заезд
+              <input
+                name="arrival"
+                type="date"
+                defaultValue={dateField(
+                  typeof definition.attributes?.rental_available_from ===
+                    'object'
+                    ? definition.attributes.rental_available_from.max
+                    : undefined,
+                )}
+              />
+            </label>
+            <label>
+              Выезд
+              <input
+                name="departure"
+                type="date"
+                defaultValue={dateField(
+                  typeof definition.attributes?.rental_available_until ===
+                    'object'
+                    ? definition.attributes.rental_available_until.min
+                    : undefined,
+                )}
+              />
+            </label>
+            <label>
+              Число гостей
+              <input
+                name="attribute:guest_capacity:min"
+                type="number"
+                min={1}
+                max={9999}
+                step={1}
+                defaultValue={
+                  typeof definition.attributes?.guest_capacity === 'object'
+                    ? definition.attributes.guest_capacity.min
+                    : undefined
+                }
+              />
+            </label>
+          </>
+        )}
         <label>
           Город
-          <input name="locality" defaultValue={initialDefinition.locality} />
+          <LocationInput
+            kind="city"
+            name="locality"
+            initial={definition.locality}
+            region={definition.regionCode}
+            onValueChange={setLocalityDraft}
+          />
         </label>
         <label>
-          Комнат
+          Комнат от
           <input
-            name="rooms"
+            name="roomsMin"
             defaultValue={
-              typeof initialDefinition.attributes?.rooms === 'object'
-                ? initialDefinition.attributes.rooms.min
+              typeof definition.attributes?.rooms === 'object'
+                ? definition.attributes.rooms.min
+                : undefined
+            }
+            type="number"
+            min="0"
+            max="50"
+          />
+        </label>
+        <label>
+          Комнат до
+          <input
+            name="roomsMax"
+            defaultValue={
+              typeof definition.attributes?.rooms === 'object'
+                ? definition.attributes.rooms.max
                 : undefined
             }
             type="number"
@@ -197,19 +435,34 @@ export default function SearchProduct({
         <label>
           Площадь от, м²
           <input
-            name="area"
+            name="areaMin"
             defaultValue={
-              typeof initialDefinition.attributes?.area === 'object'
-                ? initialDefinition.attributes.area.min
+              typeof definition.attributes?.area === 'object'
+                ? definition.attributes.area.min
                 : undefined
             }
             type="number"
+            step="any"
+            min="0"
+          />
+        </label>
+        <label>
+          Площадь до, м²
+          <input
+            name="areaMax"
+            defaultValue={
+              typeof definition.attributes?.area === 'object'
+                ? definition.attributes.area.max
+                : undefined
+            }
+            type="number"
+            step="any"
             min="0"
           />
         </label>
         <label>
           Сортировка
-          <select name="sort" defaultValue={initialDefinition.sort ?? 'newest'}>
+          <select name="sort" defaultValue={definition.sort ?? 'newest'}>
             <option value="newest">Сначала новые</option>
             <option value="price_asc">Дешевле</option>
             <option value="price_desc">Дороже</option>
@@ -218,9 +471,16 @@ export default function SearchProduct({
         </label>
         <AdvancedFilters
           category={filterCategory}
-          definition={initialDefinition}
+          definition={definition}
+          dealDraft={dealDraft}
+          localityDraft={localityDraft}
+          onReadyCategory={setAdvancedCategory}
         />
-        <Button className="primary" type="submit">
+        <Button
+          className="primary"
+          type="submit"
+          disabled={advancedCategory !== filterCategory}
+        >
           Найти
         </Button>
       </form>
@@ -228,7 +488,6 @@ export default function SearchProduct({
         <Button
           aria-pressed={mode === 'list'}
           onClick={() => {
-            setMode('list');
             update({ ...definition }, 'list');
             track({ type: 'mode_changed', mode: 'list' });
           }}
@@ -238,11 +497,13 @@ export default function SearchProduct({
         <Button
           aria-pressed={mode === 'map'}
           onClick={() => {
-            setMode('map');
             update(
               {
                 ...definition,
-                bounds: definition.bounds ?? [37.3, 55.5, 37.9, 56.0],
+                bounds: searchMapBounds(
+                  definition.regionCode,
+                  definition.bounds,
+                ),
               },
               'map',
             );
@@ -293,7 +554,26 @@ export default function SearchProduct({
         <>
           <p role="status">Найдено около {page.total} объявлений</p>
           {page.items.length === 0 ? (
-            <p>Объявления не найдены. Измените фильтры или область поиска.</p>
+            definition.dealType === 'short_rent' &&
+            definition.attributes?.rental_available_from &&
+            definition.attributes?.rental_available_until ? (
+              <div>
+                <p>На выбранные даты объявления не найдены.</p>
+                <Button
+                  onClick={() => {
+                    const attributes = { ...definition.attributes };
+                    delete attributes.rental_available_from;
+                    delete attributes.rental_available_until;
+                    delete attributes.rental_minimum_nights;
+                    update({ ...definition, attributes });
+                  }}
+                >
+                  Искать без дат
+                </Button>
+              </div>
+            ) : (
+              <p>Объявления не найдены. Измените фильтры или область поиска.</p>
+            )
           ) : (
             <div className="cards">
               {page.items
@@ -302,6 +582,10 @@ export default function SearchProduct({
                   <Card
                     key={item.id}
                     listing={item}
+                    searchContext={{
+                      definition: JSON.stringify(definition),
+                      mode,
+                    }}
                     actions={
                       <Button
                         onClick={async () => {

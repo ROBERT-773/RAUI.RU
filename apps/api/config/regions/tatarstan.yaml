@@ -1,0 +1,9 @@
+code: tatarstan
+name: Республика Татарстан
+type: republic
+search_entities: [district, locality, street, house, metro]
+metro_available: true
+directions_available: false
+timezone: Europe/Moscow
+currency: RUB
+geo_bounds: null

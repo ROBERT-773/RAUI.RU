@@ -14,7 +14,7 @@
     "@raui/types": "workspace:*",
     "@raui/ui": "workspace:*",
     "leaflet": "1.9.4",
-    "next": "16.3.8",
+    "next": "16.4.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

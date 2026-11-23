@@ -4,10 +4,15 @@ export const metadata: Metadata = {
   title: 'Аккаунт — RAUI.RU',
   robots: { index: false, follow: false },
 };
-export default function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<{ action?: string | string[] }>;
+}) {
+  const { action } = await searchParams;
   return (
     <main id="content">
-      <Account />
+      <Account continueListing={action === 'publish'} />
     </main>
   );
 }

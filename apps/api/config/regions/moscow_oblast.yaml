@@ -1,0 +1,9 @@
+code: moscow_oblast
+name: Московская область
+type: oblast
+search_entities: [district, locality, direction, street, house]
+metro_available: false
+directions_available: true
+timezone: Europe/Moscow
+currency: RUB
+geo_bounds: null

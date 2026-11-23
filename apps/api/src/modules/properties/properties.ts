@@ -94,6 +94,7 @@ export class Properties {
       await this.catalog.definitions(property.category_code, sql),
       property.attributes,
       true,
+      property.category_code,
     );
     const address = await this.geo.read(property.address_id, sql);
     if (!address) throw new BadRequestException('Address required');
@@ -124,6 +125,8 @@ export class Properties {
     validateAttributes(
       await this.catalog.definitions(input.category, sql),
       input.attributes,
+      false,
+      input.category,
     );
     if (input.buildingId) {
       const [building] = await this.db.rows<{ organization_id: string }>(
@@ -193,6 +196,8 @@ export class Properties {
         [id],
         sql,
       );
+      if (input.address && listings.length && actor.role !== 'admin')
+        throw new ForbiddenException('Listing address cannot be changed');
       if (
         listings.some((l) =>
           ['published', 'processing', 'moderation'].includes(l.status),
@@ -205,6 +210,8 @@ export class Properties {
       validateAttributes(
         await this.catalog.definitions(property.category_code, sql),
         attributes,
+        false,
+        property.category_code,
       );
       const addressId = input.address
         ? await this.geo.create(sql, input.address)

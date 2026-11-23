@@ -1,3 +1,4 @@
+import { migrationNames } from './runtime-image-verification.mjs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -7,7 +8,7 @@ import {
   lstat,
   realpath,
 } from 'node:fs/promises';
-import { resolve, relative } from 'node:path';
+import { isAbsolute, resolve, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const gates = [
   'lint',
@@ -22,11 +23,13 @@ const gates = [
   'security',
   'restore',
   'observability',
+  'runtime-contract',
+  'runtime-smoke',
 ];
 function releasePath(path) {
   return (
     typeof path === 'string' &&
-    /^(apps\/api\/(dist|migrations)\/|apps\/web\/\.next\/|infra\/observability\/|pnpm-lock\.yaml$|package\.json$|\.cache\/phase4d-(load|recovery)\.json$)/.test(
+    /^(apps\/api\/(dist|migrations)\/|apps\/web\/\.next\/|infra\/observability\/|pnpm-lock\.yaml$|package\.json$|\.cache\/phase4d-(load|recovery)\.json$|\.cache\/runtime-image-receipt\.json$)/.test(
       path,
     ) &&
     !path.split('/').some((part) => part === '..' || part === '.' || !part) &&
@@ -34,6 +37,31 @@ function releasePath(path) {
     !path.includes('\u0000') &&
     !path.endsWith('.env')
   );
+}
+export function validateRuntimeReceipt(receipt, expectedSha, expectedRunId) {
+  if (
+    !receipt ||
+    receipt.version !== 1 ||
+    !/^[a-f0-9]{40}$/.test(expectedSha ?? '') ||
+    receipt.sourceRevision !== expectedSha ||
+    !/^[1-9][0-9]*$/.test(expectedRunId ?? '') ||
+    receipt.ciRunId !== expectedRunId ||
+    typeof receipt.imageId !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(receipt.imageId) ||
+    typeof receipt.archiveSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(receipt.archiveSha256) ||
+    receipt.sourceState !== 'committed' ||
+    receipt.contract !== 'passed' ||
+    receipt.serviceSmoke !== 'passed' ||
+    receipt.migrationCount !== migrationNames.length ||
+    receipt.siteUrl !== 'http://127.0.0.1:3000' ||
+    receipt.deploymentEnvironment !== 'staging' ||
+    receipt.network !== 'linux-host' ||
+    receipt.adapters !== 'local-development' ||
+    receipt.stagingAcceptance !== 'not_executed' ||
+    receipt.deployment !== 'not_executed'
+  )
+    throw new Error('Invalid runtime image evidence');
 }
 export function validateCiRun(run, expectedSha, expectedRunId) {
   if (
@@ -56,7 +84,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
     (expectedRunId !== undefined && manifest.runId !== expectedRunId) ||
     !/^[a-f0-9]{40}$/.test(expectedSha) ||
     manifest.sha !== expectedSha ||
-    manifest.migrations !== 12 ||
+    manifest.migrations !== migrationNames.length ||
     manifest.riskyDefaults !== 'off' ||
     !Array.isArray(manifest.gates) ||
     gates.some((gate) => !manifest.gates.includes(gate)) ||
@@ -80,18 +108,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
   for (const path of [
     'apps/api/dist/main.js',
     'apps/web/.next/BUILD_ID',
-    'apps/api/migrations/001_core.sql',
-    'apps/api/migrations/002_search_product.sql',
-    'apps/api/migrations/003_commerce.sql',
-    'apps/api/migrations/004_commerce_reconciliation.sql',
-    'apps/api/migrations/005_professional_integrations.sql',
-    'apps/api/migrations/006_professional_workflows.sql',
-    'apps/api/migrations/007_partner_clients.sql',
-    'apps/api/migrations/008_professional_operations.sql',
-    'apps/api/migrations/009_ai_trust_analytics.sql',
-    'apps/api/migrations/010_analytics_identity_and_trust_geo.sql',
-    'apps/api/migrations/011_ai_reported_cost.sql',
-    'apps/api/migrations/012_search_queue_observability.sql',
+    ...migrationNames.map((name) => 'apps/api/migrations/' + name),
     'pnpm-lock.yaml',
     'package.json',
     'infra/observability/alerts.yml',
@@ -99,6 +116,7 @@ export function validateRelease(manifest, expectedSha, expectedRunId) {
     'infra/observability/prometheus.yml',
     '.cache/phase4d-load.json',
     '.cache/phase4d-recovery.json',
+    '.cache/runtime-image-receipt.json',
   ])
     if (!seen.has(path)) throw new Error('Incomplete release artifact');
 }
@@ -116,7 +134,7 @@ async function hashFiles(root, path, files) {
     !path.startsWith('apps/web/.next/cache/')
   ) {
     files.push({
-      path: relative(root, absolute),
+      path: relative(root, absolute).split(sep).join('/'),
       sha256: createHash('sha256')
         .update(await readFile(absolute))
         .digest('hex'),
@@ -124,10 +142,17 @@ async function hashFiles(root, path, files) {
   }
 }
 export async function verifyFiles(manifest, root) {
+  const resolvedRoot = await realpath(root);
   for (const file of manifest.files) {
     const absolute = resolve(root, file.path);
     const resolved = await realpath(absolute);
-    if (!resolved.startsWith((await realpath(root)) + '/'))
+    const containedPath = relative(resolvedRoot, resolved);
+    if (
+      !containedPath ||
+      containedPath === '..' ||
+      containedPath.startsWith('..' + sep) ||
+      isAbsolute(containedPath)
+    )
       throw new Error('Artifact symlink traversal rejected');
     if (
       (await lstat(absolute)).isSymbolicLink() ||
@@ -137,6 +162,16 @@ export async function verifyFiles(manifest, root) {
     )
       throw new Error('Release artifact checksum mismatch');
   }
+  validateRuntimeReceipt(
+    JSON.parse(
+      await readFile(
+        resolve(root, '.cache/runtime-image-receipt.json'),
+        'utf8',
+      ),
+    ),
+    manifest.sha,
+    manifest.runId,
+  );
   const load = JSON.parse(
     await readFile(resolve(root, '.cache/phase4d-load.json'), 'utf8'),
   );
@@ -194,7 +229,7 @@ export async function verifyFiles(manifest, root) {
     recovery.sourceUntouched !== true ||
     recovery.databaseRestore !== 'verified' ||
     recovery.objectFixtureRestore !== 'verified' ||
-    recovery.migrationsVerified !== 12 ||
+    recovery.migrationsVerified !== migrationNames.length ||
     !Number.isInteger(recovery.tablesVerified) ||
     recovery.tablesVerified < 1 ||
     recovery.cipher !== 'AES-256-GCM' ||
@@ -250,13 +285,14 @@ async function main() {
       'pnpm-lock.yaml',
       '.cache/phase4d-load.json',
       '.cache/phase4d-recovery.json',
+      '.cache/runtime-image-receipt.json',
       'package.json',
     ])
       await hashFiles(process.cwd(), path, files);
     const manifest = {
       version: 1,
       sha: expectedSha,
-      migrations: 12,
+      migrations: migrationNames.length,
       riskyDefaults: 'off',
       gates,
       runId: process.env.GITHUB_RUN_ID,
@@ -269,7 +305,7 @@ async function main() {
     validateRelease(manifest, expectedSha, expectedRunId);
     await verifyFiles(manifest, process.cwd());
     console.log(
-      'Release/rollback artifact identity, hashes, gates and migration/flag contract verified; no deployment',
+      'Release/rollback artifact identity, hashes, gates, runtime image evidence and migration/flag contract verified; no deployment',
     );
   }
 }

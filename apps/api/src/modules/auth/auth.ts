@@ -1,16 +1,22 @@
 import {
   Body,
+  Headers,
+  HttpException,
   Controller,
   Get,
   Post,
   Param,
   Res,
+  Req,
   Module,
   Injectable,
   BadRequestException,
   UnauthorizedException,
   NotFoundException,
   Delete,
+  ForbiddenException,
+  Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
@@ -18,6 +24,7 @@ import { Database } from '../database/database';
 import { Audit } from '../audit/audit';
 import {
   Actor,
+  AuthRequest,
   CurrentActor,
   Public,
   hash,
@@ -33,6 +40,16 @@ import {
   VerificationDelivery,
   VerificationMessage,
 } from './delivery';
+import {
+  PhoneOtpService,
+  lockPhoneOtpActor,
+  invalidatePhoneChallenges,
+  reservePhoneOtpSend,
+} from './phone-otp';
+import {
+  PhoneOtpDelivery,
+  ConfiguredPhoneOtpDelivery,
+} from './phone-otp-delivery';
 export const passwordSchema = z.string().min(12).max(128);
 const emailSchema = z
   .email()
@@ -43,9 +60,7 @@ export const registerSchema = z
     email: emailSchema,
     password: passwordSchema,
     displayName: z.string().trim().min(1).max(100),
-    role: z
-      .enum(['buyer', 'owner', 'agent', 'agency', 'developer'])
-      .default('buyer'),
+    role: z.enum(['buyer', 'owner', 'agent', 'agency', 'developer']),
   })
   .strict();
 export const loginSchema = z
@@ -57,6 +72,9 @@ export const loginSchema = z
   .strict();
 interface User {
   id: string;
+  public_id: string;
+  created_at: string;
+  updated_at: string;
   email: string;
   display_name: string;
   role: string;
@@ -65,14 +83,29 @@ interface User {
   phone_verified_at: string | null;
   phone: string | null;
   password_hash: string;
+  registration_approval_state: 'pending' | 'approved' | 'rejected';
+  registration_approval_reason?: string | null;
 }
 function publicUser(user: User) {
-  const { password_hash: _password, ...safe } = user;
-  void _password;
-  return safe;
+  return {
+    id: user.id,
+    public_id: user.public_id,
+    email: user.email,
+    display_name: user.display_name,
+    role: user.role,
+    active: user.active,
+    registration_approval_state: user.registration_approval_state,
+    registration_approval_reason: user.registration_approval_reason ?? null,
+    email_verified_at: user.email_verified_at,
+    phone_verified_at: user.phone_verified_at,
+    phone: user.phone,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
 }
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly db: Database,
     private readonly audit: Audit,
@@ -82,10 +115,19 @@ export class AuthService {
     user: User,
     purpose: VerificationMessage['purpose'],
     destination: string,
+    actor?: Actor,
   ) {
     const secret = token();
     await this.db.transaction(async (sql) => {
-      await sql.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id]);
+      if (actor) await lockPhoneOtpActor(sql, actor);
+      else
+        await sql.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [
+          user.id,
+        ]);
+      if (purpose === 'phone') {
+        await reservePhoneOtpSend(sql, user.id, destination);
+        await invalidatePhoneChallenges(sql, user.id);
+      }
       await sql.query(
         'UPDATE auth_challenges SET used_at=now() WHERE user_id=$1 AND purpose=$2 AND used_at IS NULL',
         [user.id, purpose],
@@ -102,16 +144,26 @@ export class AuthService {
         user.id,
       );
     });
-    await this.delivery.send({ destination, purpose, token: secret });
+    try {
+      await this.delivery.send({ destination, purpose, token: secret });
+    } catch (error) {
+      if (purpose !== 'reset') throw error;
+      // Never attach provider errors: they may contain destinations or tokens.
+      this.logger.warn('auth.password_reset.delivery_failed');
+    }
   }
   async register(body: unknown) {
     const input = parse(registerSchema, body);
     const encoded = await passwordHash(input.password);
     const user = await this.db.transaction(async (sql) => {
       const [created] = await this.db.rows<User>(
-        'INSERT INTO users(email,password_hash,display_name,role) VALUES($1,$2,$3,$4) RETURNING *',
+        "INSERT INTO users(email,password_hash,display_name,role,registration_approval_state) VALUES($1,$2,$3,$4,'pending') RETURNING *",
         [input.email, encoded, input.displayName, input.role],
         sql,
+      );
+      await sql.query(
+        'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
+        [created!.id],
       );
       await this.audit.record(
         sql,
@@ -122,8 +174,14 @@ export class AuthService {
       );
       return created!;
     });
-    await this.challenge(user, 'email', user.email);
-    return publicUser(user);
+    let verificationDelivery: 'accepted' | 'unavailable' = 'accepted';
+    try {
+      await this.challenge(user, 'email', user.email);
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) throw error;
+      verificationDelivery = 'unavailable';
+    }
+    return { ...publicUser(user), verificationDelivery };
   }
   async login(body: unknown, res: Response) {
     const input = parse(loginSchema, body);
@@ -141,7 +199,12 @@ export class AuthService {
       input.password,
       user?.password_hash ?? `scrypt$32768$invalid$${'0'.repeat(128)}`,
     );
-    if (!user || !user.active || !valid)
+    if (
+      !user ||
+      !user.active ||
+      !valid ||
+      user.registration_approval_state === 'rejected'
+    )
       throw new UnauthorizedException('Invalid credentials');
     const secret = token(),
       csrf = token();
@@ -157,7 +220,11 @@ export class AuthService {
         [user.id],
         sql,
       );
-      if (!current?.active || current.password_hash !== user.password_hash)
+      if (
+        !current?.active ||
+        current.registration_approval_state === 'rejected' ||
+        current.password_hash !== user.password_hash
+      )
         throw new UnauthorizedException();
       await sql.query(
         "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
@@ -181,9 +248,11 @@ export class AuthService {
     };
   }
   async me(actor: Actor) {
-    const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
-      actor.id,
-    ]);
+    const [user] = await this.db.rows<User>(
+      `SELECT u.*,r.reason AS registration_approval_reason FROM users u
+       LEFT JOIN registration_approval_requests r ON r.user_id=u.id WHERE u.id=$1`,
+      [actor.id],
+    );
     return { ...publicUser(user!), twoFactorEnabled: false };
   }
   async request(body: unknown, purpose: 'email' | 'reset', actor?: Actor) {
@@ -195,11 +264,22 @@ export class AuthService {
       await this.challenge(user!, purpose, user!.email);
     } else {
       const input = parse(z.object({ email: emailSchema }).strict(), body);
+      const started = performance.now();
       const [user] = await this.db.rows<User>(
         'SELECT * FROM users WHERE email=$1 AND active',
         [input.email],
       );
       if (user) await this.challenge(user, purpose, user.email);
+      if (purpose === 'reset') {
+        // Cover the configured gateway's 5s timeout for both account paths.
+        // This is a latency floor, not a constant-time guarantee under load.
+        await new Promise<void>((resolve) =>
+          setTimeout(
+            resolve,
+            Math.max(0, 5100 - (performance.now() - started)),
+          ),
+        );
+      }
     }
     return { accepted: true };
   }
@@ -211,7 +291,8 @@ export class AuthService {
     const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
       actor.id,
     ]);
-    await this.challenge(user!, 'phone', input.phone);
+    // Fresh session authorization is repeated inside allocation's user lock.
+    await this.challenge(user!, 'phone', input.phone, actor);
     return { accepted: true };
   }
   async confirm(
@@ -233,13 +314,18 @@ export class AuthService {
         ? await passwordHash((input as { password: string }).password)
         : null;
     await this.db.transaction(async (sql) => {
+      if (purpose === 'phone' && actor) await lockPhoneOtpActor(sql, actor);
       const [challenge] = await this.db.rows<{
         id: string;
         user_id: string;
         destination: string;
       }>(
-        `SELECT c.* FROM auth_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose=$2 AND c.used_at IS NULL AND c.expires_at>now() AND u.active FOR UPDATE OF c,u`,
-        [hash(input.token), purpose],
+        purpose === 'phone'
+          ? `SELECT c.* FROM auth_challenges c WHERE c.token_hash=$1 AND c.purpose=$2 AND c.user_id=$3 AND c.used_at IS NULL AND c.expires_at>clock_timestamp() FOR UPDATE OF c`
+          : `SELECT c.* FROM auth_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=$1 AND c.purpose=$2 AND c.used_at IS NULL AND c.expires_at>clock_timestamp() AND u.active FOR UPDATE OF c,u`,
+        purpose === 'phone'
+          ? [hash(input.token), purpose, actor!.id]
+          : [hash(input.token), purpose],
         sql,
       );
       if (!challenge || (actor && challenge.user_id !== actor.id))
@@ -252,11 +338,19 @@ export class AuthService {
           'UPDATE users SET email_verified_at=now(),updated_at=now() WHERE id=$1',
           [challenge.user_id],
         );
-      if (purpose === 'phone')
+      if (purpose === 'phone') {
+        const current = await sql.query(
+          'SELECT id FROM auth_challenges WHERE id=$1 AND expires_at>clock_timestamp()',
+          [challenge.id],
+        );
+        if (!current.rowCount)
+          throw new BadRequestException('Invalid or expired verification');
+        await invalidatePhoneChallenges(sql, challenge.user_id);
         await sql.query(
           'UPDATE users SET phone=$2,phone_verified_at=now(),updated_at=now() WHERE id=$1',
           [challenge.user_id, challenge.destination],
         );
+      }
       if (purpose === 'reset') {
         await sql.query(
           'UPDATE users SET password_hash=$2,updated_at=now() WHERE id=$1',
@@ -323,7 +417,10 @@ export class AuthService {
 }
 @Controller('v1/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly otp: PhoneOtpService,
+  ) {}
   @Public() @Post('register') register(@Body() body: unknown) {
     return this.auth.register(body);
   }
@@ -335,6 +432,16 @@ export class AuthController {
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);
+  }
+  @Get('csrf') csrf(
+    @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    if (req.headers.origin && req.headers.origin !== loadConfig().WEB_ORIGIN)
+      throw new ForbiddenException('Origin rejected');
+    if (!req.csrfRecoveryToken) throw new UnauthorizedException();
+    res.setHeader('Cache-Control', 'no-store');
+    return { csrfToken: req.csrfRecoveryToken };
   }
   @Post('logout') logout(
     @CurrentActor() actor: Actor,
@@ -365,11 +472,49 @@ export class AuthController {
   ) {
     return this.auth.confirm(body, 'email');
   }
-  @Post('verification/phone') phone(
+  @Get('verification/phone/capabilities') phoneCapabilities(
+    @CurrentActor() actor: Actor,
+  ) {
+    return this.otp.capabilities(actor);
+  }
+  @Post('verification/phone/otp') async phoneOtp(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    try {
+      return await this.otp.request(actor, body, key);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
+  }
+  @Post('verification/phone/otp/confirm') phoneOtpConfirm(
     @CurrentActor() actor: Actor,
     @Body() body: unknown,
   ) {
-    return this.auth.requestPhone(actor, body);
+    return this.otp.confirm(actor, body);
+  }
+  @Post('verification/phone') async phone(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    try {
+      return await this.auth.requestPhone(actor, body);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
   }
   @Post('verification/phone/confirm') confirmPhone(
     @CurrentActor() actor: Actor,
@@ -390,6 +535,8 @@ export class AuthController {
   controllers: [AuthController],
   providers: [
     AuthService,
+    PhoneOtpService,
+    { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },
     { provide: VerificationDelivery, useClass: ConfiguredDelivery },
   ],
   exports: [AuthService],

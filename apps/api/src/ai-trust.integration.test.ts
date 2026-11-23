@@ -122,7 +122,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         [address],
       );
       await pool.query(
-        'INSERT INTO properties(id,created_by,category_code,address_id,attributes,unit_number) VALUES($1,$2,\'apartment\',$3,\'{"area":50,"rooms":2,"floor":3}\',\'12\')',
+        'INSERT INTO properties(id,created_by,category_code,address_id,attributes,unit_number) VALUES($1,$2,\'apartment\',$3,\'{"area":50,"kitchen_area":10,"rooms":2,"floor":3}\',\'12\')',
         [property, actors[i]!.id, address],
       );
       await pool.query(
@@ -134,7 +134,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         [listing, property, source, actors[i]!.id],
       );
       await pool.query(
-        "INSERT INTO media(listing_id,uploaded_by,kind,original_key,mime,state,variants) VALUES($1,$2,'photo','private/test','image/jpeg','ready','{\"small\":{\"width\":800,\"height\":600}}')",
+        "INSERT INTO media(listing_id,uploaded_by,kind,original_key,mime,state,variants) SELECT $1,$2,'photo','private/test-'||n,'image/jpeg','ready','{\"small\":{\"width\":800,\"height\":600}}'::jsonb FROM generate_series(1,5) n",
         [listing, actors[i]!.id],
       );
       if (i === 0) first = listing;
@@ -170,7 +170,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '12',
+          '33',
         );
       },
     );

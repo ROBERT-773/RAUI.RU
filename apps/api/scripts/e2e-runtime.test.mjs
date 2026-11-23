@@ -277,3 +277,15 @@ test('Slow-query diagnostics retain fixed query classes and numeric timings only
   ]);
   assert.equal(JSON.stringify(summary).includes('PRIVATE'), false);
 });
+
+test('media worker is tracked with the same bounded cleanup contract as other services', async () => {
+  const child = new EventEmitter();
+  const record = trackProcess(child, 'media-worker');
+  child.emit('exit', 0, null);
+  assert.equal((await record.completion).code, 0);
+  assert.equal(record.label, 'media-worker');
+  assert.throws(
+    () => trackProcess(child, 'arbitrary'),
+    /Invalid service label/,
+  );
+});

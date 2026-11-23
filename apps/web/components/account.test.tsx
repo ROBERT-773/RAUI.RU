@@ -7,6 +7,21 @@ import {
   screen,
 } from '@testing-library/react';
 import Account from './account';
+const profileCallbacks = vi.hoisted(() => ({
+  expire: undefined as (() => void) | undefined,
+}));
+vi.mock('./account-profile', () => ({
+  default: ({
+    onRefresh,
+    onSessionExpired,
+  }: {
+    onRefresh?: () => void;
+    onSessionExpired?: () => void;
+  }) => {
+    profileCallbacks.expire = onSessionExpired;
+    return <button onClick={onRefresh}>Обновить профиль</button>;
+  },
+}));
 vi.mock('next/link', () => ({
   default: ({
     children,
@@ -16,8 +31,23 @@ vi.mock('next/link', () => ({
     href: string;
   }) => <a href={href}>{children}</a>,
 }));
+function stubFetch(
+  name: string,
+  implementation: (input: string, init?: RequestInit) => Promise<unknown>,
+) {
+  vi.stubGlobal(name, (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/api/v1/auth/csrf'
+      ? Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ csrfToken: 'test-session-csrf' }),
+        } as Response)
+      : implementation(String(input), init),
+  );
+}
 afterEach(() => {
   cleanup();
+  profileCallbacks.expire = undefined;
   vi.unstubAllGlobals();
   sessionStorage.clear();
 });
@@ -27,7 +57,7 @@ for (const delayed of [false, true]) {
     let identity = 'A';
     let release: (() => void) | undefined;
     const privateMessage = 'Private message belonging only to A';
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string) => {
         let value: unknown = { items: [], cursor: null };
@@ -96,7 +126,7 @@ for (const delayed of [false, true]) {
 
 test('Late favorites response cannot replace selected comparison cards or pagination', async () => {
   let release: (() => void) | undefined;
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string) => {
       let value: unknown = { items: [], cursor: null };
@@ -149,7 +179,7 @@ for (const mutation of ['favorite-delete', 'saved-rename', 'saved-delete']) {
       price: 100,
       address: 'Fixture address',
     };
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string, options?: { method?: string }) => {
         let value: unknown = { items: [], cursor: null };
@@ -225,7 +255,7 @@ for (const mutation of ['favorite-delete', 'saved-rename', 'saved-delete']) {
 for (const delayed of ['open', 'page', 'send']) {
   test(`Late thread A ${delayed} preserves thread B messages, cursor and draft`, async () => {
     let release: (() => void) | undefined;
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string, options?: { method?: string }) => {
         let value: unknown = { items: [], cursor: null };
@@ -319,14 +349,22 @@ for (const delayed of ['open', 'page', 'send']) {
 for (const delay of ['read', 'threads', 'none']) {
   test(`Notification ${delay} completion respects current navigation`, async () => {
     let release: (() => void) | undefined;
-    vi.stubGlobal(
+    stubFetch(
       'fetch',
       vi.fn(async (url: string) => {
         let value: unknown = { items: [], cursor: null };
         if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
         else if (url.endsWith('/notifications'))
           value = {
-            items: [{ id: 'n-one', thread_id: 'thread-a', read_at: null }],
+            items: [
+              {
+                id: 'n-one',
+                kind: 'message',
+                thread_id: 'thread-a',
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
             cursor: null,
           };
         else if (url.endsWith('/preferences')) value = { in_app: true };
@@ -391,7 +429,7 @@ for (const delay of ['read', 'threads', 'none']) {
 
 test('Successful send refreshes the selected thread and clears its submitted draft', async () => {
   let sent = false;
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string, options?: { method?: string }) => {
       let value: unknown = { items: [], cursor: null };
@@ -432,7 +470,7 @@ test('Successful send refreshes the selected thread and clears its submitted dra
 });
 
 test('Selected thread pagination appends older messages and consumes its cursor', async () => {
-  vi.stubGlobal(
+  stubFetch(
     'fetch',
     vi.fn(async (url: string) => {
       let value: unknown = { items: [], cursor: null };
@@ -467,3 +505,730 @@ test('Selected thread pagination appends older messages and consumes its cursor'
     screen.queryByRole('button', { name: 'Предыдущие сообщения' }),
   ).toBeNull();
 });
+
+test('Account displays its permanent ID without rounding large numeric identifiers', async () => {
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.endsWith('/auth/me')
+          ? {
+              display_name: 'Buyer',
+              public_id: '9007199254740993',
+              role: 'buyer',
+            }
+          : { items: [], cursor: null },
+    })),
+  );
+  render(<Account />);
+  expect(await screen.findByText('ID: 9007199254740993')).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'Мои объявления' })).toBeNull();
+});
+
+test.each([
+  { role: 'agent', heading: 'Кабинет риелтора', canCreateAgency: false },
+  { role: 'agency', heading: 'Кабинет агентства', canCreateAgency: true },
+])(
+  'Account opens the correct cabinet for $role',
+  async ({ role, heading, canCreateAgency }) => {
+    stubFetch('fetch', async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        if (url.endsWith('/auth/me'))
+          return { id: '17', role, display_name: 'Seller', public_id: '17' };
+        if (url.endsWith('/organizations')) return [];
+        return { items: [], cursor: null };
+      },
+    }));
+    render(<Account />);
+
+    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Мои объявления' }).getAttribute('href'),
+    ).toBe('/account/listings');
+    expect(screen.getByRole('region', { name: 'Агентства' })).toBeTruthy();
+    expect(Boolean(screen.queryByText('Публичный профиль агента'))).toBe(
+      role === 'agent',
+    );
+    expect(
+      Boolean(screen.queryByRole('button', { name: 'Создать агентство' })),
+    ).toBe(canCreateAgency);
+  },
+);
+
+test('the listing link follows the selected agency in the cabinet', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      if (url.endsWith('/auth/me'))
+        return {
+          id: '17',
+          role: 'agency',
+          display_name: 'Seller',
+          public_id: '17',
+        };
+      if (url.endsWith('/organizations'))
+        return [
+          { id: 'agency-1', name: 'Город' },
+          { id: 'agency-2', name: 'Квартал' },
+        ].map((agency) => ({
+          ...agency,
+          kind: 'agency',
+          active: true,
+          membership_role: 'member',
+          membership_active: true,
+        }));
+      return url.endsWith('/members') ? [] : { items: [], cursor: null };
+    },
+  }));
+  render(<Account />);
+
+  const link = await screen.findByRole('link', {
+    name: 'Перейти к подаче объявления',
+  });
+  expect(link.getAttribute('href')).toBe(
+    '/account/listings?agency=agency-1#new-listing',
+  );
+  fireEvent.change(screen.getByRole('combobox', { name: 'Агентство' }), {
+    target: { value: 'agency-2' },
+  });
+  expect(link.getAttribute('href')).toBe(
+    '/account/listings?agency=agency-2#new-listing',
+  );
+});
+
+test.each([false, true])(
+  'publication entry offers the correct next step when contacts verified: %s',
+  async (verified) => {
+    stubFetch('fetch', async (url) => ({
+      ok: true,
+      json: async () =>
+        url.endsWith('/auth/me')
+          ? {
+              role: 'owner',
+              display_name: 'Owner',
+              public_id: '17',
+              email_verified_at: 'now',
+              phone_verified_at: verified ? 'now' : null,
+            }
+          : { items: [], cursor: null },
+    }));
+    render(<Account continueListing />);
+    await screen.findByRole('heading', { name: 'Кабинет собственника' });
+    if (verified) {
+      expect(
+        screen.getByRole('link', { name: 'Продолжить подачу объявления' }),
+      ).toBeTruthy();
+    } else {
+      expect(
+        screen.queryByRole('link', { name: 'Продолжить подачу объявления' }),
+      ).toBeNull();
+      expect(
+        screen.getByRole('button', { name: 'Подтвердить контакты для подачи' }),
+      ).toBeTruthy();
+    }
+  },
+);
+
+for (const state of ['pending', 'rejected']) {
+  test(`${state} accounts do not load or expose private collections`, async () => {
+    const requests: string[] = [];
+    stubFetch('fetch', async (url) => {
+      requests.push(url);
+      return {
+        ok: true,
+        json: async () =>
+          url.endsWith('/auth/me')
+            ? {
+                display_name: 'Applicant',
+                public_id: '17',
+                registration_approval_state: state,
+              }
+            : { items: [], cursor: null },
+      };
+    });
+    render(<Account />);
+    await screen.findByText('Applicant');
+    expect(
+      screen.queryByRole('navigation', { name: 'Разделы аккаунта' }),
+    ).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Мои объявления' })).toBeNull();
+    expect(requests.some((url) => url.includes('/account/'))).toBe(false);
+    expect(screen.getByRole('button', { name: 'Выйти' })).toBeTruthy();
+  });
+}
+
+test.each([
+  ['owner', 'Кабинет собственника'],
+  ['agent', 'Кабинет риелтора'],
+  ['agency', 'Кабинет агентства'],
+])(
+  'Registration opens the %s cabinet when verification delivery is unavailable',
+  async (roleCode, heading) => {
+    let submitted: Record<string, unknown> | undefined;
+    stubFetch('fetch', async (url, init) => {
+      if (url.endsWith('/auth/me'))
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ message: 'Unauthorized' }),
+        };
+      if (url.endsWith('/auth/register')) {
+        submitted = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ verificationDelivery: 'unavailable' }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          csrfToken: 'fixture',
+          user: {
+            display_name: 'Applicant',
+            role: roleCode,
+            public_id: '18',
+            registration_approval_state: 'pending',
+          },
+        }),
+      };
+    });
+    render(<Account />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Регистрация' }));
+    const role = screen.getByLabelText('Кто вы?') as HTMLSelectElement;
+    expect(role.value).toBe('');
+    expect(role.required).toBe(true);
+    const roleHelp = screen.getByText(/Покупаете или арендуете/);
+    expect(role.getAttribute('aria-describedby')).toBe(roleHelp.id);
+    expect(roleHelp.textContent).toMatch(
+      /Размещаете свой\s+объект — «Собственник»/,
+    );
+    expect(roleHelp.textContent).toContain('Работаете риелтором — «Агент»');
+    expect(roleHelp.textContent).toContain(
+      'Представляете агентство — «Агентство»',
+    );
+    expect(roleHelp.textContent).toMatch(
+      /строительную компанию —\s+«Застройщик»/,
+    );
+    expect(Array.from(role.options).map((option) => option.value)).toEqual([
+      '',
+      'buyer',
+      'owner',
+      'agent',
+      'agency',
+      'developer',
+    ]);
+    fireEvent.change(screen.getByLabelText('Кто вы?'), {
+      target: { value: roleCode },
+    });
+    fireEvent.change(screen.getByLabelText('Имя'), {
+      target: { value: 'Applicant' },
+    });
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'owner@example.test' },
+    });
+    fireEvent.change(screen.getByLabelText('Пароль'), {
+      target: { value: 'fixture-long-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать и войти' }));
+    await screen.findByRole('heading', { name: heading });
+    expect(submitted?.role).toBe(roleCode);
+    expect(
+      await screen.findByText(
+        /Аккаунт создан. Не удалось подтвердить отправку письма/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('navigation', { name: 'Разделы аккаунта' }),
+    ).toBeNull();
+  },
+);
+
+test('Profile refresh unlocks approved collections and ignores a response after logout', async () => {
+  let state = 'pending';
+  let release: (() => void) | undefined;
+  let delay = false;
+  const requests: string[] = [];
+  stubFetch('fetch', async (url) => {
+    requests.push(url);
+    if (url.endsWith('/auth/me')) {
+      const value = {
+        display_name: 'Applicant',
+        public_id: '17',
+        registration_approval_state: state,
+      };
+      if (delay)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      return { ok: true, json: async () => value };
+    }
+    return { ok: true, json: async () => ({ items: [], cursor: null }) };
+  });
+  render(<Account />);
+  await screen.findByText('Applicant');
+  state = 'approved';
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await screen.findByRole('navigation', { name: 'Разделы аккаунта' });
+  expect(
+    requests.filter((url) => url.includes('/account/collections/')),
+  ).toHaveLength(1);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Профиль и подтверждение контактов' }),
+  );
+  delay = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+  await act(async () => {
+    release!();
+  });
+  expect(screen.queryByText('Applicant')).toBeNull();
+  expect(
+    requests.filter((url) => url.includes('/account/collections/')),
+  ).toHaveLength(1);
+});
+
+for (const operation of ['logout', 'refresh']) {
+  for (const status of [401, 403, 503]) {
+    test(`${operation} HTTP ${status} ${status === 401 ? 'clears an expired identity' : 'retains the authenticated identity'}`, async () => {
+      let fail = false;
+      stubFetch('fetch', async (url) => {
+        if (
+          fail &&
+          url.endsWith(operation === 'logout' ? '/auth/logout' : '/auth/me')
+        )
+          return { ok: false, status, json: async () => ({}) };
+        return {
+          ok: true,
+          json: async () =>
+            url.endsWith('/auth/me')
+              ? {
+                  display_name: 'Applicant',
+                  public_id: '21',
+                  registration_approval_state: 'pending',
+                }
+              : { items: [], cursor: null },
+        };
+      });
+      render(<Account />);
+      await screen.findByText('Applicant');
+      sessionStorage.setItem('raui_csrf', 'expired-token');
+      fail = true;
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: operation === 'logout' ? 'Выйти' : 'Обновить профиль',
+        }),
+      );
+      if (status === 401) {
+        await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+        expect(screen.queryByText('Applicant')).toBeNull();
+        expect(sessionStorage.getItem('raui_csrf')).toBe('');
+        expect(screen.getByRole('alert').textContent).toContain('Войдите');
+      } else {
+        await screen.findByText(
+          'Не удалось выполнить запрос. Попробуйте ещё раз.',
+        );
+        expect(screen.getByText('Applicant')).toBeTruthy();
+      }
+    });
+  }
+}
+
+test('Late expired profile refresh cannot sign out a new identity', async () => {
+  let initial = true;
+  let release: (() => void) | undefined;
+  stubFetch('fetch', async (url) => {
+    if (url.endsWith('/auth/me')) {
+      if (initial) {
+        initial = false;
+        return {
+          ok: true,
+          json: async () => ({
+            display_name: 'Identity A',
+            public_id: '21',
+            registration_approval_state: 'pending',
+          }),
+        };
+      }
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    if (url.endsWith('/auth/login'))
+      return {
+        ok: true,
+        json: async () => ({
+          csrfToken: 'new-session',
+          user: { display_name: 'Identity B', public_id: '22' },
+        }),
+      };
+    return { ok: true, json: async () => ({ items: [], cursor: null }) };
+  });
+  render(<Account />);
+  await screen.findByText('Identity A');
+  const expiredOldProfile = profileCallbacks.expire;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить профиль' }));
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+  fireEvent.change(screen.getByLabelText('Email'), {
+    target: { value: 'b@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'fixture-long-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
+  await screen.findByText('Identity B');
+  await act(async () => {
+    release!();
+  });
+  expect(screen.getByText('Identity B')).toBeTruthy();
+  await act(async () => {
+    expiredOldProfile!();
+  });
+  expect(screen.getByText('Identity B')).toBeTruthy();
+  expect(sessionStorage.getItem('raui_csrf')).toBe('new-session');
+});
+
+test('Current profile session-expiry callback clears identity and shows login', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    json: async () =>
+      url.endsWith('/auth/me')
+        ? {
+            display_name: 'Applicant',
+            public_id: '21',
+            registration_approval_state: 'pending',
+          }
+        : { items: [], cursor: null },
+  }));
+  render(<Account />);
+  await screen.findByText('Applicant');
+  await act(async () => {
+    profileCallbacks.expire!();
+  });
+  expect(screen.getByRole('heading', { name: 'Войти в аккаунт' })).toBeTruthy();
+  expect(screen.queryByText('Applicant')).toBeNull();
+});
+
+test('saved searches show distinct escaped summaries while retaining original reopen and rename definitions', async () => {
+  const definitions = [
+    { q: '<img src=x onerror=alert(1)> & #', price: { min: 0, max: 100 } },
+    {
+      regionCode: 'moscow',
+      locality: 'Москва',
+      attributes: { rooms: { max: 2 } },
+    },
+  ];
+  const fetcher = vi.fn(async (url: string, options?: { method?: string }) => {
+    let value: unknown = { items: [], cursor: null };
+    if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+    if (url.endsWith('/saved-searches') && options?.method === 'GET')
+      value = {
+        items: definitions.map((definition, i) => ({
+          id: String(i),
+          name: 'Одинаковое имя',
+          definition,
+        })),
+        cursor: null,
+      };
+    return { ok: true, json: async () => value };
+  });
+  stubFetch('fetch', fetcher);
+  const { container } = render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранённые поиски' }));
+  await screen.findByText(
+    'Поиск: <img src=x onerror=alert(1)> & # · Цена: от 0 до 100 ₽',
+  );
+  expect(
+    screen.getByText('Регион: moscow · Город: Москва · Комнаты: до 2'),
+  ).toBeTruthy();
+  expect(container.querySelector('img')).toBeNull();
+  const links = screen.getAllByRole('link', { name: 'Открыть поиск' });
+  links.forEach((link, i) =>
+    expect(link.getAttribute('href')).toBe(
+      '/search?definition=' +
+        encodeURIComponent(JSON.stringify(definitions[i])),
+    ),
+  );
+  fireEvent.click(screen.getAllByRole('button', { name: 'Переименовать' })[0]!);
+  await vi.waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url, options]) =>
+          url.endsWith('/saved-searches/0') && options?.method === 'PATCH',
+      ),
+    ).toBe(true),
+  );
+  const call = fetcher.mock.calls.find(
+    ([url, options]) =>
+      url.endsWith('/saved-searches/0') && options?.method === 'PATCH',
+  )!;
+  expect(JSON.parse((call[1] as { body: string }).body).definition).toEqual(
+    definitions[0],
+  );
+});
+
+for (const available of [false, true]) {
+  test(`Subscription availability ${available} uses a separate inbox action`, async () => {
+    const requests: string[] = [];
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        requests.push(url);
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/notifications'))
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.availability',
+                listing_id: 'listing-one',
+                event: { kind: 'availability', available },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        else if (url.endsWith('/preferences')) value = { in_app: true };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await screen.findByText(
+      available ? 'Объявление снова доступно' : 'Объявление больше недоступно',
+    );
+    if (available)
+      expect(
+        screen
+          .getByRole('link', { name: 'Открыть объявление' })
+          .getAttribute('href'),
+      ).toBe('/listings/listing-one');
+    else
+      expect(
+        screen.queryByRole('link', { name: 'Открыть объявление' }),
+      ).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Отметить прочитанным' }),
+    );
+    await vi.waitFor(() =>
+      expect(requests.some((url) => url.endsWith('/42/read'))).toBe(true),
+    );
+    expect(requests.some((url) => url.includes('/account/threads'))).toBe(
+      false,
+    );
+    expect(
+      screen
+        .getByRole('button', { name: 'Уведомления' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+}
+test('Empty filtered notification page retains its advancing cursor', async () => {
+  const requests: string[] = [];
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => {
+      requests.push(url);
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/notifications'))
+        value = { items: [], cursor: '42' };
+      else if (url.endsWith('/notifications?cursor=42'))
+        value = {
+          items: [
+            {
+              id: '41',
+              kind: 'subscription.listing.availability',
+              listing_id: 'listing-two',
+              event: { kind: 'availability', available: false },
+              read_at: null,
+              created_at: '2026-10-14T00:00:00Z',
+            },
+          ],
+          cursor: null,
+        };
+      else if (url.endsWith('/preferences')) value = { in_app: true };
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+  await screen.findByText('Объявление больше недоступно');
+  expect(requests.some((url) => url.endsWith('/notifications?cursor=42'))).toBe(
+    true,
+  );
+});
+for (const [priceMinor, expected] of [
+  [9900, 'Цена снизилась до 99,00 ₽'],
+  [9007199254740987, 'Цена снизилась до 90 071 992 547 409,87 ₽'],
+] as const) {
+  test(`Price-drop inbox preserves exact minor units ${priceMinor}`, async () => {
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+        else if (url.endsWith('/notifications'))
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.price_drop',
+                listing_id: 'listing-one',
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 9007199254740991,
+                  priceMinor,
+                },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: null,
+          };
+        else if (url.endsWith('/preferences')) value = { in_app: true };
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Buyer');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    const price = await screen.findByText(/Цена снизилась до/);
+    expect(price.textContent?.replace(/\s/g, ' ')).toBe(expected);
+  });
+}
+test('Subscription stale mark-read failure preserves inbox navigation and unread action', async () => {
+  stubFetch(
+    'fetch',
+    vi.fn(async (url: string) => {
+      let value: unknown = { items: [], cursor: null };
+      if (url.endsWith('/auth/me')) value = { display_name: 'Buyer' };
+      else if (url.endsWith('/notifications'))
+        value = {
+          items: [
+            {
+              id: '42',
+              kind: 'subscription.listing.availability',
+              listing_id: 'listing-one',
+              event: { kind: 'availability', available: false },
+              read_at: null,
+              created_at: '2026-10-14T00:00:00Z',
+            },
+          ],
+          cursor: null,
+        };
+      else if (url.endsWith('/preferences')) value = { in_app: true };
+      else if (url.endsWith('/42/read'))
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ message: 'Уведомление недоступно' }),
+        };
+      return { ok: true, json: async () => value };
+    }),
+  );
+  render(<Account />);
+  await screen.findByText('Buyer');
+  fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Отметить прочитанным' }),
+  );
+  await screen.findByText('Объект недоступен.');
+  expect(
+    screen
+      .getByRole('button', { name: 'Уведомления' })
+      .getAttribute('aria-pressed'),
+  ).toBe('true');
+  expect(
+    (
+      screen.getByRole('button', {
+        name: 'Отметить прочитанным',
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+});
+for (const delayed of ['notifications', 'preferences'])
+  test(`Late subscription ${delayed} response cannot leak content or cursor across identities`, async () => {
+    let identity = 'A';
+    let release: (() => void) | undefined;
+    stubFetch(
+      'fetch',
+      vi.fn(async (url: string) => {
+        let value: unknown = { items: [], cursor: null };
+        if (url.endsWith('/auth/me')) value = { display_name: 'Identity A' };
+        else if (url.endsWith('/auth/logout')) identity = '';
+        else if (url.endsWith('/auth/login')) {
+          identity = 'B';
+          value = {
+            csrfToken: 'synthetic-csrf-B',
+            user: { display_name: 'Identity B' },
+          };
+        } else if (url.endsWith('/notifications') && identity === 'A') {
+          value = {
+            items: [
+              {
+                id: '42',
+                kind: 'subscription.listing.price_drop',
+                listing_id: 'private-A',
+                event: {
+                  kind: 'price_drop',
+                  previousPriceMinor: 10000,
+                  priceMinor: 9900,
+                },
+                read_at: null,
+                created_at: '2026-10-14T00:00:00Z',
+              },
+            ],
+            cursor: '41',
+          };
+          if (delayed === 'notifications')
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        } else if (url.endsWith('/preferences')) {
+          value = { in_app: true };
+          if (identity === 'A' && delayed === 'preferences')
+            await new Promise<void>((done) => {
+              release = done;
+            });
+        }
+        return { ok: true, json: async () => value };
+      }),
+    );
+    render(<Account />);
+    await screen.findByText('Identity A');
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+    await screen.findByRole('heading', { name: 'Войти в аккаунт' });
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'b@example.test' },
+    });
+    fireEvent.change(screen.getByLabelText('Пароль'), {
+      target: { value: 'synthetic-long-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
+    await screen.findByText('Identity B');
+    await act(async () => {
+      release!();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления' }));
+    await screen.findByText('Новых уведомлений нет.');
+    expect(screen.queryByText(/Цена снизилась до/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  });

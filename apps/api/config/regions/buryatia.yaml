@@ -1,0 +1,9 @@
+code: buryatia
+name: Республика Бурятия
+type: republic
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Irkutsk
+currency: RUB
+geo_bounds: null

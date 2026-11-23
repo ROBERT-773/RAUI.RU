@@ -1,0 +1,9 @@
+code: ulyanovsk
+name: Ульяновская область
+type: oblast
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Europe/Ulyanovsk
+currency: RUB
+geo_bounds: null

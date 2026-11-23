@@ -1,0 +1,9 @@
+code: vologda
+name: Вологодская область
+type: oblast
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Europe/Moscow
+currency: RUB
+geo_bounds: null

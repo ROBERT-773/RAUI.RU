@@ -1,3 +1,4 @@
+import { migrationNames } from '../../../scripts/runtime-image-verification.mjs';
 import { Buffer } from 'node:buffer';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -69,7 +70,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     version: 1,
     sha: 'a'.repeat(40),
     runId: '123',
-    migrations: 12,
+    migrations: migrationNames.length,
     riskyDefaults: 'off',
     gates: [
       'lint',
@@ -84,22 +85,13 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'security',
       'restore',
       'observability',
+      'runtime-contract',
+      'runtime-smoke',
     ],
     files: [
       'apps/api/dist/main.js',
       'apps/web/.next/BUILD_ID',
-      'apps/api/migrations/001_core.sql',
-      'apps/api/migrations/002_search_product.sql',
-      'apps/api/migrations/003_commerce.sql',
-      'apps/api/migrations/004_commerce_reconciliation.sql',
-      'apps/api/migrations/005_professional_integrations.sql',
-      'apps/api/migrations/006_professional_workflows.sql',
-      'apps/api/migrations/007_partner_clients.sql',
-      'apps/api/migrations/008_professional_operations.sql',
-      'apps/api/migrations/009_ai_trust_analytics.sql',
-      'apps/api/migrations/010_analytics_identity_and_trust_geo.sql',
-      'apps/api/migrations/011_ai_reported_cost.sql',
-      'apps/api/migrations/012_search_queue_observability.sql',
+      ...migrationNames.map((name) => 'apps/api/migrations/' + name),
       'pnpm-lock.yaml',
       'package.json',
       'infra/observability/alerts.yml',
@@ -107,6 +99,7 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
       'infra/observability/prometheus.yml',
       '.cache/phase4d-load.json',
       '.cache/phase4d-recovery.json',
+      '.cache/runtime-image-receipt.json',
     ].map((path) => ({ path, sha256: 'b'.repeat(64) })),
   };
   assert.doesNotThrow(() => validateRelease(good, 'a'.repeat(40)));
@@ -129,12 +122,21 @@ test('Release manifest rejects mutable identity, unsafe paths and missing verifi
     { runId: '0' },
     { runId: '123x' },
     { migrations: 0 },
+    { migrations: 12 },
+    { migrations: 16 },
     { riskyDefaults: 'on' },
     { gates: ['lint'] },
     { files: [{ path: 'apps/api/dist/main.js', sha256: 'b'.repeat(64) }] },
     { files: [{ path: '../.env', sha256: 'b'.repeat(64) }] },
   ])
     assert.throws(() => validateRelease({ ...good, ...patch }, 'a'.repeat(40)));
+  for (const gate of ['runtime-contract', 'runtime-smoke'])
+    assert.throws(() =>
+      validateRelease(
+        { ...good, gates: good.gates.filter((value) => value !== gate) },
+        'a'.repeat(40),
+      ),
+    );
   assert.throws(() => validateRelease(good, 'c'.repeat(40)));
   assert.throws(() => validateRelease(good, 'a'.repeat(40), '456'));
   assert.doesNotThrow(() => validateRelease(good, 'a'.repeat(40), '123'));
@@ -167,7 +169,25 @@ test('Release verification binds measured evidence and rejects tampering', async
   const root = await mkdtemp(join(tmpdir(), 'raui-release-test-'));
   try {
     await mkdir(join(root, '.cache'));
+    const receipt = {
+      version: 1,
+      sourceRevision: 'a'.repeat(40),
+      ciRunId: '123',
+      imageId: 'sha256:' + 'b'.repeat(64),
+      archiveSha256: 'c'.repeat(64),
+      sourceState: 'committed',
+      siteUrl: 'http://127.0.0.1:3000',
+      deploymentEnvironment: 'staging',
+      contract: 'passed',
+      serviceSmoke: 'passed',
+      migrationCount: migrationNames.length,
+      network: 'linux-host',
+      adapters: 'local-development',
+      stagingAcceptance: 'not_executed',
+      deployment: 'not_executed',
+    };
     const values = {
+      '.cache/runtime-image-receipt.json': receipt,
       '.cache/phase4d-load.json': {
         version: 1,
         results: [
@@ -198,7 +218,7 @@ test('Release verification binds measured evidence and rejects tampering', async
         sourceUntouched: true,
         databaseRestore: 'verified',
         objectFixtureRestore: 'verified',
-        migrationsVerified: 12,
+        migrationsVerified: migrationNames.length,
         tablesVerified: 61,
         cipher: 'AES-256-GCM',
         sourceWritersQuiesced: true,
@@ -218,7 +238,34 @@ test('Release verification binds measured evidence and rejects tampering', async
         sha256: createHash('sha256').update(bytes).digest('hex'),
       });
     }
-    await assert.doesNotReject(verifyFiles({ files }, root));
+    await assert.doesNotReject(
+      verifyFiles({ sha: 'a'.repeat(40), runId: '123', files }, root),
+    );
+    const receiptPath = '.cache/runtime-image-receipt.json';
+    for (const patch of [
+      { sourceRevision: 'd'.repeat(40) },
+      { ciRunId: '456' },
+      { serviceSmoke: 'pending' },
+    ]) {
+      const bytes = JSON.stringify({ ...receipt, ...patch });
+      await writeFile(join(root, receiptPath), bytes);
+      const changed = files.map((file) =>
+        file.path === receiptPath
+          ? {
+              ...file,
+              sha256: createHash('sha256').update(bytes).digest('hex'),
+            }
+          : file,
+      );
+      await assert.rejects(
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
+        /Invalid runtime image evidence/,
+      );
+    }
+    await writeFile(join(root, receiptPath), JSON.stringify(receipt));
     const loadPath = '.cache/phase4d-load.json';
     const goodResults = values[loadPath].results;
     const badInventories = [
@@ -264,13 +311,18 @@ test('Release verification binds measured evidence and rejects tampering', async
           : file,
       );
       await assert.rejects(
-        verifyFiles({ files: changed }, root),
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
         /Invalid measured load evidence/,
       );
     }
     await writeFile(join(root, loadPath), JSON.stringify(values[loadPath]));
     const recoveryPath = '.cache/phase4d-recovery.json';
     for (const patch of [
+      { migrationsVerified: 12 },
+      { migrationsVerified: 16 },
       { sequenceStateAndConfig: undefined },
       { sourceWritersQuiesced: false },
       { sequenceNextValuesVerified: 8 },
@@ -291,7 +343,10 @@ test('Release verification binds measured evidence and rejects tampering', async
           : file,
       );
       await assert.rejects(
-        verifyFiles({ files: changed }, root),
+        verifyFiles(
+          { sha: 'a'.repeat(40), runId: '123', files: changed },
+          root,
+        ),
         /Invalid restore evidence/,
       );
     }
@@ -300,7 +355,10 @@ test('Release verification binds measured evidence and rejects tampering', async
       JSON.stringify(values[recoveryPath]),
     );
     await writeFile(join(root, '.cache/phase4d-load.json'), '{}');
-    await assert.rejects(verifyFiles({ files }, root), /checksum mismatch/);
+    await assert.rejects(
+      verifyFiles({ sha: 'a'.repeat(40), runId: '123', files }, root),
+      /checksum mismatch/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -497,4 +555,55 @@ test('CI provenance rejects same-name workflows and binds successful immutable r
     { status: 'in_progress' },
   ])
     assert.throws(() => validateCiRun({ ...run, ...patch }, sha, '123'));
+});
+
+test('Runtime receipt is bound to the source and CI run with completed local acceptance', async () => {
+  const { validateRuntimeReceipt } =
+    await import('../../../scripts/release-contract.mjs');
+  const good = {
+    version: 1,
+    sourceRevision: 'a'.repeat(40),
+    ciRunId: '123',
+    imageId: 'sha256:' + 'b'.repeat(64),
+    archiveSha256: 'c'.repeat(64),
+    sourceState: 'committed',
+    siteUrl: 'http://127.0.0.1:3000',
+    deploymentEnvironment: 'staging',
+    contract: 'passed',
+    serviceSmoke: 'passed',
+    migrationCount: migrationNames.length,
+    network: 'linux-host',
+    adapters: 'local-development',
+    stagingAcceptance: 'not_executed',
+    deployment: 'not_executed',
+  };
+  assert.doesNotThrow(() =>
+    validateRuntimeReceipt(good, 'a'.repeat(40), '123'),
+  );
+  for (const patch of [
+    { sourceRevision: 'd'.repeat(40) },
+    { ciRunId: '456' },
+    { ciRunId: 123 },
+    { imageId: 'raui-runtime:local' },
+    { archiveSha256: undefined },
+    { archiveSha256: 'bad' },
+    { archiveSha256: ['c'.repeat(64)] },
+    { imageId: ['sha256:' + 'b'.repeat(64)] },
+    { sourceState: 'candidate' },
+    { contract: 'pending' },
+    { serviceSmoke: 'failed' },
+    { migrationCount: 12 },
+    { network: 'bridge' },
+    { adapters: 'production' },
+    { siteUrl: 'https://example.invalid' },
+    { deploymentEnvironment: 'production' },
+    { stagingAcceptance: 'passed' },
+    { deployment: 'passed' },
+  ]) {
+    assert.throws(
+      () =>
+        validateRuntimeReceipt({ ...good, ...patch }, 'a'.repeat(40), '123'),
+      /Invalid runtime image evidence/,
+    );
+  }
 });

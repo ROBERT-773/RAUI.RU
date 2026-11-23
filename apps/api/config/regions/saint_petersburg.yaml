@@ -1,0 +1,9 @@
+code: saint_petersburg
+name: Санкт-Петербург
+type: city
+search_entities: [district, metro, street, house]
+metro_available: true
+directions_available: false
+timezone: Europe/Moscow
+currency: RUB
+geo_bounds: null

@@ -1,0 +1,2 @@
+apps/api/migrations/*.sql text eol=lf
+*.sh text eol=lf

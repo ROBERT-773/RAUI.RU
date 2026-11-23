@@ -1,0 +1,9 @@
+code: sakhalin
+name: Сахалинская область
+type: oblast
+search_entities: [district, locality, street, house]
+metro_available: false
+directions_available: false
+timezone: Asia/Sakhalin
+currency: RUB
+geo_bounds: null

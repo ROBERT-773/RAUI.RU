@@ -137,3 +137,320 @@ test('Sitemap never exceeds the fifty-thousand URL protocol limit', async () => 
     '&amp;',
   );
 });
+
+test('Regional catalogue is reachable through the public web proxy', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const { GET } = await import('../app/api/[...path]/route');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      expect(url).toBe('http://127.0.0.1:3001/v1/regions');
+      return new Response(
+        JSON.stringify({ items: [{ code: 'moscow', name: 'Москва' }] }),
+        {
+          headers: { 'content-type': 'application/json' },
+        },
+      );
+    }),
+  );
+  const response = await GET(
+    new NextRequest('https://staging.raui.ru/api/v1/regions'),
+    {
+      params: Promise.resolve({ path: ['v1', 'regions'] }),
+    },
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    items: [{ code: 'moscow', name: 'Москва' }],
+  });
+});
+
+test('CSRF recovery proxy rejects cross-origin browser reads before contacting API', async () => {
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const { GET } = await import('../app/api/[...path]/route');
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  for (const headers of [
+    { origin: 'https://attacker.test' },
+    { 'sec-fetch-site': 'cross-site' },
+  ]) {
+    const response = await GET(
+      new NextRequest('https://staging.raui.ru/api/v1/auth/csrf', { headers }),
+      {
+        params: Promise.resolve({ path: ['v1', 'auth', 'csrf'] }),
+      },
+    );
+    expect(response.status).toBe(403);
+  }
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test('staff permissions proxy forwards only the bounded admin routes', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const { GET, PATCH } = await import('../app/api/[...path]/route');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const id = '11111111-1111-4111-8111-111111111111';
+  const path = ['v1', 'admin', 'users', id, 'permissions'];
+  const granted = await PATCH(
+    new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+      method: 'PATCH',
+      headers: {
+        origin: 'https://staging.raui.ru',
+        'x-csrf-token': 'fixture-csrf',
+      },
+      body: '{}',
+    }),
+    { params: Promise.resolve({ path }) },
+  );
+  expect(granted.status).toBe(200);
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(fetcher.mock.calls[0]?.[0]).toBe(
+    'http://127.0.0.1:3001/v1/admin/users/' + id + '/permissions',
+  );
+  const denied = await GET(
+    new NextRequest('https://staging.raui.ru/api/v1/admin/audit'),
+    { params: Promise.resolve({ path: ['v1', 'admin', 'audit'] }) },
+  );
+  expect(denied.status).toBe(404);
+  const wrongMethod = await PATCH(
+    new NextRequest('https://staging.raui.ru/api/v1/admin/users', {
+      method: 'PATCH',
+      headers: { origin: 'https://staging.raui.ru' },
+      body: '{}',
+    }),
+    { params: Promise.resolve({ path: ['v1', 'admin', 'users'] }) },
+  );
+  expect(wrongMethod.status).toBe(404);
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
+test('owner and moderation proxy exposes only selected methods and preserves idempotency', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, PATCH, POST } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  for (const path of [
+    ['v1', 'properties'],
+    ['v1', 'organizations'],
+    ['v1', 'admin', 'moderation', id, 'decision'],
+  ]) {
+    const response = await POST(
+      new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+        method: 'POST',
+        headers: {
+          origin: 'https://staging.raui.ru',
+          'idempotency-key': 'stable-key',
+        },
+        body: '{}',
+      }),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(response.status).toBe(200);
+  }
+  expect(
+    new Headers((fetcher.mock.calls[0]?.[1] as RequestInit)?.headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('stable-key');
+  for (const path of [
+    ['v1', 'admin', 'moderation'],
+    ['v1', 'organizations', id, 'members'],
+    ['v1', 'admin', 'moderation', id, 'materials'],
+    ['v1', 'admin', 'moderation', id, 'media', id, 'small'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(200);
+  }
+  for (const path of [
+    ['v1', 'properties', 'arbitrary'],
+    ['v1', 'organizations', 'arbitrary', 'members'],
+    ['v1', 'organizations', id, 'permissions'],
+    ['v1', 'admin', 'moderation', id, 'permissions'],
+    ['v1', 'admin', 'moderation', id, 'media', id, 'original'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(404);
+  }
+  const membersPath = ['v1', 'organizations', id, 'members'];
+  expect(
+    (
+      await PATCH(
+        new NextRequest(
+          'https://staging.raui.ru/api/' + membersPath.join('/'),
+          {
+            method: 'PATCH',
+            headers: { origin: 'https://staging.raui.ru' },
+            body: '{}',
+          },
+        ),
+        { params: Promise.resolve({ path: membersPath }) },
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await PATCH(
+        new NextRequest('https://staging.raui.ru/api/v1/admin/moderation', {
+          method: 'PATCH',
+          headers: { origin: 'https://staging.raui.ru' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path: ['v1', 'admin', 'moderation'] }) },
+      )
+    ).status,
+  ).toBe(404);
+});
+
+test('registration approval proxy admits only queue, detail and idempotent decision', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, POST, PATCH } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const base = ['v1', 'admin', 'registration-approvals'];
+  for (const path of [base, [...base, id]]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+          { params: Promise.resolve({ path }) },
+        )
+      ).status,
+    ).toBe(200);
+  }
+  const path = [...base, id, 'decision'];
+  expect(
+    (
+      await POST(
+        new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+          method: 'POST',
+          headers: {
+            origin: 'https://staging.raui.ru',
+            'idempotency-key': 'approval-retry-key',
+          },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    new Headers((fetcher.mock.calls[2]?.[1] as RequestInit).headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('approval-retry-key');
+  for (const denied of [
+    [...base, 'bad-id'],
+    [...base, id, 'permissions'],
+    [...base, id, 'decision'],
+  ]) {
+    expect(
+      (
+        await GET(
+          new NextRequest('https://staging.raui.ru/api/' + denied.join('/')),
+          { params: Promise.resolve({ path: denied }) },
+        )
+      ).status,
+    ).toBe(404);
+  }
+  expect(
+    (
+      await PATCH(
+        new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+          method: 'PATCH',
+          headers: { origin: 'https://staging.raui.ru' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(404);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
+
+test('phone OTP proxy accepts only exact methods and forwards idempotency without caching', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'local');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'public, max-age=3600',
+      },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, POST, PATCH } = await import('../app/api/[...path]/route');
+  const base = ['v1', 'auth', 'verification', 'phone'];
+  for (const [method, suffix, allowed] of [
+    ['GET', ['capabilities'], true],
+    ['POST', ['otp'], true],
+    ['POST', ['otp', 'confirm'], true],
+    ['POST', ['capabilities'], false],
+    ['GET', ['otp'], false],
+    ['GET', ['otp', 'confirm'], false],
+    ['POST', ['otp', 'confirm', 'extra'], false],
+    ['PATCH', ['otp'], false],
+  ] as const) {
+    const path = [...base, ...suffix];
+    const handler = method === 'GET' ? GET : method === 'POST' ? POST : PATCH;
+    const response = await handler(
+      new NextRequest('https://staging.raui.ru/api/' + path.join('/'), {
+        method,
+        headers: {
+          origin: 'https://staging.raui.ru',
+          'idempotency-key': 'phone-otp-request-key',
+        },
+        ...(method === 'GET' ? {} : { body: '{}' }),
+      }),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(response.status).toBe(allowed ? 200 : 404);
+    if (allowed)
+      expect(response.headers.get('cache-control')).toContain('no-store');
+  }
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(
+    new Headers((fetcher.mock.calls[1]?.[1] as RequestInit).headers).get(
+      'idempotency-key',
+    ),
+  ).toBe('phone-otp-request-key');
+});

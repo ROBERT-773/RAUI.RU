@@ -7,6 +7,7 @@ import {
 } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import AxeBuilder from '@axe-core/playwright';
+import type { SearchDefinition } from '@raui/types/product';
 test.beforeEach(() => {
   execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
 });
@@ -18,7 +19,7 @@ async function login(page: Page) {
     .fill('E2E-only-password-42!');
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: 'Мой аккаунт' }),
+    page.getByRole('heading', { name: 'Кабинет покупателя', exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText('Тестовый пользователь', { exact: true }),
@@ -38,6 +39,144 @@ function endpoint(response: PlaywrightResponse, method: string, path: string) {
     new URL(response.url()).pathname === path
   );
 }
+test('same-route navigation and history restore a saved search URL without reloading the document', async ({
+  page,
+}) => {
+  const definition: SearchDefinition = {
+    category: 'apartment',
+    dealType: 'sale',
+    locality: 'Москва',
+    price: { max: 15000000 },
+    attributes: { rooms: { min: 2, max: 2 }, area: { min: 40, max: 90 } },
+    sort: 'price_asc',
+    limit: 20,
+  };
+  const savedUrl =
+    '/search?' +
+    new URLSearchParams({
+      definition: JSON.stringify(definition),
+      mode: 'list',
+    });
+  await page.goto(savedUrl);
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { raui48Document: string }).raui48Document =
+      'same-document';
+  });
+  // A real Next Link keeps the /search route mounted while its parameters change.
+  const clear = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      JSON.stringify(response.request().postDataJSON()) ===
+        JSON.stringify({ limit: 20 }),
+  );
+  await page.getByRole('link', { name: 'Недвижимость', exact: true }).click();
+  expect((await clear).status()).toBe(201);
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.getByLabel('Цена до', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Комнат от', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Площадь до, м²', { exact: true })).toHaveValue(
+    '',
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toBeVisible();
+  const restored = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      JSON.stringify(response.request().postDataJSON()) ===
+        JSON.stringify(definition),
+  );
+  await page.goBack();
+  expect((await restored).status()).toBe(201);
+  await expect(page.getByLabel('Комнат от', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('Площадь от, м²', { exact: true })).toHaveValue(
+    '40',
+  );
+  await expect(page.getByLabel('Площадь до, м²', { exact: true })).toHaveValue(
+    '90',
+  );
+  await expect(
+    page.getByRole('combobox', { name: 'Сортировка', exact: true }),
+  ).toHaveValue('price_asc');
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { raui48Document: string }).raui48Document,
+    ),
+  ).toBe('same-document');
+  await page.goForward();
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue('');
+  await expect(
+    page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
+  ).toBeVisible();
+});
+test('bounded and maximum-only room/area ranges survive submit and intentional edits in URL and API', async ({
+  page,
+}) => {
+  for (const attributes of [
+    { rooms: { min: 2, max: 3 }, area: { min: 40, max: 60 } },
+    { rooms: { max: 3 }, area: { max: 60 } },
+  ]) {
+    await page.goto(
+      '/search?' +
+        new URLSearchParams({
+          definition: JSON.stringify({ attributes, limit: 20 }),
+        }),
+    );
+    await expect(
+      page.getByRole('button', { name: 'Сохранить поиск', exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByLabel('Комнат до', { exact: true })).toHaveValue(
+      '3',
+    );
+    await expect(
+      page.getByLabel('Площадь до, м²', { exact: true }),
+    ).toHaveValue('60');
+    const submitted = page.waitForResponse(
+      (response) =>
+        endpoint(response, 'POST', '/api/v1/search') &&
+        response.request().postDataJSON().sort === 'newest',
+    );
+    await page.getByRole('button', { name: 'Найти', exact: true }).click();
+    const response = await submitted;
+    expect(response.status()).toBe(201);
+    expect(response.request().postDataJSON().attributes).toEqual(attributes);
+    await expect
+      .poll(
+        () =>
+          JSON.parse(new URL(page.url()).searchParams.get('definition')!)
+            .attributes,
+      )
+      .toEqual(attributes);
+  }
+  await page.getByLabel('Комнат от', { exact: true }).fill('0');
+  await page.getByLabel('Площадь до, м²', { exact: true }).fill('');
+  const changed = page.waitForResponse(
+    (response) =>
+      endpoint(response, 'POST', '/api/v1/search') &&
+      response.request().postDataJSON().attributes?.rooms?.min === 0,
+  );
+  await page.getByRole('button', { name: 'Найти', exact: true }).click();
+  const response = await changed;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON().attributes).toEqual({
+    rooms: { min: 0, max: 3 },
+  });
+  await expect
+    .poll(
+      () =>
+        JSON.parse(new URL(page.url()).searchParams.get('definition')!)
+          .attributes,
+    )
+    .toEqual({ rooms: { min: 0, max: 3 } });
+});
 async function moveMap(
   page: Page,
   action: () => Promise<void>,
@@ -68,7 +207,7 @@ function savedResponse(response: PlaywrightResponse, after?: string) {
 async function savedArticle(page: Page, id: string): Promise<Locator | null> {
   await page.goto('/account');
   await expect(
-    page.getByRole('heading', { name: 'Мой аккаунт' }),
+    page.getByRole('heading', { name: 'Кабинет покупателя', exact: true }),
   ).toBeVisible();
   let pending = page.waitForResponse((response) => savedResponse(response));
   await page
@@ -102,6 +241,7 @@ async function savedArticle(page: Page, id: string): Promise<Locator | null> {
 test('search → filter → detail → favorite and comparison', async ({ page }) => {
   await login(page);
   await page.goto('/');
+  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -144,7 +284,9 @@ test('search → filter → detail → favorite and comparison', async ({ page }
 test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {
-  await page.goto('/');
+  // Publication scenarios share this database and can leave other listings.
+  const query = new URLSearchParams({ q: 'Квартира' });
+  await page.goto(`/search?${query}`);
   await page.getByRole('button', { name: 'Карта', exact: true }).click();
   const map = page.locator('.leaflet-map'),
     marker = page.locator('.price-marker').first(),
@@ -237,7 +379,7 @@ test('saved search create, rename, reopen and delete persist', async ({
   page,
 }, info) => {
   await login(page);
-  await page.goto('/');
+  await page.goto('/search');
   await page.getByLabel('Цена до', { exact: true }).fill('15000000');
   await page.getByRole('button', { name: 'Найти', exact: true }).click();
   await expect(
@@ -257,6 +399,9 @@ test('saved search create, rename, reopen and delete persist', async ({
   const created = (await create.json()) as SavedRow;
   const article = await savedArticle(page, created.id);
   expect(article).not.toBeNull();
+  await expect(
+    article!.getByText('Цена: до 15\u00a0000\u00a0000 ₽', { exact: false }),
+  ).toBeVisible();
   const name = `RC ${info.project.name} ${created.id}`;
   await article!.getByLabel('Название', { exact: true }).fill(name);
   const path = '/api/v1/account/saved-searches/' + created.id;
@@ -312,7 +457,7 @@ test('saved search create, rename, reopen and delete persist', async ({
 test('inquiry and account messages', async ({ page }, testInfo) => {
   const text = 'Можно посмотреть квартиру? ' + testInfo.project.name;
   await login(page);
-  await page.goto('/');
+  await page.goto('/search');
   await page
     .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
     .click();
@@ -352,7 +497,7 @@ for (const delayed of [false, true]) {
         };
       });
     await login(page);
-    await page.goto('/');
+    await page.goto('/search');
     await page
       .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
       .click();
@@ -419,7 +564,7 @@ for (const delayed of [false, true]) {
         .fill('E2E-only-password-42!');
       await page.getByRole('button', { name: 'Войти', exact: true }).click();
       await expect(
-        page.getByRole('heading', { name: 'Мой аккаунт' }),
+        page.getByRole('heading', { name: 'Кабинет покупателя', exact: true }),
       ).toBeVisible();
       release?.();
       if (delivered) {
@@ -458,7 +603,7 @@ for (const delayed of [false, true]) {
 }
 
 test('accessibility and responsive search baseline', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/search');
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -476,7 +621,7 @@ test('accessibility and responsive search baseline', async ({ page }) => {
 test('listing SEO metadata and unavailable pages are safe', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/search');
   await page
     .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
     .click();
@@ -568,7 +713,71 @@ test('HTML uses fresh CSP nonces and protected browser headers', async ({
   expect(second?.headers()['content-security-policy']).not.toContain(
     "'nonce-" + nonce + "'",
   );
+  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
+});
+
+test('Cookie session survives a fresh tab without CSRF storage and permits search and logout', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  const restored = await context.newPage();
+  try {
+    const searchResponse = restored.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/search'),
+    );
+    await restored.goto('/search');
+    expect(
+      await restored.evaluate(() => sessionStorage.getItem('raui_csrf')),
+    ).toBeNull();
+    expect((await searchResponse).status()).toBe(201);
+    await restored.goto('/account');
+    await expect(
+      restored.getByRole('heading', {
+        name: 'Кабинет покупателя',
+        exact: true,
+      }),
+    ).toBeVisible();
+    const logoutResponse = restored.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/auth/logout'),
+    );
+    await restored.getByRole('button', { name: 'Выйти', exact: true }).click();
+    expect((await logoutResponse).status()).toBe(201);
+    await expect(
+      restored.getByRole('heading', { name: 'Войти в аккаунт' }),
+    ).toBeVisible();
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(401);
+  } finally {
+    await restored.close();
+  }
+});
+
+test('Password recovery reaches the API anonymously and removes invalid reset fragments', async ({
+  page,
+}) => {
+  await page.goto('/account');
+  await page.getByRole('link', { name: 'Забыли пароль?' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Восстановить пароль' }),
+  ).toBeVisible();
+  await page.getByLabel('Email', { exact: true }).fill('unknown@e2e.test');
+  const request = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/auth/password-reset'),
+  );
+  await page.getByRole('button', { name: 'Отправить ссылку' }).click();
+  expect((await request).status()).toBe(201);
+  await expect(page.getByRole('status')).toContainText(
+    'Если аккаунт с этим email существует',
+  );
+  await page.goto('/account/reset-password#token=invalid');
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/account\/reset-password$/);
+  await expect(
+    page.getByRole('button', { name: 'Сохранить пароль' }),
+  ).toHaveCount(0);
 });

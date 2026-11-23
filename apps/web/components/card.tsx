@@ -3,13 +3,22 @@ import Link from 'next/link';
 import Image from 'next/image';
 import type { ListingCard } from '@raui/types/product';
 import { money, track } from '../lib/client';
+import { dealLabel, pricePeriod } from '../lib/labels';
 export function Card({
   listing,
   actions,
+  summary,
+  searchContext,
 }: {
-  listing: ListingCard;
+  listing: Pick<
+    ListingCard,
+    'id' | 'title' | 'price' | 'deal_type' | 'address' | 'attributes' | 'media'
+  >;
   actions?: React.ReactNode;
+  summary?: string;
+  searchContext?: { definition: string; mode: 'list' | 'map' };
 }) {
+  const deal = dealLabel(listing.deal_type);
   return (
     <article className="card">
       {listing.media[0] ? (
@@ -27,9 +36,13 @@ export function Card({
         </div>
       )}
       <div className="card-body">
+        {deal && <p className="deal-type">{deal}</p>}
         <h2>
           <Link
-            href={'/listings/' + listing.id}
+            href={{
+              pathname: '/listings/' + listing.id,
+              query: searchContext,
+            }}
             onClick={() =>
               track({ type: 'result_viewed', listingId: listing.id })
             }
@@ -37,8 +50,12 @@ export function Card({
             {listing.title}
           </Link>
         </h2>
-        <p className="price">{money(listing.price)}</p>
+        <p className="price">
+          {money(listing.price)}
+          {pricePeriod(listing.deal_type)}
+        </p>
         <p>{listing.address}</p>
+        {summary && <p className="card-summary">{summary}</p>}
         <p>
           {String(listing.attributes.area ?? '—')} м² ·{' '}
           {String(listing.attributes.rooms ?? '—')} комн.

@@ -10,8 +10,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   checks:
+    name: RAUI CI
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,8 +33,19 @@ jobs:
       - run: pnpm observability:check
       - run: pnpm security:check
       - run: pnpm build
+      - name: Runtime image build and contract
+        run: |
+          node scripts/runtime-image-build.mjs --site-url http://127.0.0.1:3000 --environment staging
+          RUNTIME_IMAGE_ID=$(docker image inspect --format '{{.Id}}' raui-runtime:local)
+          docker run --rm --network=none --entrypoint node "$RUNTIME_IMAGE_ID" scripts/runtime-image-check.mjs
+          mkdir -p .cache
+          printf '%s\n' "$RUNTIME_IMAGE_ID" > .cache/runtime-image-id
       - run: cp .env.example .env && pnpm infra:up
       - run: pnpm test:integration
+      - name: Runtime image service smoke
+        run: |
+          RUNTIME_IMAGE_ID=$(cat .cache/runtime-image-id)
+          node --env-file=.env scripts/runtime-image-smoke.mjs "$RUNTIME_IMAGE_ID"
       - run: pnpm --filter @raui/web exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
         env:
@@ -60,6 +72,41 @@ jobs:
           pnpm worker:trust --once
           pnpm search:reconcile
           pnpm smoke:search
+      - name: Prepare accepted local runtime image
+        run: |
+          set -o pipefail
+          RUNTIME_IMAGE_ID=$(cat .cache/runtime-image-id)
+          docker save "$RUNTIME_IMAGE_ID" | gzip > .cache/runtime-image.tar.gz
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync, createReadStream } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { migrationNames } from './scripts/runtime-image-verification.mjs';
+          const imageId = readFileSync('.cache/runtime-image-id', 'utf8').trim();
+          const revision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const metadata = JSON.parse(execFileSync('docker', ['image', 'inspect', imageId], {encoding: 'utf8'}))[0];
+          if (metadata.Id !== imageId || metadata.Config.Labels['org.opencontainers.image.revision'] !== revision || metadata.Config.Labels['raui.source-state'] !== 'committed') throw Error('Runtime source/image identity mismatch');
+          const archiveHash = createHash('sha256');
+          for await (const chunk of createReadStream('.cache/runtime-image.tar.gz')) archiveHash.update(chunk);
+          const archiveSha256 = archiveHash.digest('hex');
+          writeFileSync('.cache/runtime-image-receipt.json', JSON.stringify({version: 1, sourceRevision: revision, imageId, archiveSha256, sourceState: 'committed', siteUrl: metadata.Config.Labels['raui.site-url'], deploymentEnvironment: metadata.Config.Labels['raui.deployment-env'], ciRunId: process.env.GITHUB_RUN_ID, contract: 'passed', serviceSmoke: 'passed', migrationCount: migrationNames.length, network: 'linux-host', adapters: 'local-development', stagingAcceptance: 'not_executed', deployment: 'not_executed'}, null, 2) + '\n');
+          JS
+          cd .cache
+          sha256sum runtime-image.tar.gz runtime-image-receipt.json > runtime-image-sha256.txt
+      - name: Restore saved runtime archive
+        run: |
+          set -o pipefail
+          node scripts/runtime-image-archive.mjs "$(git rev-parse HEAD)" "$GITHUB_RUN_ID"
+          RUNTIME_IMAGE_ID=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".cache/runtime-image-receipt.json", "utf8")).imageId)')
+          [[ "$RUNTIME_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker image rm -f "$RUNTIME_IMAGE_ID"
+          if docker image inspect "$RUNTIME_IMAGE_ID" > /dev/null 2>&1; then
+            echo 'Original runtime image still present before archive restore' >&2
+            exit 1
+          fi
+          gzip -dc .cache/runtime-image.tar.gz | docker load
+          test "$(docker image inspect --format '{{.Id}}' "$RUNTIME_IMAGE_ID")" = "$RUNTIME_IMAGE_ID"
+          docker run --rm --network=none --entrypoint node "$RUNTIME_IMAGE_ID" scripts/runtime-image-check.mjs
       - name: Release and rollback artifact dry-run
         run: |
           node scripts/release-contract.mjs create .cache/phase4d-release.json "$(git rev-parse HEAD)"
@@ -74,6 +121,7 @@ jobs:
             .cache/phase4d-release.json
             .cache/phase4d-load.json
             .cache/phase4d-recovery.json
+            .cache/runtime-image-receipt.json
             apps/api/dist
             apps/api/migrations
             apps/web/.next
@@ -81,6 +129,18 @@ jobs:
             infra/observability
             pnpm-lock.yaml
             package.json
+      - name: Upload accepted local runtime image
+        uses: actions/upload-artifact@v4
+        with:
+          name: raui-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          include-hidden-files: true
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            .cache/runtime-image.tar.gz
+            .cache/runtime-image-receipt.json
+            .cache/runtime-image-sha256.txt
       - name: Diagnostics
         if: failure()
         run: |

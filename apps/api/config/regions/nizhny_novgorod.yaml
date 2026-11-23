@@ -1,0 +1,9 @@
+code: nizhny_novgorod
+name: Нижегородская область
+type: oblast
+search_entities: [district, locality, street, house, metro]
+metro_available: true
+directions_available: false
+timezone: Europe/Moscow
+currency: RUB
+geo_bounds: null

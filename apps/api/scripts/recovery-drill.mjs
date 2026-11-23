@@ -9,6 +9,7 @@ import { resolve, dirname, basename } from 'node:path';
 import { watchPoolErrors, boundedOperation } from './e2e-runtime.mjs';
 import { pipeline } from 'node:stream/promises';
 import assert from 'node:assert/strict';
+import { migrationNames } from '../../../scripts/runtime-image-verification.mjs';
 import {
   cleanupRecovery,
   sequenceNextValue,
@@ -138,7 +139,10 @@ async function run() {
       await snapshot.query('SELECT pg_export_snapshot() AS snapshot')
     ).rows[0].snapshot;
     const expected = await monitor.run(() => fingerprint(snapshot));
-    assert.equal(expected.migrations.length, 12);
+    assert.deepEqual(
+      expected.migrations.map(({ name }) => name),
+      migrationNames,
+    );
     assert.ok(expected.sequences.some((s) => s.is_called));
     assert.ok(expected.sequences.some((s) => !s.is_called));
     const encrypted = resolve(directory, 'database.gcm');
