@@ -65,13 +65,15 @@ interface Message {
 }
 export default function Account({
   continueListing = false,
+  initialTab = 'favorite',
 }: {
   continueListing?: boolean;
+  initialTab?: 'favorite' | 'messages' | 'notifications';
 } = {}) {
   const [user, setUser] = useState<AccountUser | null>(null),
     [profileOpen, setProfileOpen] = useState(false),
     [checking, setChecking] = useState(true),
-    [tab, setTab] = useState<Tab>('favorite'),
+    [tab, setTab] = useState<Tab>(initialTab),
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
     [passwordVisible, setPasswordVisible] = useState(false),
@@ -102,7 +104,7 @@ export default function Account({
   }
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
-    setTab('favorite');
+    setTab(initialTab);
     setProfileOpen(false);
     setNotice('');
     setRegister(false);
@@ -124,7 +126,7 @@ export default function Account({
       .then((u) => {
         if (epoch !== identityEpoch.current) return;
         setUser(u);
-        if (approved(u)) void load('favorite');
+        if (approved(u)) void load(initialTab);
       })
       .catch(() => {})
       .finally(() => {
@@ -133,7 +135,7 @@ export default function Account({
     return () => {
       epochRef.current++;
     };
-  }, []);
+  }, [initialTab]);
   async function load(t: Tab, after?: string) {
     if (t === 'subscriptions') return;
     const epoch = identityEpoch.current;
@@ -317,7 +319,7 @@ export default function Account({
                 setNotice(
                   'Аккаунт создан. Не удалось подтвердить отправку письма. Запросите письмо повторно в профиле.',
                 );
-              if (approved(result.user)) void load('favorite');
+              if (approved(result.user)) void load(initialTab);
             } catch (error) {
               if (epoch !== identityEpoch.current) return;
               setNotice((error as Error).message);

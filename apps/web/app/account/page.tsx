@@ -7,12 +7,21 @@ export const metadata: Metadata = {
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ action?: string | string[] }>;
+  searchParams: Promise<{
+    action?: string | string[];
+    tab?: string | string[];
+  }>;
 }) {
-  const { action } = await searchParams;
+  const { action, tab } = await searchParams;
+  const initialTab =
+    tab === 'messages' || tab === 'notifications' ? tab : 'favorite';
   return (
     <main id="content">
-      <Account continueListing={action === 'publish'} />
+      <Account
+        key={initialTab}
+        initialTab={initialTab}
+        continueListing={action === 'publish'}
+      />
     </main>
   );
 }
