@@ -81,7 +81,7 @@ test('submits a user ID as the password login identifier', async () => {
   fireEvent.change(screen.getByLabelText('Пароль'), {
     target: { value: 'synthetic-password' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Войти', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: /^Войти$/ }));
   await screen.findByRole('alert');
   expect(fetch).toHaveBeenCalledWith(
     '/api/v1/auth/login',
