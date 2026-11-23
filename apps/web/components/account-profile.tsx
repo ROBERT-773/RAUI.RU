@@ -3,8 +3,8 @@ import { Button } from '@raui/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
 import PhoneOtpForm from './phone-otp-form';
-interface Profile {
 import PhoneSignIn from './phone-sign-in';
+interface Profile {
   email: string;
   phone: string | null;
   role: string;
@@ -25,12 +25,12 @@ const roles: Record<string, string> = {
 export default function AccountProfile({
   onRefresh,
   onSessionExpired,
-}: {
   smsAvailable = false,
+}: {
   onRefresh?: () => void;
   onSessionExpired?: () => void;
-}) {
   smsAvailable?: boolean;
+}) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [numericOtp, setNumericOtp] = useState<boolean | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
@@ -179,7 +179,6 @@ export default function AccountProfile({
           <h3>Телефон</h3>
           <p>{profile.phone ?? 'Не указан'}</p>
           <p>{profile.phone_verified_at ? 'Подтверждён' : 'Не подтверждён'}</p>
-          {numericOtp === true ? (
           {smsAvailable &&
             profile.phone_verified_at &&
             profile.phone &&
@@ -201,6 +200,7 @@ export default function AccountProfile({
                 Подключить вход по SMS
               </Button>
             ))}
+          {numericOtp === true ? (
             <PhoneOtpForm
               disabled={busy}
               onBusy={setOtpBusy}
