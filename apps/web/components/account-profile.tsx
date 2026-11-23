@@ -157,8 +157,9 @@ export default function AccountProfile({
           )}
           {profile.registration_approval_state === 'pending' && (
             <p>
-              Подтвердите email и телефон. Проверка контактов не заменяет
-              решение сотрудника.
+              {profile.email_verified_at && profile.phone_verified_at
+                ? 'Контакты подтверждены. Доступ откроется после одобрения сотрудником.'
+                : 'Подтвердите email и телефон. После этого дождитесь решения сотрудника.'}
             </p>
           )}
           <h3>Email</h3>

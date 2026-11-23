@@ -29,6 +29,18 @@ test('shows persisted contact and independent pending approval states', async ()
   expect(screen.getByText('owner@example.test')).toBeTruthy();
   expect(screen.getAllByText('Не подтверждён').length).toBe(2);
 });
+test('tells an applicant with both contacts verified to wait for a decision', async () => {
+  vi.mocked(api).mockResolvedValue({
+    ...user,
+    email_verified_at: 'now',
+    phone_verified_at: 'now',
+  });
+  render(<AccountProfile />);
+  await screen.findByText(
+    'Контакты подтверждены. Доступ откроется после одобрения сотрудником.',
+  );
+  expect(screen.queryByText(/Подтвердите email и телефон/)).toBeNull();
+});
 test('provider failure leaves request controls usable without claiming delivery', async () => {
   vi.mocked(api).mockImplementation(async (path) => {
     if (path === 'v1/auth/me') return user;
