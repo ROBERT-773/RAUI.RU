@@ -116,7 +116,7 @@ test('Daily in-app real PostgreSQL acceptance: immutable release, late commits a
       await migrate(db.pool);
       assert.equal(
         (await db.rows('SELECT * FROM schema_migrations')).length,
-        34,
+        36,
       );
       assert.deepEqual(
         (await db.rows('SELECT * FROM schema_migrations ORDER BY name')).slice(

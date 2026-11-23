@@ -89,7 +89,7 @@ export async function invalidatePhoneChallenges(sql: Sql, userId: string) {
 }
 export async function reservePhoneOtpSend(
   sql: Sql,
-  userId: string,
+  userId: string | null,
   destination: string,
 ) {
   const cfg = loadConfig();
@@ -104,7 +104,7 @@ export async function reservePhoneOtpSend(
   const { rows } = await sql.query<{ retry: number }>(
     `WITH moment AS (SELECT clock_timestamp() AS t),
  recent AS (SELECT e.*,m.t FROM phone_otp_send_events e CROSS JOIN moment m WHERE e.created_at>m.t-interval '1 hour' AND (e.user_id=$1 OR e.destination_digest=$2)),
- limits AS (SELECT max(created_at) FILTER (WHERE user_id=$1) AS latest,
+ limits AS (SELECT max(created_at) FILTER (WHERE user_id=$1 OR ($1 IS NULL AND destination_digest=$2)) AS latest,
  count(*) FILTER (WHERE user_id=$1) AS own_count, count(*) FILTER (WHERE destination_digest=$2) AS dest_count,
  min(created_at) FILTER (WHERE user_id=$1) AS own_first, min(created_at) FILTER (WHERE destination_digest=$2) AS dest_first FROM recent)
  SELECT ceil(greatest(0,extract(epoch FROM latest+interval '60 seconds'-t),

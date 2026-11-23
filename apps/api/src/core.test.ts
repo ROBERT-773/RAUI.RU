@@ -64,6 +64,7 @@ import {
 } from './modules/auth/auth';
 import { VerificationDelivery } from './modules/auth/delivery';
 import { PhoneOtpService } from './modules/auth/phone-otp';
+import { PhoneSignInService } from './modules/auth/phone-sign-in';
 import { Audit } from './modules/audit/audit';
 import { Organizations } from './modules/organizations/organizations';
 import { ProfessionalPlatform } from './modules/professional/platform';
@@ -571,6 +572,7 @@ test('password reset HTTP acceptance is identical for known and unknown accounts
     providers: [
       AuthService,
       { provide: PhoneOtpService, useValue: {} },
+      { provide: PhoneSignInService, useValue: {} },
       { provide: Database, useValue: db },
       { provide: Audit, useValue: { record: async () => {} } },
       {

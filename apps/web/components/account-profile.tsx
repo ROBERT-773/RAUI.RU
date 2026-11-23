@@ -3,6 +3,7 @@ import { Button } from '@raui/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
 import PhoneOtpForm from './phone-otp-form';
+import PhoneSignIn from './phone-sign-in';
 interface Profile {
   email: string;
   phone: string | null;
@@ -10,6 +11,7 @@ interface Profile {
   email_verified_at: string | null;
   phone_verified_at: string | null;
   registration_approval_state: 'pending' | 'approved' | 'rejected';
+  phone_sign_in_enrolled_at?: string | null;
   registration_approval_reason: string | null;
 }
 const roles: Record<string, string> = {
@@ -23,14 +25,17 @@ const roles: Record<string, string> = {
 export default function AccountProfile({
   onRefresh,
   onSessionExpired,
+  smsAvailable = false,
 }: {
   onRefresh?: () => void;
   onSessionExpired?: () => void;
+  smsAvailable?: boolean;
 }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [numericOtp, setNumericOtp] = useState<boolean | null>(null);
   const [otpBusy, setOtpBusy] = useState(false);
   const expiredNotified = useRef(false);
+  const [enrollingSms, setEnrollingSms] = useState(false);
   const [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -174,6 +179,27 @@ export default function AccountProfile({
           <h3>Телефон</h3>
           <p>{profile.phone ?? 'Не указан'}</p>
           <p>{profile.phone_verified_at ? 'Подтверждён' : 'Не подтверждён'}</p>
+          {smsAvailable &&
+            profile.phone_verified_at &&
+            profile.phone &&
+            profile.role !== 'admin' &&
+            (profile.phone_sign_in_enrolled_at ? (
+              <p>Вход по SMS подключён</p>
+            ) : enrollingSms ? (
+              <PhoneSignIn
+                key={profile.phone}
+                enrollmentPhone={profile.phone}
+                onOther={() => setEnrollingSms(false)}
+                onEnrolled={() => {
+                  setEnrollingSms(false);
+                  void action();
+                }}
+              />
+            ) : (
+              <Button onClick={() => setEnrollingSms(true)}>
+                Подключить вход по SMS
+              </Button>
+            ))}
           {numericOtp === true ? (
             <PhoneOtpForm
               disabled={busy}

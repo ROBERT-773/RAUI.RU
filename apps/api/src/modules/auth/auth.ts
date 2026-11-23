@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { Database } from '../database/database';
+import { Database, type Sql } from '../database/database';
 import { Audit } from '../audit/audit';
 import {
   Actor,
@@ -36,6 +36,12 @@ import {
 } from '../../common/security';
 import { isProduction, loadConfig } from '../../config';
 import { StaffTotpController } from './staff-totp-controller';
+import {
+  PhoneSignInService,
+  phoneSignInAvailable,
+  phoneSignInConfirmSchema,
+  phoneSignInSignupProofSchema,
+} from './phone-sign-in';
 import {
   ConfiguredDelivery,
   VerificationDelivery,
@@ -64,6 +70,12 @@ export const registerSchema = z
     role: z.enum(['buyer', 'owner', 'agent', 'agency', 'developer']),
   })
   .strict();
+export const registerWithPhoneSchema = registerSchema.extend(
+  phoneSignInSignupProofSchema.shape,
+);
+export const phoneSignInEnrollmentSchema = phoneSignInConfirmSchema.extend({
+  password: z.string().max(128),
+});
 const passwordLoginFields = {
   password: z.string().max(128),
   transport: z.enum(['cookie', 'bearer']).default('cookie'),
@@ -89,6 +101,7 @@ interface User {
   active: boolean;
   email_verified_at: string | null;
   phone_verified_at: string | null;
+  phone_sign_in_enrolled_at: string | null;
   phone: string | null;
   password_hash: string;
   registration_approval_state: 'pending' | 'approved' | 'rejected';
@@ -106,6 +119,7 @@ function publicUser(user: User) {
     registration_approval_reason: user.registration_approval_reason ?? null,
     email_verified_at: user.email_verified_at,
     phone_verified_at: user.phone_verified_at,
+    phone_sign_in_enrolled_at: user.phone_sign_in_enrolled_at ?? null,
     phone: user.phone,
     created_at: user.created_at,
     updated_at: user.updated_at,
@@ -163,25 +177,63 @@ export class AuthService {
   async register(body: unknown) {
     const input = parse(registerSchema, body);
     const encoded = await passwordHash(input.password);
-    const user = await this.db.transaction(async (sql) => {
-      const [created] = await this.db.rows<User>(
-        "INSERT INTO users(email,password_hash,display_name,role,registration_approval_state) VALUES($1,$2,$3,$4,'pending') RETURNING *",
-        [input.email, encoded, input.displayName, input.role],
+    const user = await this.db.transaction((sql) =>
+      this.createPendingUser(sql, input, encoded),
+    );
+    return {
+      ...publicUser(user),
+      verificationDelivery: await this.sendRegistrationEmail(user),
+    };
+  }
+  async registerWithPhone(
+    body: unknown,
+    signIn: PhoneSignInService,
+    res: Response,
+  ) {
+    const input = parse(registerWithPhoneSchema, body);
+    await signIn.checkSignup(input);
+    const encoded = await passwordHash(input.password);
+    const session = await this.db.transaction(async (sql) => {
+      await signIn.consumeSignup(sql, input);
+      const user = await this.createPendingUser(
         sql,
+        input,
+        encoded,
+        input.phone,
       );
-      await sql.query(
-        'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
-        [created!.id],
-      );
-      await this.audit.record(
-        sql,
-        created!.id,
-        'auth.registered',
-        'user',
-        created!.id,
-      );
-      return created!;
+      return this.issueSession(sql, user.id);
     });
+    const verificationDelivery = await this.sendRegistrationEmail(session.user);
+    return { ...this.respondSession(res, session), verificationDelivery };
+  }
+  private async createPendingUser(
+    sql: Sql,
+    input: z.infer<typeof registerSchema>,
+    encoded: string,
+    phone: string | null = null,
+  ) {
+    const [created] = await this.db.rows<User>(
+      `INSERT INTO users(
+         email,password_hash,display_name,role,registration_approval_state,phone,phone_verified_at,phone_sign_in_enrolled_at
+       ) VALUES($1,$2,$3,$4,'pending',$5,CASE WHEN $5::text IS NOT NULL THEN now() END,
+         CASE WHEN $5::text IS NOT NULL THEN now() END) RETURNING *`,
+      [input.email, encoded, input.displayName, input.role, phone],
+      sql,
+    );
+    await sql.query(
+      'INSERT INTO registration_approval_requests(user_id) VALUES($1)',
+      [created!.id],
+    );
+    await this.audit.record(
+      sql,
+      created!.id,
+      'auth.registered',
+      'user',
+      created!.id,
+    );
+    return created!;
+  }
+  private async sendRegistrationEmail(user: User) {
     let verificationDelivery: 'accepted' | 'unavailable' = 'accepted';
     try {
       await this.challenge(user, 'email', user.email);
@@ -189,7 +241,7 @@ export class AuthService {
       if (!(error instanceof ServiceUnavailableException)) throw error;
       verificationDelivery = 'unavailable';
     }
-    return { ...publicUser(user), verificationDelivery };
+    return verificationDelivery;
   }
   async login(body: unknown, res: Response) {
     const input = parse(loginSchema, body);
@@ -200,12 +252,7 @@ export class AuthService {
         ]));
     const rateIdentifier =
       'email' in input ? input.email : (user?.email ?? 'id:' + input.publicId);
-    const [counter] = await this.db.rows<{ count: number }>(
-      `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END, reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING count`,
-      [`login:${hash(rateIdentifier)}`],
-    );
-    if (counter!.count > 15)
-      throw new UnauthorizedException('Login temporarily unavailable');
+    await this.checkPasswordRate(rateIdentifier);
     const valid = await passwordMatches(
       input.password,
       user?.password_hash ?? `scrypt$32768$invalid$${'0'.repeat(128)}`,
@@ -217,10 +264,7 @@ export class AuthService {
       user.registration_approval_state === 'rejected'
     )
       throw new UnauthorizedException('Invalid credentials');
-    const secret = token(),
-      csrf = token();
-    const days = loadConfig().SESSION_DAYS;
-    await this.db.transaction(async (sql) => {
+    const session = await this.db.transaction(async (sql) => {
       await sql.query(
         'SELECT id FROM users WHERE id=$1 AND active FOR UPDATE',
         [user.id],
@@ -237,13 +281,38 @@ export class AuthService {
         current.password_hash !== user.password_hash
       )
         throw new UnauthorizedException();
-      await sql.query(
-        "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
-        [user.id, hash(secret), hash(csrf), days],
-      );
-      await this.audit.record(sql, user.id, 'auth.login', 'user', user.id);
+      return this.issueSession(sql, current.id);
     });
-    if (input.transport === 'cookie')
+    return this.respondSession(res, session, input.transport);
+  }
+  async issueSession(sql: Sql, userId: string) {
+    const [user] = await this.db.rows<User>(
+      'SELECT * FROM users WHERE id=$1',
+      [userId],
+      sql,
+    );
+    if (!user) throw new UnauthorizedException();
+    const secret = token();
+    const csrf = token();
+    const days = loadConfig().SESSION_DAYS;
+    await sql.query(
+      "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
+      [userId, hash(secret), hash(csrf), days],
+    );
+    await this.audit.record(sql, userId, 'auth.login', 'user', userId);
+    return { user, secret, csrf, days };
+  }
+  respondSession(
+    res: Response,
+    {
+      user,
+      secret,
+      csrf,
+      days,
+    }: Awaited<ReturnType<AuthService['issueSession']>>,
+    transport: 'cookie' | 'bearer' = 'cookie',
+  ) {
+    if (transport === 'cookie')
       res.cookie('raui_session', secret, {
         httpOnly: true,
         secure: isProduction(loadConfig()),
@@ -255,8 +324,55 @@ export class AuthService {
     return {
       user: publicUser(user),
       csrfToken: csrf,
-      ...(input.transport === 'bearer' ? { sessionToken: secret } : {}),
+      ...(transport === 'bearer' ? { sessionToken: secret } : {}),
     };
+  }
+  private async checkPasswordRate(identifier: string) {
+    const [counter] = await this.db.rows<{ count: number }>(
+      `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END, reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING count`,
+      [`login:${hash(identifier)}`],
+    );
+    if (counter!.count > 15)
+      throw new UnauthorizedException('Login temporarily unavailable');
+  }
+  async enrollPhoneSignIn(
+    actor: Actor,
+    body: unknown,
+    signIn: PhoneSignInService,
+  ) {
+    const { password, ...proof } = parse(phoneSignInEnrollmentSchema, body);
+    if (!phoneSignInAvailable())
+      throw new ServiceUnavailableException('SMS sign-in unavailable');
+    const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
+      actor.id,
+    ]);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+    await this.checkPasswordRate(user.email);
+    if (!(await passwordMatches(password, user.password_hash)))
+      throw new UnauthorizedException('Invalid credentials');
+    const result = await signIn.confirm(
+      proof,
+      async (sql) => {
+        await lockPhoneOtpActor(sql, actor);
+        const updated = await sql.query(
+          'UPDATE users SET phone_sign_in_enrolled_at=clock_timestamp() WHERE id=$1 AND password_hash=$2 AND phone=$3 AND phone_verified_at IS NOT NULL',
+          [actor.id, user.password_hash, proof.phone],
+        );
+        if (!updated.rowCount)
+          throw new UnauthorizedException('Invalid credentials');
+        await this.audit.record(
+          sql,
+          actor.id,
+          'auth.phone_sign_in.enrolled',
+          'user',
+          actor.id,
+        );
+        return { enabled: true as const };
+      },
+      actor.id,
+    );
+    if (result.kind !== 'session') throw new UnauthorizedException();
+    return result.session;
   }
   async me(actor: Actor) {
     const [user] = await this.db.rows<User>(
@@ -431,6 +547,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly otp: PhoneOtpService,
+    private readonly phoneSignIn: PhoneSignInService,
   ) {}
   @Public() @Post('register') register(@Body() body: unknown) {
     return this.auth.register(body);
@@ -440,6 +557,59 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     return this.auth.login(body, res);
+  }
+  @Public() @Get('phone-sign-in/capabilities') phoneSignInCapabilities(
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return { available: phoneSignInAvailable() };
+  }
+  @Public() @Post('phone-sign-in') async requestPhoneSignIn(
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      return await this.phoneSignIn.request(body, key);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const data = error.getResponse() as { retryAfterSeconds?: number };
+        if (data.retryAfterSeconds)
+          res.setHeader('Retry-After', data.retryAfterSeconds);
+      }
+      throw error;
+    }
+  }
+  @Public() @Post('phone-sign-in/confirm') async confirmPhoneSignIn(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    const result = await this.phoneSignIn.confirm(body, (sql, userId) =>
+      this.auth.issueSession(sql, userId),
+    );
+    return result.kind === 'signup'
+      ? result
+      : {
+          kind: 'session' as const,
+          ...this.auth.respondSession(res, result.session),
+        };
+  }
+  @Public() @Post('phone-sign-in/register') registerPhoneSignIn(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.auth.registerWithPhone(body, this.phoneSignIn, res);
+  }
+  @Post('phone-sign-in/enroll') enrollPhoneSignIn(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.auth.enrollPhoneSignIn(actor, body, this.phoneSignIn);
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);
@@ -547,6 +717,7 @@ export class AuthController {
   providers: [
     AuthService,
     PhoneOtpService,
+    PhoneSignInService,
     { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },
     { provide: VerificationDelivery, useClass: ConfiguredDelivery },
   ],
