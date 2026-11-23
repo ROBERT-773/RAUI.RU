@@ -1,6 +1,8 @@
 import { test, expect, type Page, type Response } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const password = 'E2E-only-password-42!';
 const png = Buffer.from(
@@ -228,34 +230,68 @@ test('new owner registers, saves a draft and publishes after moderation', async 
     ).toBeVisible();
     expect((await page.request.get('/api/v1/listings')).status()).toBe(403);
 
-    // Confirmed contacts are a fixture here. Delivery and token validation are separate scenarios.
-    execFileSync(
-      process.execPath,
-      [
-        '-e',
-        `
-      const { Client } = require('pg');
-      const source = new URL(process.env.DATABASE_URL);
-      if (process.env.NODE_ENV !== 'test' ||
-          !['localhost','127.0.0.1'].includes(source.hostname) ||
-          !/^\\/raui_test_[0-9a-f]{16}$/.test(source.pathname))
-        throw new Error('Requires isolated E2E database');
-      const db = new Client({ connectionString: source.toString(), query_timeout: 5000 });
-      (async () => {
-        await db.connect();
-        try {
-          const result = await db.query(
-            "UPDATE users SET email_verified_at=now(), phone_verified_at=now() WHERE email=$1 AND role='owner' AND registration_approval_state='pending'",
-            [process.argv[1]],
-          );
-          if (result.rowCount !== 1) throw new Error('Expected one pending test account');
-        } finally { await db.end(); }
-      })().catch(() => { process.exitCode = 1; });
-    `,
-        email,
-      ],
-      { cwd: '../api', timeout: 10000 },
+    const privateDirectory = process.env.LOCAL_PRIVATE_DIR;
+    if (process.env.NODE_ENV !== 'test' || !privateDirectory)
+      throw Error('Expected a private E2E delivery directory');
+    const mailbox = join(privateDirectory, 'verification', 'messages.jsonl');
+    async function confirmationToken(destination: string, purpose: string) {
+      const deliveries = (await readFile(mailbox, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const token = deliveries
+        .reverse()
+        .find(
+          (item) =>
+            item.destination === destination && item.purpose === purpose,
+        )?.token;
+      if (!token) throw Error('Expected a test verification message');
+      return token as string;
+    }
+    const emailConfirmation = page.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/auth/verification/email/confirm'),
     );
+    await page
+      .getByLabel('Код подтверждения email из сообщения')
+      .fill(await confirmationToken(email, 'email'));
+    await page
+      .getByRole('button', { name: 'Подтвердить email', exact: true })
+      .click();
+    expect((await emailConfirmation).status()).toBe(201);
+    const phone =
+      '+120255501' + String(test.info().project.name.length).padStart(2, '0');
+    await expect(
+      page.getByLabel('Номер телефона', { exact: true }),
+    ).toBeEnabled();
+    await page.getByLabel('Номер телефона', { exact: true }).fill(phone);
+    const phoneRequest = page.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/auth/verification/phone'),
+    );
+    await page
+      .getByRole('button', {
+        name: 'Запросить подтверждение телефона',
+        exact: true,
+      })
+      .click();
+    expect((await phoneRequest).status()).toBe(201);
+    const phoneConfirmation = page.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/auth/verification/phone/confirm'),
+    );
+    await page
+      .getByLabel('Код подтверждения телефона из сообщения')
+      .fill(await confirmationToken(phone, 'phone'));
+    await page
+      .getByRole('button', { name: 'Подтвердить телефон', exact: true })
+      .click();
+    expect((await phoneConfirmation).status()).toBe(201);
+    await expect
+      .poll(async () => {
+        const result = await page.request.get('/api/v1/auth/me');
+        if (!result.ok()) return false;
+        const profile = await result.json();
+        return Boolean(profile.email_verified_at && profile.phone_verified_at);
+      })
+      .toBe(true);
 
     const staff = await staffContext.newPage();
     await login(staff, 'admin@e2e.test', 'Мой аккаунт');
