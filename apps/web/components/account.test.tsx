@@ -132,6 +132,7 @@ for (const delayed of [false, true]) {
     fireEvent.change(screen.getByLabelText('Пароль'), {
       target: { value: 'synthetic-long-password' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
     await screen.findByText('Identity B');
     if (delayed)
@@ -142,6 +143,10 @@ for (const delayed of [false, true]) {
     await screen.findByText('Напишите продавцу на странице объявления.');
     expect(screen.queryByText(privateMessage, { exact: false })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Переписка' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+    expect(
+      (await screen.findByLabelText<HTMLInputElement>('Пароль')).type,
+    ).toBe('password');
   });
 }
 

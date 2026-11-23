@@ -283,6 +283,7 @@ export default function Account({
           className="account-form panel"
           onSubmit={async (e) => {
             e.preventDefault();
+            setPasswordVisible(false);
             const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
