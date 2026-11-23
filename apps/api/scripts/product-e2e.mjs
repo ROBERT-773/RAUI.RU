@@ -4,7 +4,14 @@ import { createLoopbackLoadClients } from './load-transport.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+  readFile,
+  stat,
+} from 'node:fs/promises';
 import {
   trackProcess,
   waitService,
@@ -81,6 +88,7 @@ async function run() {
   const directory = resolve('../../.cache');
   stage = 'fixtures';
   let databaseCreated = false;
+  let privateDirectory;
   const started = Date.now();
   function start(args, cwd, label) {
     const child = spawn(process.execPath, args, {
@@ -105,6 +113,14 @@ async function run() {
   }
   try {
     await mkdir(directory, { recursive: true });
+    privateDirectory = await mkdtemp(
+      resolve(directory, 'product-e2e-private-'),
+    );
+    env.LOCAL_PRIVATE_DIR = privateDirectory;
+    env.VERIFICATION_GATEWAY_URL = undefined;
+    env.VERIFICATION_GATEWAY_TOKEN = undefined;
+    env.RESET_SMTP_ENABLED = 'false';
+    env.PHONE_OTP_ENABLED = 'false';
     // Resource allocation must settle before cleanup can decide ownership.
     // An idle error is sticky but cannot race successful CREATE registration.
     stage = 'fixture-database';
@@ -365,6 +381,12 @@ async function run() {
     }
     try {
       await boundedOperation(() => admin.end(), 5000);
+    } catch {
+      cleanupFailed = true;
+    }
+    try {
+      if (privateDirectory)
+        await rm(privateDirectory, { recursive: true, force: true });
     } catch {
       cleanupFailed = true;
     }
