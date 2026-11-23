@@ -14,6 +14,16 @@ async function proxy(
   const phoneOtpOperation =
     phoneOtpPrefix && ['capabilities', 'otp'].includes(path[4] ?? '');
   if (
+    path.slice(0, 3).join('/') === 'v1/auth/staff-totp' &&
+    !(
+      path.length === 4 &&
+      ((path[3] === 'status' && request.method === 'GET') ||
+        (['enroll', 'activate', 'confirm'].includes(path[3] ?? '') &&
+          request.method === 'POST'))
+    )
+  )
+    return NextResponse.json({ message: 'Not found' }, { status: 404 });
+  if (
     phoneOtpOperation &&
     !(
       (path.length === 5 &&

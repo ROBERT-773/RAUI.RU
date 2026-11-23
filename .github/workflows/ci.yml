@@ -50,6 +50,8 @@ jobs:
       - run: pnpm test:e2e
         env:
           PGOPTIONS: -c log_min_duration_statement=100
+      - name: Staff two-factor browser acceptance
+        run: pnpm --filter @raui/api test:e2e --staff-totp-only
       - run: pnpm db:migrate && pnpm db:migrate
       - run: pnpm recovery:drill
       - name: Production smoke

@@ -188,12 +188,11 @@ export class SessionGuard implements CanActivate {
       if (req.headers.origin !== loadConfig().WEB_ORIGIN || !validToken)
         throw new ForbiddenException('CSRF validation failed');
     }
-    if (
-      this.reflector.getAllAndOverride<boolean>('admin', [
-        context.getHandler(),
-        context.getClass(),
-      ])
-    ) {
+    const adminOnly = this.reflector.getAllAndOverride<boolean>('admin', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (adminOnly) {
       if (actor.role !== 'admin') throw new ForbiddenException();
       verified(actor);
     }
@@ -210,6 +209,24 @@ export class SessionGuard implements CanActivate {
         );
         if (!grant) throw new ForbiddenException('Staff permission required');
       }
+    }
+    if (
+      (adminOnly || permission) &&
+      loadConfig().STAFF_TOTP_REQUIRED === 'true'
+    ) {
+      const [assurance] = await this.db.rows<{ assured: boolean }>(
+        `SELECT true AS assured
+           FROM sessions s
+           JOIN staff_totp_factors f
+             ON f.user_id=s.user_id AND f.id=s.staff_totp_factor_id
+          WHERE s.id=$1 AND s.user_id=$2 AND s.revoked_at IS NULL
+            AND s.expires_at>clock_timestamp()
+            AND s.staff_assured_until>clock_timestamp()
+            AND f.activated_at IS NOT NULL`,
+        [actor.session_id, actor.id],
+      );
+      if (!assurance)
+        throw new ForbiddenException('Staff second factor required');
     }
     req.actor = actor;
     return true;

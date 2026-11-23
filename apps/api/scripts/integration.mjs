@@ -16,6 +16,7 @@ for (const testFile of [
   'migration.integration.test.js',
   'core.integration.test.js',
   'staff-permissions.integration.test.js',
+  'staff-assurance.integration.test.js',
   'public-id.integration.test.js',
   'registration-approval.integration.test.js',
   'publication-quota.integration.test.js',

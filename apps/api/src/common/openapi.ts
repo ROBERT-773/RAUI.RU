@@ -36,10 +36,17 @@ import { createSchema } from '../modules/properties/properties';
 import { fields } from '../modules/listings/listings';
 import { addressSchema } from '../modules/geo/geo';
 import { staffPermissions, uuid } from './security';
+import {
+  staffTotpCodeInput,
+  staffTotpEnrollmentInput,
+} from '../modules/auth/staff-totp-controller';
 const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/auth/staff-totp/enroll': staffTotpEnrollmentInput,
+  'post /v1/auth/staff-totp/activate': staffTotpCodeInput,
+  'post /v1/auth/staff-totp/confirm': staffTotpCodeInput,
   'post /v1/ai/assist': aiRequest,
   'patch /v1/admin/ai/features/{code}': flagRequest,
   'post /v1/trust/listings/{id}/scan': object({}),
@@ -929,6 +936,72 @@ export function enrichOpenApi(document: OpenAPIObject) {
         operation.responses['404'] = {
           description: 'Current pending case or matching ready image not found',
         };
+      }
+      if (path.startsWith('/v1/auth/staff-totp/')) {
+        operation.security = [{ bearer: [] }, { cookie: [] }];
+        operation.responses['403'] = {
+          description: 'Staff identity, code or session rejected',
+        };
+        operation.responses['429'] = {
+          description: 'Too many verification attempts',
+        };
+        operation.responses['503'] = {
+          description: 'Staff second factor unavailable',
+        };
+        if (operationId === 'get /v1/auth/staff-totp/status') {
+          operation.responses['200'] = {
+            description:
+              'Uncached staff verification status for the current session',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: [
+                    'enrolled',
+                    'assuredUntil',
+                    'available',
+                    'required',
+                  ],
+                  properties: {
+                    enrolled: { type: 'boolean' },
+                    assuredUntil: {
+                      type: 'string',
+                      format: 'date-time',
+                      nullable: true,
+                    },
+                    available: { type: 'boolean' },
+                    required: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          };
+        } else if (operationId === 'post /v1/auth/staff-totp/enroll') {
+          operation.responses['201'] = {
+            description:
+              'Uncached TOTP enrollment secret for the current session',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['secret', 'expiresAt'],
+                  properties: {
+                    secret: { type: 'string', pattern: '^[A-Z2-7]{32}$' },
+                    expiresAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          };
+          operation.responses['409'] = {
+            description: 'Enrollment unavailable',
+          };
+        } else {
+          delete operation.responses['201'];
+          operation.responses['204'] = {
+            description: 'Current session verified',
+          };
+        }
       }
       if (operationId === 'get /v1/auth/csrf') {
         operation.security = [{ cookie: [] }];

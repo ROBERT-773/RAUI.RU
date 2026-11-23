@@ -35,6 +35,7 @@ import {
   uuid,
 } from '../../common/security';
 import { isProduction, loadConfig } from '../../config';
+import { StaffTotpController } from './staff-totp-controller';
 import {
   ConfiguredDelivery,
   VerificationDelivery,
@@ -532,7 +533,7 @@ export class AuthController {
   }
 }
 @Module({
-  controllers: [AuthController],
+  controllers: [AuthController, StaffTotpController],
   providers: [
     AuthService,
     PhoneOtpService,

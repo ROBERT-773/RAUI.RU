@@ -41,13 +41,18 @@ async function run() {
   const precreated = process.env.RAUI_E2E_PRECREATED_DATABASE;
   const publicationOnly = process.argv.includes('--publication-only');
   const onboardingOnly = process.argv.includes('--onboarding-only');
-  if (publicationOnly && onboardingOnly)
+  const staffTotpOnly = process.argv.includes('--staff-totp-only');
+  if (
+    [publicationOnly, onboardingOnly, staffTotpOnly].filter(Boolean).length > 1
+  )
     throw new Error('Select one focused E2E scenario');
   const focusedSpecs = publicationOnly
     ? ['e2e/owner-publication.spec.ts']
     : onboardingOnly
       ? ['e2e/registration-onboarding.spec.ts']
-      : [];
+      : staffTotpOnly
+        ? ['e2e/staff-two-factor.spec.ts']
+        : [];
   if (
     precreated !== undefined &&
     (!/^raui_test_[a-f0-9]{16}$/.test(precreated) ||
@@ -81,6 +86,11 @@ async function run() {
     API_INTERNAL_URL: 'http://127.0.0.1:3101',
     SITE_URL: 'http://127.0.0.1:3100',
     E2E_BASE_URL: 'http://127.0.0.1:3100',
+    E2E_STAFF_TOTP: staffTotpOnly ? 'true' : 'false',
+    STAFF_TOTP_REQUIRED: staffTotpOnly ? 'true' : 'false',
+    STAFF_TOTP_ENCRYPTION_KEY: staffTotpOnly
+      ? randomBytes(32).toString('hex')
+      : undefined,
   };
   process.env.OPENSEARCH_ALIAS = env.OPENSEARCH_ALIAS;
   const index = new SearchIndex(),
@@ -160,6 +170,9 @@ async function run() {
         [randomUUID(), `quota-${project}@e2e.test`, 'owner'],
         [randomUUID(), `agency-${project}@e2e.test`, 'agency'],
         [randomUUID(), `agent-${project}@e2e.test`, 'agent'],
+        ...(staffTotpOnly
+          ? [[randomUUID(), `staff-${project}@e2e.test`, 'admin']]
+          : []),
       ]),
     ])
       await monitor.run(async () =>
@@ -397,7 +410,9 @@ async function run() {
           ? 'publication-e2e-summary.json'
           : onboardingOnly
             ? 'onboarding-e2e-summary.json'
-            : 'phase4d-e2e-summary.json',
+            : staffTotpOnly
+              ? 'staff-totp-e2e-summary.json'
+              : 'phase4d-e2e-summary.json',
       ),
       JSON.stringify(
         {
