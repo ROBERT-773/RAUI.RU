@@ -239,9 +239,12 @@ test('new owner registers, saves a draft and publishes after moderation', async 
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      const token = deliveries.reverse().find(
-        (item) => item.destination === destination && item.purpose === purpose,
-      )?.token;
+      const token = deliveries
+        .reverse()
+        .find(
+          (item) =>
+            item.destination === destination && item.purpose === purpose,
+        )?.token;
       if (!token) throw Error('Expected a test verification message');
       return token as string;
     }
