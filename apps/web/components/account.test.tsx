@@ -52,6 +52,23 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+test('opens the requested messages tab for a signed-in visitor', async () => {
+  const fetch = vi.fn(async (url: string) => ({
+    ok: true,
+    json: async () =>
+      url.endsWith('/auth/me')
+        ? { display_name: 'Агент', role: 'agent' }
+        : { items: [], cursor: null },
+  }));
+  stubFetch('fetch', fetch);
+  render(<Account initialTab="messages" />);
+  const tab = await screen.findByRole('button', { name: 'Сообщения' });
+  expect(tab.getAttribute('aria-pressed')).toBe('true');
+  expect(
+    fetch.mock.calls.some(([url]) => url.endsWith('/account/threads')),
+  ).toBe(true);
+});
+
 test('shows and hides the password without submitting and masks it on mode change', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
   vi.stubGlobal('fetch', fetch);

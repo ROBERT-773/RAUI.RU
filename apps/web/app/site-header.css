@@ -1,0 +1,7 @@
+.site-header {
+  flex-wrap: wrap;
+}
+
+.site-header nav {
+  gap: 0.25rem;
+}
