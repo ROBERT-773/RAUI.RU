@@ -607,6 +607,83 @@ test('independent agent publishes from the agent cabinet and a guest finds the l
     await visitorContext.close();
   }
 });
+test('owner publishes a land plot and a guest finds it in land search', async ({
+  page,
+  browser,
+}, info) => {
+  test.setTimeout(90000);
+  await login(page, `quota-${info.project.name}@e2e.test`);
+  await page.goto('/account/listings');
+  const form = page.locator('#new-listing');
+  await form.getByLabel('Категория').selectOption('land');
+  const next = form.getByRole('button', { name: 'Далее', exact: true });
+  await next.click();
+  await form
+    .getByRole('combobox', { name: 'Регион', exact: true })
+    .selectOption('moscow');
+  for (const [label, value] of [
+    ['Адрес', 'Москва, Тверская улица, 19'],
+    ['Населённый пункт', 'Москва'],
+    ['Долгота', '37.62'],
+    ['Широта', '55.76'],
+  ]) {
+    await form.getByLabel(label, { exact: true }).fill(value);
+  }
+  await next.click();
+  const area = form.getByLabel('Площадь участка, м² *', { exact: true });
+  await expect(area).toBeVisible();
+  await next.click();
+  await expect(area).toBeVisible();
+  await area.fill('750');
+  await next.click();
+  const title = `Участок ${randomUUID()}`;
+  await form.getByLabel('Заголовок', { exact: true }).fill(title);
+  await form.getByLabel('Цена, ₽', { exact: true }).fill('3500000');
+  const saving = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/listings'),
+  );
+  await form
+    .getByRole('button', { name: 'Сохранить черновик', exact: true })
+    .click();
+  const saved = await saving;
+  expect(saved.status()).toBe(201);
+  const { id } = (await saved.json()) as { id: string };
+  const staff = await browser.newContext();
+  const guest = await browser.newContext();
+  try {
+    const visitor = await guest.newPage();
+    const path = `/listings/${id}`;
+    const draft = page.locator('article.panel').filter({
+      has: page.getByRole('heading', { name: title, exact: true }),
+    });
+    await submitDraft(page, draft, id);
+    expect((await visitor.request.get(path)).status()).toBe(404);
+    await approveListing(await staff.newPage(), id, title);
+    expect((await visitor.goto(path))?.status()).toBe(200);
+    await expect(
+      visitor.getByRole('heading', { name: title, exact: true }),
+    ).toBeVisible();
+    const search =
+      '/search?' +
+      new URLSearchParams({
+        definition: JSON.stringify({
+          q: title,
+          category: 'land',
+          dealType: 'sale',
+        }),
+      });
+    await expect(async () => {
+      await visitor.goto(search);
+      await expect(
+        visitor.getByRole('link', { name: title, exact: true }),
+      ).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 20000 });
+  } finally {
+    await staff.close();
+    await guest.close();
+  }
+});
+
 test('guest and unverified seller cannot use publication controls', async ({
   page,
 }) => {
