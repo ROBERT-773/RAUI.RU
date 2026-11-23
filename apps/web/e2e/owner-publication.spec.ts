@@ -33,17 +33,17 @@ async function login(
   ).toBeVisible();
 }
 async function submitDraft(page: Page, draft: Locator, listingId: string) {
+  const photoInput = draft.getByLabel('Добавить фотографию', { exact: true });
   for (let number = 1; number <= 5; number++) {
+    await expect(photoInput).toBeEnabled();
     const uploaded = page.waitForResponse((value) =>
       endpoint(value, 'POST', '/api/v1/media'),
     );
-    await draft
-      .getByLabel('Добавить фотографию', { exact: true })
-      .setInputFiles({
-        name: `apartment-${number}.png`,
-        mimeType: 'image/png',
-        buffer: png,
-      });
+    await photoInput.setInputFiles({
+      name: `apartment-${number}.png`,
+      mimeType: 'image/png',
+      buffer: png,
+    });
     expect((await uploaded).status()).toBe(201);
     await expect(
       draft.getByText(`Загружено фотографий: ${number} из 21.`),
