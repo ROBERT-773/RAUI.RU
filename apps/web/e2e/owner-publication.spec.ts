@@ -607,82 +607,120 @@ test('independent agent publishes from the agent cabinet and a guest finds the l
     await visitorContext.close();
   }
 });
-test('owner publishes a land plot and a guest finds it in land search', async ({
-  page,
-  browser,
-}, info) => {
-  test.setTimeout(90000);
-  await login(page, `quota-${info.project.name}@e2e.test`);
-  await page.goto('/account/listings');
-  const form = page.locator('#new-listing');
-  await form.getByLabel('Категория').selectOption('land');
-  const next = form.getByRole('button', { name: 'Далее', exact: true });
-  await next.click();
-  await form
-    .getByRole('combobox', { name: 'Регион', exact: true })
-    .selectOption('moscow');
-  for (const [label, value] of [
-    ['Адрес', 'Москва, Тверская улица, 19'],
-    ['Населённый пункт', 'Москва'],
-    ['Долгота', '37.62'],
-    ['Широта', '55.76'],
-  ]) {
-    await form.getByLabel(label, { exact: true }).fill(value);
-  }
-  await next.click();
-  const area = form.getByLabel('Площадь участка, м² *', { exact: true });
-  await expect(area).toBeVisible();
-  await next.click();
-  await expect(area).toBeVisible();
-  await area.fill('750');
-  await next.click();
-  const title = `Участок ${randomUUID()}`;
-  await form.getByLabel('Заголовок', { exact: true }).fill(title);
-  await form.getByLabel('Цена, ₽', { exact: true }).fill('3500000');
-  const saving = page.waitForResponse((response) =>
-    endpoint(response, 'POST', '/api/v1/listings'),
-  );
-  await form
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
-    .click();
-  const saved = await saving;
-  expect(saved.status()).toBe(201);
-  const { id } = (await saved.json()) as { id: string };
-  const staff = await browser.newContext();
-  const guest = await browser.newContext();
-  try {
-    const visitor = await guest.newPage();
-    const path = `/listings/${id}`;
-    const draft = page.locator('article.panel').filter({
-      has: page.getByRole('heading', { name: title, exact: true }),
-    });
-    await submitDraft(page, draft, id);
-    expect((await visitor.request.get(path)).status()).toBe(404);
-    await approveListing(await staff.newPage(), id, title);
-    expect((await visitor.goto(path))?.status()).toBe(200);
-    await expect(
-      visitor.getByRole('heading', { name: title, exact: true }),
-    ).toBeVisible();
-    const search =
-      '/search?' +
-      new URLSearchParams({
-        definition: JSON.stringify({
-          q: title,
-          category: 'land',
-          dealType: 'sale',
-        }),
+const publicationCases = [
+  ['land', 'sale', 'Площадь участка, м² *', '750', '3500000', 'Цена, ₽'],
+  ['house', 'sale', 'Площадь дома, м² *', '120', '9500000', 'Цена, ₽'],
+  ['commercial', 'sale', 'Площадь, м² *', '320', '15000000', 'Цена, ₽'],
+  ['apartment', 'long_rent', 'Площадь, м² *', '48', '50000', 'Цена, ₽ в месяц'],
+  [
+    'apartment',
+    'short_rent',
+    'Площадь, м² *',
+    '48',
+    '4500',
+    'Цена, ₽ за сутки',
+  ],
+] as const;
+
+for (const [
+  category,
+  dealType,
+  areaLabel,
+  size,
+  price,
+  priceLabel,
+] of publicationCases) {
+  test(`publishes ${category} for ${dealType} and a guest finds it`, async ({
+    page,
+    browser,
+  }, info) => {
+    test.setTimeout(90000);
+    await login(
+      page,
+      `agent-${info.project.name}@e2e.test`,
+      'Кабинет риелтора',
+    );
+    await page.goto('/account/listings');
+    const form = page.locator('#new-listing');
+    await form.getByLabel('Категория').selectOption(category);
+    await form
+      .getByRole('combobox', { name: 'Сделка', exact: true })
+      .selectOption(dealType, { timeout: 5000 });
+    if (category === 'commercial') {
+      await form
+        .getByLabel(/Тип коммерческого помещения/)
+        .selectOption({ label: 'Склад' });
+    }
+    const next = form.getByRole('button', { name: 'Далее', exact: true });
+    await next.click();
+    await form
+      .getByRole('combobox', { name: 'Регион', exact: true })
+      .selectOption('moscow');
+    for (const [label, value] of [
+      ['Адрес', 'Москва, Тверская улица, 19'],
+      ['Населённый пункт', 'Москва'],
+      ['Долгота', '37.62'],
+      ['Широта', '55.76'],
+    ]) {
+      await form.getByLabel(label, { exact: true }).fill(value);
+    }
+    await next.click();
+    const area = form.getByLabel(areaLabel, { exact: true });
+    await expect(area).toBeVisible();
+    await next.click();
+    await expect(area).toBeVisible();
+    await area.fill(size);
+    if (category === 'apartment')
+      await form.getByLabel(/Площадь кухни, м²/).fill('9');
+    await next.click();
+    const title = `Проверка публикации ${randomUUID()}`;
+    await form.getByLabel('Заголовок', { exact: true }).fill(title);
+    await form.getByLabel(priceLabel, { exact: true }).fill(price);
+    const saving = page.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/listings'),
+    );
+    await form
+      .getByRole('button', { name: 'Сохранить черновик', exact: true })
+      .click();
+    const saved = await saving;
+    expect(saved.status()).toBe(201);
+    const { id } = (await saved.json()) as { id: string };
+    const staff = await browser.newContext();
+    const guest = await browser.newContext();
+    try {
+      const visitor = await guest.newPage();
+      const path = `/listings/${id}`;
+      const draft = page.locator('article.panel').filter({
+        has: page.getByRole('heading', { name: title, exact: true }),
       });
-    await expect(async () => {
-      await visitor.goto(search);
+      await submitDraft(page, draft, id);
+      expect((await visitor.request.get(path)).status()).toBe(404);
+      await approveListing(await staff.newPage(), id, title);
+      expect((await visitor.goto(path))?.status()).toBe(200);
       await expect(
-        visitor.getByRole('link', { name: title, exact: true }),
-      ).toBeVisible({ timeout: 2000 });
-    }).toPass({ timeout: 20000 });
-  } finally {
-    await staff.close();
-    await guest.close();
-  }
-});
+        visitor.getByRole('heading', { name: title, exact: true }),
+      ).toBeVisible();
+      const search =
+        '/search?' +
+        new URLSearchParams({
+          definition: JSON.stringify({
+            q: title,
+            category,
+            dealType,
+          }),
+        });
+      await expect(async () => {
+        await visitor.goto(search);
+        await expect(
+          visitor.getByRole('link', { name: title, exact: true }),
+        ).toBeVisible({ timeout: 2000 });
+      }).toPass({ timeout: 20000 });
+    } finally {
+      await staff.close();
+      await guest.close();
+    }
+  });
+}
 
 test('guest and unverified seller cannot use publication controls', async ({
   page,
