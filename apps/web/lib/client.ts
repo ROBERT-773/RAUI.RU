@@ -145,6 +145,7 @@ export async function api<T>(
       response.status,
     );
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 let analytics: AnalyticsAdapter = { emit: () => {} };

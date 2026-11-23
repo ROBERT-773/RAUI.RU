@@ -142,6 +142,11 @@ export const envSchema = z
       }, 'CDN base requires clean credential-free HTTP(S) URL')
       .optional(),
     PHONE_OTP_ENABLED: z.enum(['true', 'false']).default('false'),
+    STAFF_TOTP_REQUIRED: z.enum(['true', 'false']).default('false'),
+    STAFF_TOTP_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i)
+      .optional(),
     PHONE_OTP_PEPPER: z
       .string()
       .max(1024)
@@ -175,6 +180,20 @@ export const envSchema = z
     const production = isProduction(value);
     const reject = (field: string, message: string) =>
       context.addIssue({ code: 'custom', path: [field], message });
+    if (
+      production &&
+      value.DEPLOYMENT_ENV !== 'staging' &&
+      value.STAFF_TOTP_REQUIRED !== 'true'
+    )
+      reject('STAFF_TOTP_REQUIRED', 'Production requires staff second factor');
+    if (
+      value.STAFF_TOTP_REQUIRED === 'true' &&
+      !value.STAFF_TOTP_ENCRYPTION_KEY
+    )
+      reject(
+        'STAFF_TOTP_ENCRYPTION_KEY',
+        'Staff second factor requires an encryption key',
+      );
     if (value.RESET_SMTP_ENABLED === 'true') {
       if (!value.RESET_SMTP_PASSWORD)
         reject('RESET_SMTP_PASSWORD', 'Reset SMTP credentials required');

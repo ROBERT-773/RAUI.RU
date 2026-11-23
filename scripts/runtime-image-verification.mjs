@@ -41,6 +41,7 @@ export const migrationNames = [
   '031_countryside_listing_fields.sql',
   '032_required_commercial_type.sql',
   '033_commercial_automatic_gates.sql',
+  '034_staff_totp.sql',
 ];
 export async function verifyMigrationPackage(root) {
   const directory = resolve(root, 'apps/api/migrations');

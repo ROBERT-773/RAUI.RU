@@ -6,6 +6,8 @@ import { envSchema } from './config';
 import { ConfiguredMediaDelivery } from './modules/media/storage';
 const production = {
   NODE_ENV: 'production',
+  STAFF_TOTP_REQUIRED: 'true',
+  STAFF_TOTP_ENCRYPTION_KEY: '07'.repeat(32),
   PROXY_IDENTITY_SECRET: 'synthetic-forwarding-key-'.repeat(2),
   TRUSTED_PROXY_PEERS: '127.0.0.1',
   TRUSTED_INGRESS_IP_HEADER: 'x-real-ip',
@@ -24,6 +26,8 @@ const production = {
 test('Production contracts require verified DB TLS, Redis TLS and matching clean public HTTPS origins', () => {
   assert.ok(envSchema.safeParse(production).success);
   for (const fields of [
+    { STAFF_TOTP_REQUIRED: 'false' },
+    { STAFF_TOTP_ENCRYPTION_KEY: undefined },
     { WEB_ORIGIN: 'http://raui.ru' },
     { PROXY_IDENTITY_SECRET: undefined },
     { TRUSTED_PROXY_PEERS: '' },

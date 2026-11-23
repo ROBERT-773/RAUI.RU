@@ -187,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '33',
+          '34',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -374,6 +374,8 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           VERIFICATION_GATEWAY_TOKEN: 'test-only-verification-token',
           NODE_ENV: 'development',
           DEPLOYMENT_ENV: 'production',
+          STAFF_TOTP_REQUIRED: 'true',
+          STAFF_TOTP_ENCRYPTION_KEY: '07'.repeat(32),
         };
         const saved = Object.fromEntries(
           Object.keys(production).map((key) => [key, process.env[key]]),

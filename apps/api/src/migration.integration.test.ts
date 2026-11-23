@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors') ORDER BY tablename",
         )
       ).rows;
       const facts = [];
@@ -109,7 +109,9 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
                 ? "to_jsonb(t)-'public_id'-'registration_approval_state'"
                 : tablename === 'notifications'
                   ? "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'-'captured_frequency'-'daily_run_id'"
-                  : 'to_jsonb(t)';
+                  : tablename === 'sessions'
+                    ? "to_jsonb(t)-'staff_totp_factor_id'-'staff_assured_until'"
+                    : 'to_jsonb(t)';
         const rows = (
           await pool.query(
             `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
@@ -162,7 +164,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 33);
+    assert.equal(upgradedLedger.length, 34);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -184,6 +186,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [30, '031_countryside_listing_fields.sql'],
       [31, '032_required_commercial_type.sql'],
       [32, '033_commercial_automatic_gates.sql'],
+      [33, '034_staff_totp.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -272,6 +275,18 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       upgradedLedger,
     );
     assert.deepEqual(await snapshot(), before);
+    assert.equal(
+      (await pool.query('SELECT 1 FROM staff_totp_factors LIMIT 1')).rowCount,
+      0,
+    );
+    assert.equal(
+      (
+        await pool.query(
+          'SELECT 1 FROM sessions WHERE staff_totp_factor_id IS NOT NULL OR staff_assured_until IS NOT NULL LIMIT 1',
+        )
+      ).rowCount,
+      0,
+    );
     const upgradedAttributes = await attributes();
     for (const field of baselineAttributes) {
       const expected = { ...field };
