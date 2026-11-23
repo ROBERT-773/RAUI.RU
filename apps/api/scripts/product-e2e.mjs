@@ -344,19 +344,40 @@ async function run() {
       }
     }
     stage = 'browser-regression';
-    const child = spawn(
-      process.execPath,
-      ['node_modules/@playwright/test/cli.js', 'test', ...focusedSpecs],
-      { cwd: resolve('../web'), env, stdio: 'inherit' },
-    );
-    const browser = trackProcess(child, 'browser');
-    children.push(browser);
-    const result = await monitor.run(() => browser.completion);
-    process.exitCode = result.code ?? 1;
-    failed = failed || process.exitCode !== 0;
-    if (
-      children.slice(0, -1).some((record) => record.outcome || record.logFailed)
-    )
+    const projects = smsOnly
+      ? env.CHROMIUM_EXECUTABLE
+        ? ['chromium', 'android-chromium']
+        : ['chromium', 'firefox', 'webkit', 'ios-webkit', 'android-chromium']
+      : [null];
+    const services = children.slice();
+    for (const project of projects) {
+      if (project) {
+        // All browser profiles reach this disposable API through one loopback IP.
+        await monitor.run(() =>
+          pool.query(
+            "DELETE FROM rate_limits WHERE key IN ('auth:127.0.0.1', 'auth:::1')",
+          ),
+        );
+      }
+      const child = spawn(
+        process.execPath,
+        [
+          'node_modules/@playwright/test/cli.js',
+          'test',
+          ...focusedSpecs,
+          ...(project ? ['--project', project] : []),
+        ],
+        { cwd: resolve('../web'), env, stdio: 'inherit' },
+      );
+      const browser = trackProcess(child, 'browser');
+      children.push(browser);
+      const result = await monitor.run(() => browser.completion);
+      if (result.code !== 0) {
+        process.exitCode = result.code ?? 1;
+        failed = true;
+      }
+    }
+    if (services.some((record) => record.outcome || record.logFailed))
       failed = true;
   } catch (error) {
     failed = true;
