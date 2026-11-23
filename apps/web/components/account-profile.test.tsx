@@ -162,14 +162,14 @@ test('failed persisted refresh does not tell parent that confirmation state chan
   expect(refresh).not.toHaveBeenCalled();
   expect(screen.getAllByText('Не подтверждён')).toHaveLength(2);
 });
-test('requests verification for the exact E164 phone and does not mark it verified', async () => {
+test('normalizes domestic numbers in the fallback form without marking them verified', async () => {
   vi.mocked(api).mockImplementation(async (path) =>
     path === 'v1/auth/me' ? user : { accepted: true },
   );
   render(<AccountProfile />);
   await screen.findByText('owner@example.test');
   fireEvent.change(screen.getByLabelText('Номер телефона'), {
-    target: { value: '+79991234567' },
+    target: { value: '8 (999) 123-45-67' },
   });
   fireEvent.click(
     screen.getByRole('button', { name: 'Запросить подтверждение телефона' }),

@@ -2,6 +2,7 @@
 import { Button } from '@raui/ui';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
+import { invalidPhoneInput, normalizePhoneInput } from '../lib/phone-input';
 interface Challenge {
   challengeId: string;
   expiresAt: string;
@@ -73,12 +74,9 @@ export default function PhoneOtpForm({
   }
   async function request() {
     if (lock.current || disabled || Date.now() < resendAt) return;
-    const digits = phone.replace(/[\s()-]/g, '');
-    const normalized = /^8[0-9]{10}$/.test(digits)
-      ? '+7' + digits.slice(1)
-      : digits;
-    if (!pending.current && !/^\+[1-9][0-9]{7,14}$/.test(normalized)) {
-      setError('Введите номер с кодом страны, например +7 999 123-45-67.');
+    const normalized = pending.current?.phone ?? normalizePhoneInput(phone);
+    if (!normalized) {
+      setError(invalidPhoneInput);
       return;
     }
     lock.current = true;
