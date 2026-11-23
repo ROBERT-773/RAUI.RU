@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -6,6 +7,9 @@ test.skip(
   'Run in the isolated staff 2FA fixture',
 );
 test.use({ trace: 'off' });
+test.beforeEach(() => {
+  execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
+});
 
 function authenticatorCode(encoded: string): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -37,13 +41,29 @@ test('staff enrolls in the browser and a separate session remains locked', async
   browser,
 }, info) => {
   const password = 'E2E-only-password-42!';
+  async function submit(
+    target: Page,
+    name: string,
+    path: string,
+    status: number,
+  ) {
+    const [response] = await Promise.all([
+      target.waitForResponse(
+        (value) =>
+          value.request().method() === 'POST' &&
+          new URL(value.url()).pathname === '/api/v1/' + path,
+      ),
+      target.getByRole('button', { name, exact: true }).click(),
+    ]);
+    expect(response.status(), path).toBe(status);
+  }
   async function login(target: Page) {
     await target.goto('/account');
     await target
       .getByLabel('Email', { exact: true })
       .fill(`staff-${info.project.name}@e2e.test`);
     await target.getByLabel('Пароль', { exact: true }).fill(password);
-    await target.getByRole('button', { name: 'Войти', exact: true }).click();
+    await submit(target, 'Войти', 'auth/login', 201);
     await expect(
       target.getByRole('heading', { name: 'Мой аккаунт', exact: true }),
     ).toBeVisible();
@@ -54,12 +74,12 @@ test('staff enrolls in the browser and a separate session remains locked', async
   );
   await page.goto('/admin/moderation');
   await page.getByLabel('Пароль аккаунта').fill(password);
-  await page.getByRole('button', { name: 'Настроить второй фактор' }).click();
+  await submit(page, 'Настроить второй фактор', 'auth/staff-totp/enroll', 201);
   const key = page.locator('main code');
   await expect(key).toBeVisible();
   const secret = await key.innerText();
   await page.getByLabel('Код из приложения').fill(authenticatorCode(secret));
-  await page.getByRole('button', { name: 'Подтвердить вход' }).click();
+  await submit(page, 'Подтвердить вход', 'auth/staff-totp/activate', 204);
   await expect(
     page.getByRole('heading', { name: 'Проверка входа сотрудника' }),
   ).toHaveCount(0);
