@@ -132,6 +132,19 @@ test('protected staff routes require an active factor and current session assura
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   }
+  async function factorCode(userId: string) {
+    const [factor] = await db.rows<{ encrypted_secret: string; step: string }>(
+      'SELECT encrypted_secret,floor(extract(epoch from clock_timestamp())/30)::bigint AS step FROM staff_totp_factors WHERE user_id=$1',
+      [userId],
+    );
+    assert.ok(factor);
+    const secret = openStaffTotpSecret(factor.encrypted_secret, key, userId);
+    try {
+      return currentCode(secret, Number(factor.step));
+    } finally {
+      secret.fill(0);
+    }
+  }
 
   for (const [role, allowed] of [
     ['admin', 'admin/users'],
@@ -160,15 +173,7 @@ test('protected staff routes require an active factor and current session assura
       ((await enrollment.json()) as { secret: string }).secret,
       /^[A-Z2-7]{32}$/,
     );
-    const [factor] = await db.rows<{ encrypted_secret: string; step: string }>(
-      'SELECT encrypted_secret,floor(extract(epoch from clock_timestamp())/30)::bigint AS step FROM staff_totp_factors WHERE user_id=$1',
-      [id],
-    );
-    assert.ok(factor);
-    const code = currentCode(
-      openStaffTotpSecret(factor.encrypted_secret, key, id),
-      Number(factor.step),
-    );
+    const code = await factorCode(id);
     assert.equal(
       (await call('auth/staff-totp/activate', other, { code })).status,
       403,
@@ -183,9 +188,44 @@ test('protected staff routes require an active factor and current session assura
       (await call('auth/staff-totp/confirm', other, { code })).status,
       403,
     );
-    await db.pool.query('DELETE FROM staff_totp_factors WHERE user_id=$1', [
-      id,
-    ]);
+    await db.pool.query(
+      "UPDATE sessions SET staff_assured_until=now()-interval '1 second' WHERE token_hash=$1",
+      [hash(first)],
+    );
     assert.equal((await call(allowed, first)).status, 403);
+    await db.transaction(async (sql) => {
+      await sql.query('DELETE FROM staff_totp_factors WHERE user_id=$1', [id]);
+      await sql.query(
+        'UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
+        [id],
+      );
+    });
+    assert.equal((await call(allowed, first)).status, 401);
+    assert.equal((await call(allowed, other)).status, 401);
+    await db.pool.query('UPDATE rate_limits SET reset_at=now() WHERE key=$1', [
+      'staff-totp:' + id,
+    ]);
+    const login = await call('auth/login', '', {
+      email: id + '@example.test',
+      password,
+      transport: 'bearer',
+    });
+    assert.equal(login.status, 201);
+    const { sessionToken } = (await login.json()) as { sessionToken: string };
+    assert.equal((await call(allowed, sessionToken)).status, 403);
+    assert.equal(
+      (await call('auth/staff-totp/enroll', sessionToken, { password })).status,
+      201,
+    );
+    const freshCode = await factorCode(id);
+    assert.equal(
+      (
+        await call('auth/staff-totp/activate', sessionToken, {
+          code: freshCode,
+        })
+      ).status,
+      204,
+    );
+    assert.equal((await call(allowed, sessionToken)).status, 200);
   }
 });

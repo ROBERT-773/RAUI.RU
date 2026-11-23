@@ -37,8 +37,8 @@ requests continue to work.
 
 For a lost device, verify the employee out of band and record the approved
 recovery in the operational audit log. An authorized database operator must
-revoke all of the employee's sessions and delete that employee's factor in
-one transaction. Require a fresh login and enrollment. The enforcement
+delete the employee's factor and revoke all of their sessions, in that
+order, in one transaction. Require a fresh login and enrollment. The enforcement
 setting remains enabled throughout recovery. Never capture passwords,
 authenticator keys, or codes in tickets, traces, or logs.
 
