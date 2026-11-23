@@ -259,11 +259,11 @@ test('new owner registers, saves a draft and publishes after moderation', async 
       .click();
     expect((await emailConfirmation).status()).toBe(201);
     const phone =
-      '+120255501' + String(test.info().project.name.length).padStart(2, '0');
-    await expect(
-      page.getByLabel('Номер телефона', { exact: true }),
-    ).toBeEnabled();
-    await page.getByLabel('Номер телефона', { exact: true }).fill(phone);
+      '+700000000' + String(test.info().project.name.length).padStart(2, '0');
+    const phoneInput = page.getByLabel('Номер телефона', { exact: true });
+    await expect(phoneInput).toBeEnabled();
+    await expect(phoneInput).toHaveValue('+7');
+    await phoneInput.fill('8 ' + phone.slice(2));
     const phoneRequest = page.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/auth/verification/phone'),
     );
