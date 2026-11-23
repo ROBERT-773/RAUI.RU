@@ -39,6 +39,7 @@ import { StaffTotpController } from './staff-totp-controller';
 import {
   PhoneSignInService,
   phoneSignInAvailable,
+  phoneSignInConfirmSchema,
   phoneSignInSignupProofSchema,
 } from './phone-sign-in';
 import {
@@ -72,6 +73,9 @@ export const registerSchema = z
 export const registerWithPhoneSchema = registerSchema.extend(
   phoneSignInSignupProofSchema.shape,
 );
+export const phoneSignInEnrollmentSchema = phoneSignInConfirmSchema.extend({
+  password: z.string().max(128),
+});
 const passwordLoginFields = {
   password: z.string().max(128),
   transport: z.enum(['cookie', 'bearer']).default('cookie'),
@@ -97,6 +101,7 @@ interface User {
   active: boolean;
   email_verified_at: string | null;
   phone_verified_at: string | null;
+  phone_sign_in_enrolled_at: string | null;
   phone: string | null;
   password_hash: string;
   registration_approval_state: 'pending' | 'approved' | 'rejected';
@@ -114,6 +119,7 @@ function publicUser(user: User) {
     registration_approval_reason: user.registration_approval_reason ?? null,
     email_verified_at: user.email_verified_at,
     phone_verified_at: user.phone_verified_at,
+    phone_sign_in_enrolled_at: user.phone_sign_in_enrolled_at ?? null,
     phone: user.phone,
     created_at: user.created_at,
     updated_at: user.updated_at,
@@ -185,8 +191,7 @@ export class AuthService {
     res: Response,
   ) {
     const input = parse(registerWithPhoneSchema, body);
-    if (!phoneSignInAvailable())
-      throw new ServiceUnavailableException('SMS sign-in unavailable');
+    await signIn.checkSignup(input);
     const encoded = await passwordHash(input.password);
     const session = await this.db.transaction(async (sql) => {
       await signIn.consumeSignup(sql, input);
@@ -209,8 +214,9 @@ export class AuthService {
   ) {
     const [created] = await this.db.rows<User>(
       `INSERT INTO users(
-         email,password_hash,display_name,role,registration_approval_state,phone,phone_verified_at
-       ) VALUES($1,$2,$3,$4,'pending',$5,CASE WHEN $5::text IS NOT NULL THEN now() END) RETURNING *`,
+         email,password_hash,display_name,role,registration_approval_state,phone,phone_verified_at,phone_sign_in_enrolled_at
+       ) VALUES($1,$2,$3,$4,'pending',$5,CASE WHEN $5::text IS NOT NULL THEN now() END,
+         CASE WHEN $5::text IS NOT NULL THEN now() END) RETURNING *`,
       [input.email, encoded, input.displayName, input.role, phone],
       sql,
     );
@@ -246,12 +252,7 @@ export class AuthService {
         ]));
     const rateIdentifier =
       'email' in input ? input.email : (user?.email ?? 'id:' + input.publicId);
-    const [counter] = await this.db.rows<{ count: number }>(
-      `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END, reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING count`,
-      [`login:${hash(rateIdentifier)}`],
-    );
-    if (counter!.count > 15)
-      throw new UnauthorizedException('Login temporarily unavailable');
+    await this.checkPasswordRate(rateIdentifier);
     const valid = await passwordMatches(
       input.password,
       user?.password_hash ?? `scrypt$32768$invalid$${'0'.repeat(128)}`,
@@ -325,6 +326,53 @@ export class AuthService {
       csrfToken: csrf,
       ...(transport === 'bearer' ? { sessionToken: secret } : {}),
     };
+  }
+  private async checkPasswordRate(identifier: string) {
+    const [counter] = await this.db.rows<{ count: number }>(
+      `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END, reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING count`,
+      [`login:${hash(identifier)}`],
+    );
+    if (counter!.count > 15)
+      throw new UnauthorizedException('Login temporarily unavailable');
+  }
+  async enrollPhoneSignIn(
+    actor: Actor,
+    body: unknown,
+    signIn: PhoneSignInService,
+  ) {
+    const { password, ...proof } = parse(phoneSignInEnrollmentSchema, body);
+    if (!phoneSignInAvailable())
+      throw new ServiceUnavailableException('SMS sign-in unavailable');
+    const [user] = await this.db.rows<User>('SELECT * FROM users WHERE id=$1', [
+      actor.id,
+    ]);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+    await this.checkPasswordRate(user.email);
+    if (!(await passwordMatches(password, user.password_hash)))
+      throw new UnauthorizedException('Invalid credentials');
+    const result = await signIn.confirm(
+      proof,
+      async (sql) => {
+        await lockPhoneOtpActor(sql, actor);
+        const updated = await sql.query(
+          'UPDATE users SET phone_sign_in_enrolled_at=clock_timestamp() WHERE id=$1 AND password_hash=$2 AND phone=$3 AND phone_verified_at IS NOT NULL',
+          [actor.id, user.password_hash, proof.phone],
+        );
+        if (!updated.rowCount)
+          throw new UnauthorizedException('Invalid credentials');
+        await this.audit.record(
+          sql,
+          actor.id,
+          'auth.phone_sign_in.enrolled',
+          'user',
+          actor.id,
+        );
+        return { enabled: true as const };
+      },
+      actor.id,
+    );
+    if (result.kind !== 'session') throw new UnauthorizedException();
+    return result.session;
   }
   async me(actor: Actor) {
     const [user] = await this.db.rows<User>(
@@ -554,6 +602,14 @@ export class AuthController {
   ) {
     res.setHeader('Cache-Control', 'no-store');
     return this.auth.registerWithPhone(body, this.phoneSignIn, res);
+  }
+  @Post('phone-sign-in/enroll') enrollPhoneSignIn(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader('Cache-Control', 'no-store');
+    return this.auth.enrollPhoneSignIn(actor, body, this.phoneSignIn);
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);

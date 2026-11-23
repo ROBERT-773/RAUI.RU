@@ -33,6 +33,7 @@ import type {
 import {
   registerSchema,
   registerWithPhoneSchema,
+  phoneSignInEnrollmentSchema,
   loginSchema,
   passwordSchema,
 } from '../modules/auth/auth';
@@ -152,6 +153,7 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/auth/phone-sign-in': phoneSignInRequestSchema,
   'post /v1/auth/phone-sign-in/confirm': phoneSignInConfirmSchema,
   'post /v1/auth/phone-sign-in/register': registerWithPhoneSchema,
+  'post /v1/auth/phone-sign-in/enroll': phoneSignInEnrollmentSchema,
   'post /v1/auth/verification/phone': object({
     phone: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
   }),

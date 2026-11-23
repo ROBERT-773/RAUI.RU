@@ -26,14 +26,17 @@ function browserKey() {
     .replace(/=+$/, '');
 }
 
-export default function PhoneSignIn<T>({
-  onSession,
-  onOther,
-}: {
-  onSession: (session: Session<T>) => void;
-  onOther: () => void;
-}) {
-  const [phone, setPhone] = useState('+7');
+type PhoneSignInProps<T> = { onOther: () => void } & (
+  | { enrollmentPhone: string; onEnrolled: () => void; onSession?: never }
+  | {
+      enrollmentPhone?: never;
+      onEnrolled?: never;
+      onSession: (session: Session<T>) => void;
+    }
+);
+
+export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
+  const [phone, setPhone] = useState(props.enrollmentPhone ?? '+7');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signupToken, setSignupToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -66,7 +69,15 @@ export default function PhoneSignIn<T>({
     try {
       browser.current ||= browserKey();
       const proof = { phone: normalized, browserKey: browser.current };
-      if (signupToken) {
+      if (challenge && props.onEnrolled) {
+        await api(path + '/enroll', 'POST', {
+          ...proof,
+          challengeId: challenge.challengeId,
+          code: form.get('code'),
+          password: form.get('password'),
+        });
+        props.onEnrolled();
+      } else if (signupToken && props.onSession) {
         const session = await api<Session<T>>(path + '/register', 'POST', {
           ...proof,
           signupToken,
@@ -75,14 +86,14 @@ export default function PhoneSignIn<T>({
           displayName: form.get('name'),
           role: form.get('role'),
         });
-        onSession(session);
-      } else if (challenge) {
+        props.onSession(session);
+      } else if (challenge && props.onSession) {
         const result = await api<Verification<T>>(path + '/confirm', 'POST', {
           ...proof,
           challengeId: challenge.challengeId,
           code: form.get('code'),
         });
-        if (result.kind === 'session') onSession(result);
+        if (result.kind === 'session') props.onSession(result);
         else {
           setSignupToken(result.signupToken);
           setNotice('Телефон подтверждён. Заполните профиль.');
@@ -110,9 +121,11 @@ export default function PhoneSignIn<T>({
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 401)
         setError(
-          signupToken
-            ? 'Срок регистрации истёк. Запросите новый код.'
-            : 'Код неверный или истёк.',
+          props.enrollmentPhone
+            ? 'Пароль или код неверный либо срок действия кода истёк.'
+            : signupToken
+              ? 'Срок регистрации истёк. Запросите новый код.'
+              : 'Код неверный или истёк.',
         );
       else if (failure instanceof ApiError && failure.status === 429)
         setError('Слишком много запросов. Попробуйте позже.');
@@ -128,7 +141,11 @@ export default function PhoneSignIn<T>({
 
   return (
     <>
-      <h1>Вход или регистрация</h1>
+      {props.enrollmentPhone ? (
+        <h4>Подключить вход по SMS</h4>
+      ) : (
+        <h1>Вход или регистрация</h1>
+      )}
       <form className="account-form panel" onSubmit={submit}>
         <label>
           Мобильный телефон
@@ -136,7 +153,9 @@ export default function PhoneSignIn<T>({
             type="tel"
             autoComplete="tel"
             value={phone}
-            disabled={busy || Boolean(challenge)}
+            disabled={
+              busy || Boolean(challenge) || Boolean(props.enrollmentPhone)
+            }
             required
             onChange={(event) => {
               resetChallenge();
@@ -153,6 +172,19 @@ export default function PhoneSignIn<T>({
               autoComplete="one-time-code"
               pattern="[0-9]{6}"
               maxLength={6}
+              required
+              disabled={busy}
+            />
+          </label>
+        )}
+        {challenge && props.enrollmentPhone && (
+          <label>
+            Текущий пароль
+            <input
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              maxLength={128}
               required
               disabled={busy}
             />
@@ -211,7 +243,9 @@ export default function PhoneSignIn<T>({
           {signupToken
             ? 'Создать аккаунт'
             : challenge
-              ? 'Подтвердить код'
+              ? props.enrollmentPhone
+                ? 'Подключить'
+                : 'Подтвердить код'
               : 'Получить код'}
         </Button>
         {challenge && (
@@ -219,8 +253,8 @@ export default function PhoneSignIn<T>({
             Запросить новый код или изменить номер
           </Button>
         )}
-        <Button disabled={busy} onClick={onOther}>
-          Другой способ
+        <Button disabled={busy} onClick={props.onOther}>
+          {props.enrollmentPhone ? 'Отмена' : 'Другой способ'}
         </Button>
         {notice && <p role="status">{notice}</p>}
         {error && <p role="alert">{error}</p>}

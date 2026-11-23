@@ -43,6 +43,7 @@ export const migrationNames = [
   '033_commercial_automatic_gates.sql',
   '034_staff_totp.sql',
   '035_phone_sign_in.sql',
+  '036_phone_sign_in_enrollment.sql',
 ];
 export async function verifyMigrationPackage(root) {
   const directory = resolve(root, 'apps/api/migrations');

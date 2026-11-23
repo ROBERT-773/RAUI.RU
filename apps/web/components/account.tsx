@@ -504,6 +504,7 @@ export default function Account({
         {notice && <p role="status">{notice}</p>}
         <AccountProfile
           key={identityEpoch.current}
+          smsAvailable={smsAvailable}
           onRefresh={refreshProfile}
           onSessionExpired={() => expireIdentity(profileEpoch)}
         />

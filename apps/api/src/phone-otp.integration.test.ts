@@ -11,7 +11,7 @@ import { configure } from './bootstrap';
 import { PhoneOtpService, phoneOtpDigest } from './modules/auth/phone-otp';
 import { PhoneSignInService } from './modules/auth/phone-sign-in';
 import { migrate } from './modules/database/migrate';
-import { hash, token } from './common/security';
+import { hash, passwordHash, token } from './common/security';
 import {
   PhoneOtpDelivery,
   type PhoneOtpMessage,
@@ -80,9 +80,10 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
   await migrate(pool);
   assert.deepEqual(
     (
-      await pool.query('SELECT to_jsonb(u) data FROM users u WHERE id=$1', [
-        preservedUser,
-      ])
+      await pool.query(
+        "SELECT to_jsonb(u)-'phone_sign_in_enrolled_at' data FROM users u WHERE id=$1",
+        [preservedUser],
+      )
     ).rows[0].data,
     preservedBefore,
   );
@@ -218,24 +219,59 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
     messages.find((m) => m.challengeId === challenge.challengeId)!.code;
   try {
     await t.test(
-      'verified phone signs in through HTTP and receives the ordinary session cookie',
+      'existing account enrolls with password and SMS before using SMS sign-in',
       async () => {
         const account = await actor();
         const destination = phone();
+        const password = 'test-only-enrollment-password';
         await pool.query(
-          'UPDATE users SET phone=$2,phone_verified_at=now() WHERE id=$1',
-          [account.id, destination],
+          'UPDATE users SET phone=$2,phone_verified_at=now(),password_hash=$3 WHERE id=$1',
+          [account.id, destination, await passwordHash(password)],
         );
         const capabilities = await call('/auth/phone-sign-in/capabilities');
         assert.deepEqual(await capabilities.json(), { available: true });
         const body = { phone: destination, browserKey: token() };
-        const allocation = await call('/auth/phone-sign-in', undefined, body);
-        assert.equal(allocation.status, 201);
-        const { challengeId } = (await allocation.json()) as Challenge;
-        const { code } = messages.find(
-          (message) => message.challengeId === challengeId,
-        )!;
-        const confirmation = { ...body, challengeId, code };
+        async function proof() {
+          const allocation = await call('/auth/phone-sign-in', undefined, body);
+          assert.equal(allocation.status, 201);
+          const { challengeId } = (await allocation.json()) as Challenge;
+          const { code } = messages.find(
+            (message) => message.challengeId === challengeId,
+          )!;
+          return { ...body, challengeId, code };
+        }
+        const ageSms = () =>
+          pool.query(
+            "UPDATE phone_otp_send_events SET created_at=clock_timestamp()-interval '2 minutes' WHERE user_id IS NULL",
+          );
+        const unbound = await proof();
+        assert.equal(
+          (await call('/auth/phone-sign-in/confirm', undefined, unbound))
+            .status,
+          401,
+        );
+        await ageSms();
+        const enrollment = await proof();
+        assert.equal(
+          (
+            await call('/auth/phone-sign-in/enroll', account, {
+              ...enrollment,
+              password: 'wrong-password',
+            })
+          ).status,
+          401,
+        );
+        assert.equal(
+          (
+            await call('/auth/phone-sign-in/enroll', account, {
+              ...enrollment,
+              password,
+            })
+          ).status,
+          201,
+        );
+        await ageSms();
+        const confirmation = await proof();
         const signedIn = await call(
           '/auth/phone-sign-in/confirm',
           undefined,
@@ -261,6 +297,15 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
             .status,
           401,
         );
+        await pool.query('UPDATE users SET phone=$2 WHERE id=$1', [
+          account.id,
+          phone(),
+        ]);
+        const changed = await pool.query(
+          'SELECT phone_sign_in_enrolled_at FROM users WHERE id=$1',
+          [account.id],
+        );
+        assert.equal(changed.rows[0].phone_sign_in_enrolled_at, null);
       },
     );
     await t.test(

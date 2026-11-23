@@ -152,6 +152,7 @@ export class PhoneSignInService {
   async confirm<T>(
     body: unknown,
     issueSession: (sql: Sql, userId: string) => Promise<T>,
+    enrollmentUserId?: string,
   ) {
     const { challengeId, browserKey, code, phone } = parse(
       phoneSignInConfirmSchema,
@@ -171,6 +172,7 @@ export class PhoneSignInService {
         )
       ).rows[0];
       if (!binding) return null;
+      if (enrollmentUserId && binding.user_id !== enrollmentUserId) return null;
       // Same order as account deletion, which cascades to challenges.
       if (binding.user_id)
         await sql.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [
@@ -215,8 +217,9 @@ export class PhoneSignInService {
         const eligible = await sql.query(
           `SELECT 1 FROM users u WHERE u.id=$1 AND u.phone=$2 AND u.phone_verified_at IS NOT NULL
              AND u.active AND u.registration_approval_state IN ('pending','approved') AND u.role<>'admin'
+             AND (u.phone_sign_in_enrolled_at IS NOT NULL OR u.id=$3)
              AND NOT EXISTS (SELECT 1 FROM staff_permission_grants g WHERE g.user_id=u.id)`,
-          [challenge.user_id, phone],
+          [challenge.user_id, phone, enrollmentUserId ?? null],
         );
         if (!eligible.rowCount) return null;
         return {
@@ -240,10 +243,7 @@ export class PhoneSignInService {
     return result;
   }
 
-  async consumeSignup(
-    sql: Sql,
-    proof: z.infer<typeof phoneSignInSignupProofSchema>,
-  ) {
+  private signupBinding(proof: z.infer<typeof phoneSignInSignupProofSchema>) {
     const config = loadConfig();
     if (!phoneSignInAvailable(config))
       throw new ServiceUnavailableException('SMS sign-in unavailable');
@@ -251,11 +251,25 @@ export class PhoneSignInService {
       Buffer.from(config.PHONE_OTP_PEPPER!, 'base64url'),
       proof.phone,
     );
-    const binding = [
-      hash(proof.signupToken),
-      hash(proof.browserKey),
-      destination,
-    ];
+    return [hash(proof.signupToken), hash(proof.browserKey), destination];
+  }
+
+  async checkSignup(proof: z.infer<typeof phoneSignInSignupProofSchema>) {
+    const available = await this.db.pool.query(
+      `SELECT 1 FROM phone_sign_in_challenges
+       WHERE signup_digest=$1 AND browser_digest=$2 AND destination_digest=$3
+         AND signup_used_at IS NULL AND signup_expires_at>clock_timestamp()`,
+      this.signupBinding(proof),
+    );
+    if (!available.rowCount)
+      throw new UnauthorizedException('Invalid or expired SMS registration');
+  }
+
+  async consumeSignup(
+    sql: Sql,
+    proof: z.infer<typeof phoneSignInSignupProofSchema>,
+  ) {
+    const binding = this.signupBinding(proof);
     await sql.query(
       'SELECT id FROM phone_sign_in_challenges WHERE signup_digest=$1 AND browser_digest=$2 AND destination_digest=$3 FOR UPDATE',
       binding,

@@ -202,11 +202,14 @@ async function run() {
         ),
       );
     if (smsOnly)
-      await monitor.run(() =>
-        pool.query(
+      await monitor.run(async () => {
+        await pool.query(
           "UPDATE users SET phone='+700000000'||lpad((length(split_part(email,'@',1))-6)::text,2,'0') WHERE email LIKE 'agent-%@e2e.test'",
-        ),
-      );
+        );
+        await pool.query(
+          "UPDATE users SET phone_sign_in_enrolled_at=now() WHERE email LIKE 'agent-%@e2e.test'",
+        );
+      });
     for (const [price, lon, lat, rooms] of [
       [10000000, 37.61, 55.75, 2],
       [20000000, 37.7, 55.8, 3],
