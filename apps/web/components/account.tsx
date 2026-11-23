@@ -76,6 +76,7 @@ export default function Account({
     [tab, setTab] = useState<Tab>(initialTab),
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
+    [loginById, setLoginById] = useState(false),
     [passwordVisible, setPasswordVisible] = useState(false),
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
@@ -108,6 +109,7 @@ export default function Account({
     setProfileOpen(false);
     setNotice('');
     setRegister(false);
+    setLoginById(false);
     setItems([]);
     setSaved([]);
     setThreads([]);
@@ -307,7 +309,9 @@ export default function Account({
                 csrfToken: string;
                 user: AccountUser;
               }>('v1/auth/login', 'POST', {
-                email: d.get('email'),
+                ...(loginById && !register
+                  ? { publicId: d.get('publicId') }
+                  : { email: d.get('email') }),
                 password: d.get('password'),
                 transport: 'cookie',
               });
@@ -363,10 +367,24 @@ export default function Account({
               </label>
             </>
           )}
-          <label>
-            Email
-            <input name="email" type="email" autoComplete="email" required />
-          </label>
+          {loginById && !register ? (
+            <label key="publicId">
+              ID пользователя
+              <input
+                name="publicId"
+                inputMode="numeric"
+                autoComplete="username"
+                pattern="[1-9][0-9]{0,18}"
+                maxLength={19}
+                required
+              />
+            </label>
+          ) : (
+            <label key="email">
+              Email
+              <input name="email" type="email" autoComplete="email" required />
+            </label>
+          )}
           <label>
             Пароль
             <input
@@ -389,9 +407,21 @@ export default function Account({
             <Link href="/account/forgot-password">Забыли пароль?</Link>
           </p>
         )}
+        {!register && (
+          <Button
+            onClick={() => {
+              setPasswordVisible(false);
+              setNotice('');
+              setLoginById(!loginById);
+            }}
+          >
+            {loginById ? 'Войти по email' : 'Войти по ID'}
+          </Button>
+        )}
         <Button
           onClick={() => {
             setPasswordVisible(false);
+            setLoginById(false);
             setRegister(!register);
           }}
         >

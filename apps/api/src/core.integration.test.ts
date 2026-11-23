@@ -41,7 +41,7 @@ class CaptureDelivery extends VerificationDelivery {
 interface Session {
   sessionToken: string;
   csrfToken: string;
-  user: { id: string };
+  user: { id: string; public_id: string };
 }
 interface Entity {
   id: string;
@@ -349,6 +349,38 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           (await call('/admin/users', 'GET', undefined, owner)).status,
           403,
         );
+      },
+    );
+    await t.test(
+      'password login by public ID shares the email attempt limit',
+      async () => {
+        const email = 'id-login@example.test';
+        const password = 'correct-long-password';
+        const initial = await account('id-login', 'buyer');
+        const login = await ok<Session>('/auth/login', 'POST', {
+          publicId: initial.user.public_id,
+          password,
+          transport: 'bearer',
+        });
+        assert.equal(login.user.id, initial.user.id);
+        await pool.query('UPDATE rate_limits SET count=15 WHERE key=$1', [
+          'login:' + hash(email),
+        ]);
+        for (const identifier of [
+          { email },
+          { publicId: initial.user.public_id },
+        ]) {
+          const refused = await call('/auth/login', 'POST', {
+            ...identifier,
+            password,
+          });
+          assert.equal(refused.status, 401);
+        }
+        const invalid = await call('/auth/login', 'POST', {
+          publicId: '9223372036854775808',
+          password,
+        });
+        assert.equal(invalid.status, 400);
       },
     );
     await t.test(

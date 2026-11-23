@@ -64,13 +64,20 @@ export const registerSchema = z
     role: z.enum(['buyer', 'owner', 'agent', 'agency', 'developer']),
   })
   .strict();
-export const loginSchema = z
-  .object({
-    email: emailSchema,
-    password: z.string().max(128),
-    transport: z.enum(['cookie', 'bearer']).default('cookie'),
-  })
-  .strict();
+const passwordLoginFields = {
+  password: z.string().max(128),
+  transport: z.enum(['cookie', 'bearer']).default('cookie'),
+};
+export const loginSchema = z.union([
+  z.strictObject({ email: emailSchema, ...passwordLoginFields }),
+  z.strictObject({
+    publicId: z
+      .string()
+      .regex(/^[1-9][0-9]{0,18}$/)
+      .refine((value) => value.length < 19 || value <= '9223372036854775807'),
+    ...passwordLoginFields,
+  }),
+]);
 interface User {
   id: string;
   public_id: string;
@@ -186,16 +193,19 @@ export class AuthService {
   }
   async login(body: unknown, res: Response) {
     const input = parse(loginSchema, body);
+    const [user] = await ('email' in input
+      ? this.db.rows<User>('SELECT * FROM users WHERE email=$1', [input.email])
+      : this.db.rows<User>('SELECT * FROM users WHERE public_id=$1', [
+          input.publicId,
+        ]));
+    const rateIdentifier =
+      'email' in input ? input.email : (user?.email ?? 'id:' + input.publicId);
     const [counter] = await this.db.rows<{ count: number }>(
       `INSERT INTO rate_limits(key,count,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.count+1 END, reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING count`,
-      [`login:${hash(input.email)}`],
+      [`login:${hash(rateIdentifier)}`],
     );
     if (counter!.count > 15)
       throw new UnauthorizedException('Login temporarily unavailable');
-    const [user] = await this.db.rows<User>(
-      'SELECT * FROM users WHERE email=$1',
-      [input.email],
-    );
     const valid = await passwordMatches(
       input.password,
       user?.password_hash ?? `scrypt$32768$invalid$${'0'.repeat(128)}`,
