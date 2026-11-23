@@ -52,6 +52,27 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+test('shows and hides the password without submitting and masks it on mode change', async () => {
+  const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+  vi.stubGlobal('fetch', fetch);
+  render(<Account />);
+  const field = (await screen.findByLabelText('Пароль')) as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'synthetic-password' } });
+  expect(field.type).toBe('password');
+  const requests = fetch.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
+  expect(field.type).toBe('text');
+  expect(field.value).toBe('synthetic-password');
+  fireEvent.click(screen.getByRole('button', { name: 'Скрыть пароль' }));
+  expect(field.type).toBe('password');
+  fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Регистрация' }));
+  expect((screen.getByLabelText('Пароль') as HTMLInputElement).type).toBe(
+    'password',
+  );
+  expect(fetch.mock.calls).toHaveLength(requests);
+});
+
 for (const delayed of [false, true]) {
   test(`Account isolates private state across identities${delayed ? ' with an outstanding response' : ''}`, async () => {
     let identity = 'A';
@@ -111,6 +132,7 @@ for (const delayed of [false, true]) {
     fireEvent.change(screen.getByLabelText('Пароль'), {
       target: { value: 'synthetic-long-password' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Показать пароль' }));
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
     await screen.findByText('Identity B');
     if (delayed)
@@ -121,6 +143,10 @@ for (const delayed of [false, true]) {
     await screen.findByText('Напишите продавцу на странице объявления.');
     expect(screen.queryByText(privateMessage, { exact: false })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Переписка' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+    expect(
+      (await screen.findByLabelText<HTMLInputElement>('Пароль')).type,
+    ).toBe('password');
   });
 }
 

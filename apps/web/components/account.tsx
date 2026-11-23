@@ -74,6 +74,7 @@ export default function Account({
     [tab, setTab] = useState<Tab>('favorite'),
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
+    [passwordVisible, setPasswordVisible] = useState(false),
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
     [threads, setThreads] = useState<Thread[]>([]),
@@ -282,6 +283,7 @@ export default function Account({
           className="account-form panel"
           onSubmit={async (e) => {
             e.preventDefault();
+            setPasswordVisible(false);
             const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
             try {
@@ -367,12 +369,15 @@ export default function Account({
             Пароль
             <input
               name="password"
-              type="password"
+              type={passwordVisible ? 'text' : 'password'}
               autoComplete={register ? 'new-password' : 'current-password'}
               minLength={12}
               required
             />
           </label>
+          <Button onClick={() => setPasswordVisible(!passwordVisible)}>
+            {passwordVisible ? 'Скрыть пароль' : 'Показать пароль'}
+          </Button>
           <Button className="primary" type="submit">
             {register ? 'Создать и войти' : 'Войти'}
           </Button>
@@ -382,7 +387,12 @@ export default function Account({
             <Link href="/account/forgot-password">Забыли пароль?</Link>
           </p>
         )}
-        <Button onClick={() => setRegister(!register)}>
+        <Button
+          onClick={() => {
+            setPasswordVisible(false);
+            setRegister(!register);
+          }}
+        >
           {register ? 'Уже есть аккаунт' : 'Регистрация'}
         </Button>
         {notice && <p role="alert">{notice}</p>}
