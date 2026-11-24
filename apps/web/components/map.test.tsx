@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react';
 import { afterEach, expect, test, vi } from 'vitest';
 import MapPanel from './map';
+import { fitResultExtent } from '../lib/map-bounds';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../lib/client', () => ({ api }));
@@ -20,6 +21,16 @@ vi.mock('./map-canvas', () => ({
 afterEach(() => {
   cleanup();
   api.mockReset();
+});
+
+test('the initial narrow map leaves room for both full-width price markers', () => {
+  const extent: [number, number, number, number] = [37.61, 55.75, 37.7, 55.8];
+  for (const width of [348, 370]) {
+    const [west, , east] = fitResultExtent(extent, width);
+    const pixelsPerDegree = width / (east - west);
+    expect((extent[0] - west) * pixelsPerDegree).toBeGreaterThan(75);
+    expect((east - extent[2]) * pixelsPerDegree).toBeGreaterThan(75);
+  }
 });
 
 test('fits the complete filtered extent before zooming into a selected city', async () => {

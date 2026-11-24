@@ -4,7 +4,7 @@ import L from 'leaflet';
 import type { MapMarker } from '@raui/types/product';
 import { money } from '../lib/client';
 import { mapZoomTitles } from '../lib/labels';
-import { constrainViewport } from '../lib/map-bounds';
+import { constrainViewport, priceMarkerWidth } from '../lib/map-bounds';
 export default function MapCanvas({
   bounds,
   markers,
@@ -109,12 +109,14 @@ export default function MapCanvas({
       const icon = L.divIcon({
         className: 'price-marker',
         html: '<span data-count="' + marker.count + '">' + text + '</span>',
-        iconSize: [150, 44],
-        iconAnchor: [75, 22],
+        iconSize: [priceMarkerWidth, 44],
+        iconAnchor: [priceMarkerWidth / 2, 22],
       });
       const item = L.marker([marker.latitude, marker.longitude], {
         icon,
         keyboard: true,
+        // Focusing a price is a selection action; an automatic pan would replace the search.
+        autoPanOnFocus: false,
         title: text,
         alt: text,
       }).addTo(group);

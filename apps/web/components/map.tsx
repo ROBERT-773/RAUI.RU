@@ -1,6 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useEffectEvent, useState, useMemo } from 'react';
+import { useEffect, useEffectEvent, useState, useMemo, useRef } from 'react';
 import type {
   MapMarker,
   SearchDefinition,
@@ -26,6 +26,7 @@ export default function MapPanel({
   ) => void;
   onSelect: (ids: string[]) => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
   const [markers, setMarkers] = useState<MapMarker[]>([]),
     [error, setError] = useState(''),
     [requestError, setRequestError] = useState(''),
@@ -43,7 +44,7 @@ export default function MapPanel({
       : requestBounds;
   const focusResults = useEffectEvent(
     (extent: NonNullable<SearchMapResult['extent']>) => {
-      onBounds(fitResultExtent(extent));
+      onBounds(fitResultExtent(extent, panel.current?.clientWidth ?? 0));
     },
   );
   useEffect(() => {
@@ -97,7 +98,7 @@ export default function MapPanel({
     );
   }
   return (
-    <section aria-label="Карта результатов">
+    <section ref={panel} aria-label="Карта результатов">
       <p>Объявления на карте</p>
       <div className="map-controls">
         <Button

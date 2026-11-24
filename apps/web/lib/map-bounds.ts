@@ -1,6 +1,7 @@
 import type { SearchDefinition } from '@raui/types/product';
 
 type Bounds = NonNullable<SearchDefinition['bounds']>;
+export const priceMarkerWidth = 150;
 const allLocations: Bounds = [-180, -90, 180, 90];
 const countryOverview: Bounds = [19, 41, 180, 82];
 // Familiar starting views for an empty catalogue, never geographic search filters.
@@ -35,9 +36,16 @@ export function searchMapBounds(definition: SearchDefinition): Bounds {
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
-export function fitResultExtent([west, south, east, north]: Bounds): Bounds {
+export function fitResultExtent(
+  [west, south, east, north]: Bounds,
+  viewportWidth: number,
+): Bounds {
   // Give a single address a neighbourhood-sized viewport; keep outlying results visible.
-  const dx = Math.max((east - west) * 0.1, 0.012);
+  const markerMargin = priceMarkerWidth / 2 + 4; // Include the keyboard focus outline.
+  const availableWidth = viewportWidth - 2 * markerMargin;
+  const sideFraction =
+    availableWidth > 0 ? Math.max(0.1, markerMargin / availableWidth) : 0.1;
+  const dx = Math.max((east - west) * sideFraction, 0.012);
   const dy = Math.max((north - south) * 0.1, 0.008);
   return [
     Math.max(-180, west - dx),
