@@ -32,8 +32,25 @@ async function login(
     page.getByRole('heading', { name: heading, exact: true }),
   ).toBeVisible();
 }
-async function submitDraft(page: Page, draft: Locator, listingId: string) {
+async function prepareDraftPreview(
+  page: Page,
+  draft: Locator,
+  listingId: string,
+) {
   const photoInput = draft.getByLabel('Добавить фотографию', { exact: true });
+  await expect(
+    page.getByRole('button', { name: 'Отправить на модерацию', exact: true }),
+  ).toHaveCount(0);
+  await draft
+    .getByLabel('Описание', { exact: true })
+    .fill('Тестовое объявление для проверки публикации и поиска.');
+  const descriptionSaved = page.waitForResponse((value) =>
+    endpoint(value, 'PATCH', `/api/v1/listings/${listingId}`),
+  );
+  await draft
+    .getByRole('button', { name: 'Сохранить изменения', exact: true })
+    .click();
+  expect((await descriptionSaved).status()).toBe(200);
   for (let number = 1; number <= 5; number++) {
     await expect(photoInput).toBeEnabled();
     const uploaded = page.waitForResponse((value) =>
@@ -51,7 +68,7 @@ async function submitDraft(page: Page, draft: Locator, listingId: string) {
     if (number < 5)
       await expect(
         draft.getByRole('button', {
-          name: 'Отправить на модерацию',
+          name: 'Перейти к предпросмотру',
           exact: true,
         }),
       ).toBeDisabled();
@@ -72,25 +89,33 @@ async function submitDraft(page: Page, draft: Locator, listingId: string) {
     )
     .toBe(true);
   await draft
-    .getByLabel('Описание', { exact: true })
-    .fill('Тестовое объявление для проверки публикации и поиска.');
-  const descriptionSaved = page.waitForResponse((value) =>
-    endpoint(value, 'PATCH', `/api/v1/listings/${listingId}`),
-  );
-  await draft
-    .getByRole('button', { name: 'Сохранить изменения', exact: true })
-    .click();
-  expect((await descriptionSaved).status()).toBe(200);
-  await draft
     .getByRole('button', { name: 'Обновить состояние', exact: true })
     .click();
+  await draft
+    .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
+    .click();
+  const preview = page.getByRole('region', {
+    name: 'Сохранённые данные объявления',
+    exact: true,
+  });
   await expect(
-    draft.getByRole('button', {
-      name: 'Отправить на модерацию',
+    page.getByRole('heading', {
+      name: 'Предпросмотр объявления',
       exact: true,
     }),
-  ).toBeEnabled();
-  await draft
+  ).toBeVisible();
+  await expect(
+    preview.getByRole('img', { name: 'Фото в предпросмотре', exact: true }),
+  ).toHaveCount(5);
+  return preview;
+}
+
+async function submitReviewedDraft(
+  page: Page,
+  draft: Locator,
+  listingId: string,
+) {
+  await page
     .getByRole('button', { name: 'Отправить на модерацию', exact: true })
     .click();
   await expect(
@@ -235,7 +260,7 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     ).toBeVisible();
     await expect(
       draft.getByRole('button', {
-        name: 'Отправить на модерацию',
+        name: 'Перейти к предпросмотру',
         exact: true,
       }),
     ).toBeDisabled();
@@ -247,7 +272,8 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     // A reload proves the draft was persisted rather than held only in component state.
     await page.reload();
     await page.getByRole('button', { name: title, exact: true }).click();
-    await submitDraft(page, draft, listingId);
+    await prepareDraftPreview(page, draft, listingId);
+    await submitReviewedDraft(page, draft, listingId);
     expect((await visitor.request.get(`/listings/${listingId}`)).status()).toBe(
       404,
     );
@@ -527,7 +553,8 @@ test('agency creates its first organization and publishes a listing after modera
     const editor = page.locator('article.panel').filter({
       has: page.getByRole('heading', { name: title, exact: true }),
     });
-    await submitDraft(page, editor, draft.id);
+    await prepareDraftPreview(page, editor, draft.id);
+    await submitReviewedDraft(page, editor, draft.id);
     expect((await visitor.request.get(listingPath)).status()).toBe(404);
     await approveListing(await staffContext.newPage(), draft.id, title);
     expect((await visitor.goto(listingPath))?.status()).toBe(200);
@@ -555,7 +582,7 @@ test('agency creates its first organization and publishes a listing after modera
     await visitorContext.close();
   }
 });
-test('independent agent publishes from the agent cabinet and a guest finds the listing', async ({
+test('independent agent reopens an apartment sale draft, revises its preview and publishes it for guests', async ({
   page,
   browser,
 }, info) => {
@@ -592,12 +619,69 @@ test('independent agent publishes from the agent cabinet and a guest finds the l
     const editor = page.locator('article.panel').filter({
       has: page.getByRole('heading', { name: title, exact: true }),
     });
-    await submitDraft(page, editor, draft.id);
+    await page.reload();
+    await page.getByRole('button', { name: title, exact: true }).click();
+    const preview = await prepareDraftPreview(page, editor, draft.id);
+    await expect(
+      preview.getByText('11 000 000 ₽', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      preview.getByText('Москва, Тверская улица, 19', { exact: true }),
+    ).toBeVisible();
+    const beforeSubmit = await page.request.get(`/api/v1/listings/${draft.id}`);
+    expect(beforeSubmit.status()).toBe(200);
+    expect((await beforeSubmit.json()).status).toBe('draft');
+    expect((await visitor.request.get(listingPath)).status()).toBe(404);
+    await page
+      .getByRole('button', { name: 'Вернуться к редактированию', exact: true })
+      .click();
+    await expect(preview).toBeHidden();
+    await expect(
+      page.getByRole('button', { name: 'Отправить на модерацию', exact: true }),
+    ).toHaveCount(0);
+    const revisedDescription =
+      'Светлая квартира с отдельной кухней и окнами во двор.';
+    await editor.getByLabel('Цена, ₽', { exact: true }).fill('10650000');
+    await editor
+      .getByLabel('Описание', { exact: true })
+      .fill(revisedDescription);
+    await expect(
+      editor.getByRole('button', {
+        name: 'Перейти к предпросмотру',
+        exact: true,
+      }),
+    ).toBeDisabled();
+    const savedChanges = page.waitForResponse((response) =>
+      endpoint(response, 'PATCH', `/api/v1/listings/${draft.id}`),
+    );
+    await editor
+      .getByRole('button', { name: 'Сохранить изменения', exact: true })
+      .click();
+    expect((await savedChanges).status()).toBe(200);
+    await editor
+      .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
+      .click();
+    await expect(
+      preview.getByText('10 650 000 ₽', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      preview.getByText(revisedDescription, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      preview.getByRole('img', { name: 'Фото в предпросмотре', exact: true }),
+    ).toHaveCount(5);
+    await submitReviewedDraft(page, editor, draft.id);
     expect((await visitor.request.get(listingPath)).status()).toBe(404);
     await approveListing(await staffContext.newPage(), draft.id, title);
     expect((await visitor.goto(listingPath))?.status()).toBe(200);
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
+    ).toBeVisible();
+    await expect(
+      visitor.getByText(revisedDescription, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      visitor.getByText('10 650 000 ₽', { exact: true }).first(),
     ).toBeVisible();
     const searchPath =
       '/search?' +
@@ -705,7 +789,8 @@ for (const [
       const draft = page.locator('article.panel').filter({
         has: page.getByRole('heading', { name: title, exact: true }),
       });
-      await submitDraft(page, draft, id);
+      await prepareDraftPreview(page, draft, id);
+      await submitReviewedDraft(page, draft, id);
       expect((await visitor.request.get(path)).status()).toBe(404);
       await approveListing(await staff.newPage(), id, title);
       expect((await visitor.goto(path))?.status()).toBe(200);

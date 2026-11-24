@@ -414,6 +414,15 @@ test('new owner registers, saves a draft and publishes after moderation', async 
       .getByRole('button', { name: 'Обновить состояние', exact: true })
       .click();
     await listing
+      .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
+      .click();
+    await expect(
+      page.getByRole('heading', {
+        name: 'Предпросмотр объявления',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
       .getByRole('button', { name: 'Отправить на модерацию', exact: true })
       .click();
     await expect(
@@ -466,6 +475,16 @@ test('new owner registers, saves a draft and publishes after moderation', async 
       .click();
     expect((await update).status()).toBe(200);
     await listing
+      .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
+      .click();
+    const correctedPreview = page.getByRole('region', {
+      name: 'Сохранённые данные объявления',
+      exact: true,
+    });
+    await expect(
+      correctedPreview.getByText(correctedDescription, { exact: true }),
+    ).toBeVisible();
+    await page
       .getByRole('button', { name: 'Отправить на модерацию', exact: true })
       .click();
     await expect(

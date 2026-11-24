@@ -437,7 +437,7 @@ test('an existing apartment draft can save corrected areas without replacing oth
     'Заполните обязательные характеристики: Площадь кухни, м².',
   );
   const submit = screen.getByRole<HTMLButtonElement>('button', {
-    name: 'Отправить на модерацию',
+    name: 'Перейти к предпросмотру',
   });
   expect(submit.disabled).toBe(true);
   const areaInput = await screen.findByLabelText('Общая площадь, м² *');
@@ -660,7 +660,7 @@ test.each(['photos', 'description', 'price', 'characteristics'])(
     if (changed === 'characteristics')
       await screen.findByLabelText('Общая площадь *');
     const submit = await screen.findByRole<HTMLButtonElement>('button', {
-      name: 'Отправить на модерацию',
+      name: 'Перейти к предпросмотру',
     });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
@@ -694,7 +694,7 @@ test.each(['photos', 'description', 'price', 'characteristics'])(
   },
 );
 
-test.each([false, true])(
+test.each([null, 'processing', 'moderation'])(
   'submission advances with fresh versions, including a lost response: %s',
   async (lostResponse) => {
     setup();
@@ -709,14 +709,16 @@ test.each([false, true])(
         expect(input.version).toBe(version);
         status = input.status;
         version++;
-        if (lostResponse && status === 'moderation')
-          throw new Error('Connection lost');
+        if (status === lostResponse) throw new Error('Connection lost');
         return { ...listing, status, version };
       }
       return base(path, method, body, options);
     });
     render(<OwnerListings />);
     fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+    );
     fireEvent.click(
       await screen.findByRole('button', { name: 'Отправить на модерацию' }),
     );
@@ -742,6 +744,91 @@ test.each([false, true])(
     ).toBeNull();
   },
 );
+test.each(['listing', 'photos', 'property'])(
+  'changed %s after preview requires a second review before submission',
+  async (changed) => {
+    setup();
+    let changedAfterPreview = false;
+    const base = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path, ...args) => {
+      if (path === 'v1/listings/' + listing.id)
+        return {
+          ...listing,
+          property_id: 'p',
+          ...(changedAfterPreview && changed === 'listing'
+            ? { price: '9100000', version: 4 }
+            : {}),
+        };
+      if (path === 'v1/properties/p')
+        return {
+          id: 'p',
+          version: changedAfterPreview && changed === 'property' ? 2 : 1,
+          category_code: 'apartment',
+          attributes: {},
+        };
+      if (path === 'v1/categories/apartment/attributes') return [];
+      const result = await base(path, ...args);
+      if (
+        changedAfterPreview &&
+        changed === 'photos' &&
+        path.startsWith('v1/media/listing/') &&
+        Array.isArray(result)
+      )
+        return [...result].reverse();
+      return result;
+    });
+    render(<OwnerListings />);
+    fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+    );
+    const submit = await screen.findByRole('button', {
+      name: 'Отправить на модерацию',
+    });
+    changedAfterPreview = true;
+    fireEvent.click(submit);
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Объявление изменилось',
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Отправить на модерацию' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Перейти к предпросмотру' }),
+    ).toBeTruthy();
+    expect(
+      vi.mocked(api).mock.calls.some(([path]) => path.endsWith('/transitions')),
+    ).toBe(false);
+  },
+);
+
+test('a replay which returns an archived listing is not sent to moderation', async () => {
+  setup();
+  const base = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) =>
+    path.endsWith('/transitions')
+      ? { ...listing, status: 'archived', version: 6 }
+      : base(path, method, body, options),
+  );
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Отправить на модерацию' }),
+  );
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'Статус объявления изменился',
+  );
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path.endsWith('/transitions')),
+  ).toHaveLength(1);
+  expect(
+    screen.queryByRole('button', { name: 'Отправить на модерацию' }),
+  ).toBeNull();
+});
+
 test.each([4, 5, 21, 22])(
   'enforces publication photo limits for %i ready photos',
   async (count) => {
@@ -749,7 +836,7 @@ test.each([4, 5, 21, 22])(
     render(<OwnerListings />);
     fireEvent.click(await screen.findByRole('button', { name: listing.title }));
     const submit = await screen.findByRole<HTMLButtonElement>('button', {
-      name: 'Отправить на модерацию',
+      name: 'Перейти к предпросмотру',
     });
     expect(submit.disabled).toBe(count < 5 || count > 21);
     expect(
@@ -813,7 +900,7 @@ test('a batch that exceeds the photo limit leaves the final slot available', asy
   ).toBe(false);
 });
 
-test('the preview shows saved content while the description is being edited', async () => {
+test('the final step shows the saved offer and returns to its editor without submitting', async () => {
   setup();
   const base = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async (path, method, body, options) => {
@@ -831,7 +918,13 @@ test('the preview shows saved content while the description is being edited', as
   });
   render(<OwnerListings />);
   fireEvent.click(await screen.findByRole('button', { name: listing.title }));
-  fireEvent.click(await screen.findByText('Предпросмотр объявления'));
+  expect(
+    screen.queryByRole('button', { name: 'Отправить на модерацию' }),
+  ).toBeNull();
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  await screen.findByRole('button', { name: 'Отправить на модерацию' });
   const preview = within(
     screen.getByRole('region', { name: 'Сохранённые данные объявления' }),
   );
@@ -847,11 +940,22 @@ test('the preview shows saved content while the description is being edited', as
   expect(preview.getAllByRole('img').at(-1)?.getAttribute('alt')).toBe(
     'Планировка в предпросмотре',
   );
-  fireEvent.change(screen.getByLabelText('Описание'), {
-    target: { value: 'Новое описание квартиры' },
-  });
-  expect(preview.getByText(listing.description)).toBeTruthy();
-  expect(preview.queryByText('Новое описание квартиры')).toBeNull();
+  expect(screen.queryByRole('textbox', { name: 'Описание' })).toBeNull();
+  expect(document.activeElement?.textContent).toBe('Предпросмотр объявления');
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Вернуться к редактированию' }),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Отправить на модерацию' }),
+  ).toBeNull();
+  expect(
+    screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Описание' })
+      .value,
+  ).toBe(listing.description);
+  expect(document.activeElement?.textContent).toBe(listing.title);
+  expect(
+    vi.mocked(api).mock.calls.some(([path]) => path.endsWith('/transitions')),
+  ).toBe(false);
 });
 
 test('submission requires a saved description of at least fifteen characters', async () => {
@@ -866,7 +970,7 @@ test('submission requires a saved description of at least fifteen characters', a
   fireEvent.click(await screen.findByRole('button', { name: listing.title }));
   await screen.findByText(/сохраните описание длиной не менее 15 символов/);
   const submit = screen.getByRole<HTMLButtonElement>('button', {
-    name: 'Отправить на модерацию',
+    name: 'Перейти к предпросмотру',
   });
   expect(submit.disabled).toBe(true);
   fireEvent.change(screen.getByLabelText('Описание'), {
@@ -917,7 +1021,7 @@ test('a failed refresh after upload blocks the stale count until polling recover
       'Добавить фотографию',
     );
     const submit = screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Отправить на модерацию',
+      name: 'Перейти к предпросмотру',
     });
     fireEvent.change(upload, {
       target: {
@@ -1023,7 +1127,7 @@ test('processed photos unlock submission without a manual refresh', async () => 
     fireEvent.click(await screen.findByRole('button', { name: listing.title }));
     await screen.findByText('Фотография обрабатывается');
     const submit = screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Отправить на модерацию',
+      name: 'Перейти к предпросмотру',
     });
     expect(submit.disabled).toBe(true);
     await act(async () => {
@@ -1068,7 +1172,7 @@ test.each([false, true])(
     expect(
       (
         screen.getByRole('button', {
-          name: 'Отправить на модерацию',
+          name: 'Перейти к предпросмотру',
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
@@ -1324,7 +1428,7 @@ test('full quota keeps draft editing, media and moderation submission enabled', 
   expect(
     (
       (await screen.findByRole('button', {
-        name: 'Отправить на модерацию',
+        name: 'Перейти к предпросмотру',
       })) as HTMLButtonElement
     ).disabled,
   ).toBe(false);
