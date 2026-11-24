@@ -9,12 +9,14 @@ import { ConflictException } from '@nestjs/common';
 import { Pool } from 'pg';
 import sharp from 'sharp';
 import { AppModule } from './app.module';
+import { configure } from './bootstrap';
 import { type Actor, hash } from './common/security';
 import { Database } from './modules/database/database';
 import { migrate } from './modules/database/migrate';
 import { Listings } from './modules/listings/listings';
 import { readLastPublicPriceSnapshot } from './modules/listings/public-price-history';
 import { ObjectStorage } from './modules/media/storage';
+import { Organizations } from './modules/organizations/organizations';
 import { FeedFetcher } from './modules/professional/feed-fetch';
 import { FeedPhotoFetcher } from './modules/professional/feed-photos-fetch';
 import { ProfessionalFeeds } from './modules/professional/feeds';
@@ -24,7 +26,35 @@ import { TrustedFeedSources } from './modules/professional/trusted-feed-sources'
 const feedUrl = 'https://delivery.example.test/cian.xml';
 const replacementUrl = 'https://delivery.example.test/replacement.xml';
 const photoUrl = 'https://delivery.example.test/photo.png';
+const planUrl = 'https://delivery.example.test/plan.png';
+const secondPhotoUrl = 'https://delivery.example.test/second-photo.png';
+const yandexGallery = `<image>${photoUrl}</image><image>${secondPhotoUrl}</image>`;
 const description = 'Просторная квартира на Московской улице.';
+
+function yandexOffer(reference: string, address: string, gallery: string) {
+  return `<offer internal-id="${reference}">
+    <type>продажа</type><category>квартира</category><new-flat>да</new-flat><description>${description}</description>
+    <location><locality-name>Омск</locality-name><address>${address}</address><latitude>55.0</latitude><longitude>73.4</longitude></location>
+    <area><value>55</value><unit>кв. м</unit></area><kitchen-space><value>10</value></kitchen-space>
+    <rooms>2</rooms><price><value>9500000</value><currency>RUB</currency></price>${gallery}</offer>`;
+}
+function yandexFeed(...offers: string[]) {
+  return `<realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06">${offers.join('')}</realty-feed>`;
+}
+const partnerFeeds = {
+  yandex: yandexFeed(yandexOffer('Y42', 'Омск, Московская, 2', yandexGallery)),
+  avito: `<Ads formatVersion="3" target="Avito.ru"><Ad><Id>A42</Id><Category>Квартиры</Category>
+    <OperationType>Продам</OperationType><MarketType>Новостройка</MarketType><Description>${description}</Description>
+    <City>Казань</City><Address>Казань, Московская, 3</Address><Latitude>55.8</Latitude><Longitude>49.1</Longitude>
+    <Square>55</Square><KitchenSpace>10</KitchenSpace><Rooms>2</Rooms><Price>9500000</Price><Images><Image url="${photoUrl}"/></Images>
+  </Ad></Ads>`,
+  domclick: `<complexes><complex><id>ЖК42</id><name>ЖК Берег</name><address>Пермь, Московская, 4</address>
+    <latitude>58.0</latitude><longitude>56.3</longitude><images><image>${photoUrl}</image></images>
+    <buildings><building><id>1</id><floors>9</floors><flats><flat><flat_id>42</flat_id><floor>3</floor>
+    <area>55</area><kitchen_area>10</kitchen_area><room>2</room><description>${description}</description>
+    <price>9500000</price><plans><plan>${planUrl}</plan></plans></flat></flats></building></buildings>
+  </complex></complexes>`,
+};
 
 function cian(price: number, text = description) {
   return `<Feed><Feed_Version>2</Feed_Version><Object><ExternalId>flat-42</ExternalId>
@@ -48,7 +78,7 @@ function image(color: string) {
 test(
   'trusted XML publishes, updates public media and price, replays idempotently, and stops in-flight delivery on revocation',
   { timeout: 90_000 },
-  async () => {
+  async (t) => {
     assert.match(
       new URL(process.env.TEST_DATABASE_URL!).pathname,
       /^\/raui_test_[a-f0-9]{16}$/,
@@ -60,11 +90,19 @@ test(
     process.env.FEED_ALLOWED_HOSTS = 'delivery.example.test';
     let xml = cian(9_500_000),
       bytes = await image('#334477');
+    const planBytes = await image('#aaccff');
+    const partnerLinks = new Map<string, string>(
+      Object.entries(partnerFeeds).map(([provider, body]) => [
+        `https://delivery.example.test/${provider}.xml`,
+        body,
+      ]),
+    );
     let pausePhoto: (() => Promise<void>) | undefined;
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(FeedFetcher)
       .useValue({
         async fetch(url: string) {
+          if (partnerLinks.has(url)) return partnerLinks.get(url)!;
           assert.ok([feedUrl, replacementUrl].includes(url));
           return xml;
         },
@@ -72,19 +110,28 @@ test(
       .overrideProvider(FeedPhotoFetcher)
       .useValue({
         async fetch(url: string) {
+          if (url === planUrl || url === secondPhotoUrl)
+            return { bytes: planBytes, mime: 'image/png' };
           assert.equal(url, photoUrl);
           await pausePhoto?.();
           return { bytes, mime: 'image/png' };
         },
       })
       .compile();
+    const app = module.createNestApplication({
+      bodyParser: false,
+      logger: false,
+    });
+    configure(app);
     const db = module.get(Database),
       feeds = module.get(ProfessionalFeeds),
       imports = module.get(ProfessionalImports),
       trusted = module.get(TrustedFeedSources),
       listings = module.get(Listings),
       storage = module.get(ObjectStorage);
-    async function account(role: 'admin' | 'agent'): Promise<Actor> {
+    async function account(
+      role: 'admin' | 'agent' | 'agency' | 'developer',
+    ): Promise<Actor> {
       const id = randomUUID(),
         session = randomUUID();
       await db.pool.query(
@@ -132,20 +179,23 @@ test(
         { provider: 'cian', url: feedUrl },
         randomUUID(),
       );
-      const state = async () =>
+      const state = async (id = feed.id) =>
         (
           await db.rows<{ version: number; last_apply_run_id: string }>(
             'SELECT version,last_apply_run_id FROM professional_feed_definitions WHERE id=$1',
-            [feed.id],
+            [id],
           )
         )[0]!;
       const latest = async () =>
         imports.report(agent, null, feed.id, (await state()).last_apply_run_id);
-      async function apply() {
+      async function scheduleNow(id: string) {
         await db.pool.query(
           "UPDATE professional_feed_definitions SET next_run_at=now()-interval '1 second' WHERE id=$1",
-          [feed.id],
+          [id],
         );
+      }
+      async function apply() {
+        await scheduleNow(feed.id);
         assert.equal(await imports.once(), true);
         return latest();
       }
@@ -343,8 +393,225 @@ test(
       );
       assert.deepEqual(await current(), changed);
       assert.deepEqual(await storedKeys(), files);
+      await app.listen(0, '127.0.0.1');
+      const base = await app.getUrl();
+      const organizations = module.get(Organizations);
+      for (const [provider, role] of [
+        ['yandex', 'agency'],
+        ['avito', 'developer'],
+        ['domclick', 'developer'],
+      ] as const) {
+        await t.test(
+          `${role} publishes ${provider} gallery and repeat keeps its public listing and media IDs`,
+          async () => {
+            const owner = await account(role);
+            const org = await organizations.create(
+              owner,
+              { kind: role, name: `XML ${provider}` },
+              randomUUID(),
+            );
+            const initialManager =
+              provider === 'yandex' ? await account('agent') : owner;
+            if (initialManager !== owner)
+              await organizations.setMember(owner, org.id, {
+                userId: initialManager.id,
+                role: 'admin',
+                active: true,
+              });
+            const url = `https://delivery.example.test/${provider}.xml`;
+            const connected = await feeds.createFromLink(
+              initialManager,
+              org.id,
+              { provider, url },
+              randomUUID(),
+            );
+            const feedId = connected.feed.id;
+            assert.equal(await imports.once(), true);
+            const check = await imports.report(
+              owner,
+              org.id,
+              feedId,
+              connected.preview.runId,
+            );
+            assert.equal(check.stats.valid, 1);
+            await trusted.set(admin, feedId, {
+              trusted: true,
+              version: (await state(feedId)).version,
+            });
+            async function run() {
+              assert.equal(await imports.once(), true);
+              return imports.report(
+                owner,
+                org.id,
+                feedId,
+                (await state(feedId)).last_apply_run_id,
+              );
+            }
+            async function delivery(
+              outcome: 'created' | 'updated' | 'unchanged',
+            ) {
+              if (outcome !== 'created') await scheduleNow(feedId);
+              const result = await run();
+              assert.equal(result.status, 'succeeded');
+              assert.deepEqual(result.stats, {
+                ...stats(0, 0, 0),
+                [outcome]: 1,
+              });
+              const records = await db.rows<{ listing_id: string }>(
+                'SELECT listing_id FROM professional_feed_records WHERE feed_id=$1',
+                [feedId],
+              );
+              assert.equal(records.length, 1);
+              const id = records[0]!.listing_id;
+              const response = await fetch(`${base}/v1/listings/${id}/public`);
+              assert.equal(response.status, 200);
+              const card = (await response.json()) as {
+                id: string;
+                media: {
+                  id: string;
+                  kind: string;
+                  variants: { thumb: { url: string } };
+                }[];
+              };
+              assert.equal(card.id, id);
+              const kinds = {
+                domclick: ['photo', 'floor_plan'],
+                yandex: ['photo', 'photo'],
+                avito: ['photo'],
+              };
+              assert.deepEqual(
+                card.media.map((x) => x.kind),
+                kinds[provider],
+              );
+              for (const asset of card.media) {
+                const thumbnail = await fetch(
+                  new URL(asset.variants.thumb.url, base),
+                );
+                assert.equal(thumbnail.status, 200);
+                assert.equal(
+                  (
+                    await sharp(
+                      Buffer.from(await thumbnail.arrayBuffer()),
+                    ).metadata()
+                  ).format,
+                  'webp',
+                );
+              }
+              if (provider === 'yandex') {
+                const recent = await fetch(`${base}/v1/search/recent`);
+                assert.equal(recent.status, 200);
+                const { items } = (await recent.json()) as {
+                  items: { id: string; media: { id: string }[] }[];
+                };
+                assert.equal(
+                  items.find((item) => item.id === id)?.media[0]?.id,
+                  card.media[0]!.id,
+                );
+              }
+              return { id, media: card.media.map((x) => x.id) };
+            }
+            const first = await delivery('created');
+            assert.deepEqual(await delivery('unchanged'), first);
+            if (provider === 'yandex') {
+              const original = yandexOffer(
+                'Y42',
+                'Омск, Московская, 2',
+                `<image>${secondPhotoUrl}</image><image>${photoUrl}</image>`,
+              );
+              partnerLinks.set(url, yandexFeed(original));
+              assert.deepEqual(await delivery('updated'), {
+                id: first.id,
+                media: [...first.media].reverse(),
+              });
+              await organizations.setMember(owner, org.id, {
+                userId: initialManager.id,
+                role: 'member',
+                active: true,
+              });
+              partnerLinks.set(
+                url,
+                yandexFeed(
+                  original,
+                  yandexOffer(
+                    'Y43',
+                    'Омск, Московская, 5',
+                    `<image>${photoUrl}</image>`,
+                  ),
+                ),
+              );
+              const checked = await feeds.createFromLink(
+                owner,
+                org.id,
+                { provider },
+                randomUUID(),
+              );
+              assert.equal(checked.feed.id, feedId);
+              assert.equal(checked.feed.trusted, true);
+              assert.equal(await imports.once(), true);
+              const preview = await imports.report(
+                owner,
+                org.id,
+                feedId,
+                checked.preview.runId,
+              );
+              assert.equal(preview.stats.valid, 2);
+              await scheduleNow(feedId);
+              const next = await run();
+              assert.equal(next.status, 'succeeded');
+              assert.equal(next.stats.created, 1);
+              assert.equal(next.stats.unchanged, 1);
+              const [job] = await db.rows<{ requested_by: string }>(
+                'SELECT requested_by FROM professional_import_runs WHERE id=$1',
+                [next.id],
+              );
+              assert.equal(job?.requested_by, owner.id);
+              const published = await db.rows<{
+                id: string;
+                seller_id: string;
+                external_reference: string;
+              }>(
+                'SELECT l.id,l.seller_id,r.external_reference FROM professional_feed_records r JOIN listings l ON l.id=r.listing_id WHERE r.feed_id=$1 ORDER BY r.external_reference',
+                [feedId],
+              );
+              assert.equal(published.length, 2);
+              assert.deepEqual(published[0], {
+                id: first.id,
+                seller_id: initialManager.id,
+                external_reference: 'Y42',
+              });
+              assert.equal(published[1]!.external_reference, 'Y43');
+              assert.equal(published[1]!.seller_id, owner.id);
+              const newCard = await fetch(
+                `${base}/v1/listings/${published[1]!.id}/public`,
+              );
+              assert.equal(newCard.status, 200);
+              assert.equal(
+                ((await newCard.json()) as { id: string }).id,
+                published[1]!.id,
+              );
+            }
+            if (provider === 'domclick') {
+              // Domclick's supported flat-level plan does not satisfy the photo requirement on its own.
+              partnerLinks.set(
+                url,
+                partnerFeeds.domclick.replace(
+                  `<images><image>${photoUrl}</image></images>`,
+                  '',
+                ),
+              );
+              await scheduleNow(feedId);
+              const rejected = await run();
+              assert.equal(rejected.stats.quarantined, 1);
+              assert.deepEqual(
+                (await listings.published(first.id)).media.map((x) => x.id),
+                first.media,
+              );
+            }
+          },
+        );
+      }
     } finally {
-      await module.close();
+      await app.close();
       if (previousHosts === undefined) delete process.env.FEED_ALLOWED_HOSTS;
       else process.env.FEED_ALLOWED_HOSTS = previousHosts;
     }

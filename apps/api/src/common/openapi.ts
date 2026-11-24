@@ -74,7 +74,7 @@ const linkRun = object({
     .string()
     .nullable()
     .describe(
-      'Safe failure code. feed_provider_mismatch_<provider> identifies the detected format (generic for unmapped XML); feed_host_not_approved requires administrator approval.',
+      'Safe failure code. feed_provider_mismatch_<provider> identifies the detected format (generic for unmapped XML); feed_host_not_approved requires administrator approval. snapshot_unavailable means a partial run from an older worker must be replaced by a new check.',
     ),
 });
 const linkItem = object({

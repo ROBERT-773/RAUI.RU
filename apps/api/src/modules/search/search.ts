@@ -310,7 +310,7 @@ export class Search {
                     FROM media m
                     WHERE m.listing_id = public.id AND m.state = 'ready'
                       AND m.kind = 'photo' AND m.variants ? 'small'
-                    ORDER BY m.created_at, m.id LIMIT 1
+                    ORDER BY m.feed_photo_position NULLS LAST, m.created_at, m.id LIMIT 1
                   ), '[]'::jsonb) AS media
            FROM scoped_listings public
            WHERE ($2::text IS NULL OR public.region_code = $2)
@@ -355,7 +355,7 @@ export class Search {
          SELECT m.id FROM media m
          WHERE m.listing_id=l.id AND m.state='ready' AND m.kind='photo'
            AND m.variants ? 'small'
-         ORDER BY m.created_at,m.id LIMIT 1
+         ORDER BY m.feed_photo_position NULLS LAST,m.created_at,m.id LIMIT 1
        ) photo ON true
        WHERE l.published_at >= now() - interval '14 days'
          AND l.published_at <= now()

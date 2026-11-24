@@ -116,7 +116,7 @@ const pages = z
   .strict();
 @Injectable()
 export class ProfessionalImports {
-  private nextPhotoCleanup = 0;
+  private nextCleanup = 0;
   constructor(
     private readonly db: Database,
     private readonly organizations: Organizations,
@@ -349,6 +349,8 @@ export class ProfessionalImports {
         `UPDATE professional_import_jobs j SET state='pending',attempts=0,available_at=now(),last_error=NULL
          FROM professional_import_runs r JOIN professional_feed_definitions f ON f.id=r.feed_id
          WHERE r.id=j.run_id AND j.run_id=$1 AND r.feed_id=$2 AND j.state='dead'
+         AND (j.payload IS NOT NULL OR NOT EXISTS (
+           SELECT 1 FROM professional_import_items i WHERE i.run_id=j.run_id))
          AND (r.mode<>'apply' OR r.source_version IS NULL OR
               (f.active AND f.publication_approved_at IS NOT NULL AND f.version=r.source_version AND f.last_apply_run_id=r.id))
          RETURNING j.run_id`,
@@ -429,9 +431,20 @@ export class ProfessionalImports {
     });
   }
   async once() {
-    if (Date.now() >= this.nextPhotoCleanup) {
-      this.nextPhotoCleanup = Date.now() + 60_000;
+    if (Date.now() >= this.nextCleanup) {
+      this.nextCleanup = Date.now() + 60_000;
       await this.photos.cleanup();
+      // Dead deliveries retain their private snapshot only while it can be resumed.
+      await this.db.pool.query(`WITH obsolete AS (
+        SELECT j.run_id FROM professional_import_jobs j
+        JOIN professional_import_runs r ON r.id=j.run_id
+        JOIN professional_feed_definitions f ON f.id=r.feed_id
+        WHERE j.state='dead' AND j.payload IS NOT NULL AND r.source_version IS NOT NULL
+          AND (r.stats->>'sourceHash' IS DISTINCT FROM encode(sha256(convert_to(f.transport->>'url','UTF8')),'hex')
+          OR (r.mode='apply' AND (NOT f.active OR f.publication_approved_at IS NULL
+              OR f.version<>r.source_version OR f.last_apply_run_id IS DISTINCT FROM r.id)))
+        ORDER BY j.run_id LIMIT 48 FOR UPDATE OF j SKIP LOCKED)
+        UPDATE professional_import_jobs j SET payload=NULL FROM obsolete WHERE j.run_id=obsolete.run_id`);
     }
     await this.schedule();
     const job = await this.db.transaction(async (sql) => {
@@ -472,6 +485,18 @@ export class ProfessionalImports {
         throw new ForbiddenException();
       if (job.source_hash && hash(feed.transport.url ?? '') !== job.source_hash)
         throw new ConflictException('Feed URL changed');
+      const [progress] = await this.db.rows<{ completed: string[] }>(
+        `UPDATE professional_import_jobs j SET lease_until=now()+interval '60 seconds'
+         WHERE j.run_id=$1 AND j.lease_token=$2 AND j.lease_until>now()
+         RETURNING ARRAY(SELECT i.external_reference FROM professional_import_items i WHERE i.run_id=j.run_id) AS completed`,
+        [job.run_id, job.lease_token],
+      );
+      if (!progress) return true;
+      const processed = new Set(progress.completed);
+      // A partial delivery from an older worker may have lost its snapshot.
+      // A fresh download would mix two revisions in the same report.
+      if (job.payload === null && processed.size)
+        throw new ConflictException('Import snapshot unavailable');
       const payload =
         job.payload ??
         parseFeed(
@@ -480,11 +505,13 @@ export class ProfessionalImports {
           feed.mapping,
           feed.transport.provider,
         );
-      if (!job.payload)
-        await this.db.pool.query(
+      if (job.payload === null) {
+        const saved = await this.db.pool.query(
           'UPDATE professional_import_jobs SET payload=$3 WHERE run_id=$1 AND lease_token=$2 AND lease_until>now()',
           [job.run_id, job.lease_token, JSON.stringify(payload)],
         );
+        if (!saved.rowCount) return true;
+      }
       const seen = new Set<string>();
       const geo = new FeedGeocoding(this.geocoder);
       for (let i = 0; i < payload.length; i++) {
@@ -506,6 +533,7 @@ export class ProfessionalImports {
         const logKey = duplicate
           ? `duplicate:${i}:${hash(reference)}`
           : reference;
+        if (processed.has(logKey)) continue;
         const resolved =
           feed.format === 'xml' && feed.transport.kind === 'https' && !duplicate
             ? await geo.resolve(raw)
@@ -572,36 +600,37 @@ export class ProfessionalImports {
       const changed =
         failure instanceof ConflictException &&
         failure.message === 'Feed URL changed';
+      const missingSnapshot =
+        failure instanceof ConflictException &&
+        failure.message === 'Import snapshot unavailable';
       const invalid = failure instanceof BadRequestException;
-      const permanent = Boolean(
-        job.source_hash &&
-        (changed || invalid || failure instanceof ForbiddenException),
-      );
-      const code = !job.source_hash
-        ? 'import_failed'
-        : changed
-          ? 'source_changed'
-          : failure instanceof FeedLinkError
-            ? failure.code
-            : invalid
-              ? 'invalid_feed'
-              : failure instanceof ForbiddenException
-                ? 'access_revoked'
-                : 'source_unavailable';
+      const permanent =
+        missingSnapshot ||
+        Boolean(
+          job.source_hash &&
+          (changed || invalid || failure instanceof ForbiddenException),
+        );
+      const code = missingSnapshot
+        ? 'snapshot_unavailable'
+        : !job.source_hash
+          ? 'import_failed'
+          : changed
+            ? 'source_changed'
+            : failure instanceof FeedLinkError
+              ? failure.code
+              : invalid
+                ? 'invalid_feed'
+                : failure instanceof ForbiddenException
+                  ? 'access_revoked'
+                  : 'source_unavailable';
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
           `UPDATE professional_import_jobs SET state=CASE WHEN $3::boolean OR attempts>=5 THEN 'dead' ELSE 'pending' END,
            lease_token=NULL,lease_until=NULL,last_error=$4,
-           payload=CASE WHEN $5::boolean AND ($3::boolean OR attempts>=5) THEN NULL ELSE payload END,
+           payload=CASE WHEN $3::boolean THEN NULL ELSE payload END,
            available_at=now()+interval '1 second'*LEAST(3600,30*power(2,attempts))
-           WHERE run_id=$1 AND lease_token=$2 RETURNING state`,
-          [
-            job.run_id,
-            job.lease_token,
-            permanent,
-            code,
-            Boolean(job.source_hash),
-          ],
+           WHERE run_id=$1 AND lease_token=$2 AND lease_until>now() RETURNING state`,
+          [job.run_id, job.lease_token, permanent, code],
         );
         if (result.rows[0]?.state === 'dead') {
           if (approvedRun(job)) {
@@ -641,12 +670,6 @@ export class ProfessionalImports {
     let issue: string | undefined;
     if (item.success && !duplicate && !coordinateError) {
       try {
-        // Save completed rows across worker restarts; retrieving external photos can be expensive.
-        const { rowCount } = await this.db.pool.query(
-          'SELECT 1 FROM professional_import_items WHERE run_id=$1 AND external_reference=$2',
-          [job.run_id, key],
-        );
-        if (rowCount) return;
         images = await this.photos.prepare(item.data.photos ?? [], async () => {
           const { rowCount: held } = await this.db.pool.query(
             `UPDATE professional_import_jobs j SET lease_until=now()+interval '60 seconds' FROM professional_feed_definitions f
@@ -707,9 +730,16 @@ export class ProfessionalImports {
       const [enabled] = await this.db.rows<{
         publication_approved_at: Date | null;
       }>(
-        `SELECT publication_approved_at FROM professional_feed_definitions WHERE id=$1 AND active AND (
-          $2::integer IS NULL OR (version=$2 AND publication_approved_at IS NOT NULL)) FOR SHARE`,
-        [feed.id, approvedRun(job) ? job.source_version : null],
+        `SELECT f.publication_approved_at FROM professional_feed_definitions f WHERE f.id=$1 AND f.active AND (
+          $2::integer IS NULL OR (f.version=$2 AND f.publication_approved_at IS NOT NULL AND f.last_apply_run_id=$3
+          AND EXISTS(SELECT 1 FROM users u WHERE u.id=$4 AND u.active AND u.registration_approval_state='approved'
+            AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('agent','agency','developer')))) FOR SHARE OF f`,
+        [
+          feed.id,
+          approvedRun(job) ? job.source_version : null,
+          job.run_id,
+          actor.id,
+        ],
         sql,
       );
       if (!enabled) throw new ForbiddenException();

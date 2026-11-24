@@ -27,6 +27,10 @@ type Rejected = {
   errors: { message: string }[];
 };
 const failureHints = new Map([
+  [
+    'snapshot_unavailable',
+    'Сохранённая версия выгрузки недоступна. Запустите новую проверку ссылки.',
+  ],
   ['feed_host_not_approved', feedHostApprovalHint],
   [
     'feed_encoding_invalid',

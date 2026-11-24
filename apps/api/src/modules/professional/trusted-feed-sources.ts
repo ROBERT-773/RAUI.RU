@@ -139,13 +139,32 @@ export class TrustedFeedSources {
 
   // The caller holds the source row lock. Each job records the approval revision it may use.
   async enqueue(sql: Sql, feed: Link) {
+    let operator = feed.created_by;
+    if (feed.organization_id) {
+      // A new manager takes responsibility for future imports by checking the current link.
+      // Existing listings keep their original seller and publication eligibility checks.
+      const [manager] = await this.db.rows<{ user_id: string }>(
+        `SELECT m.user_id FROM memberships m JOIN users u ON u.id=m.user_id
+         WHERE m.organization_id=$1 AND m.active AND m.role IN ('owner','admin')
+           AND u.active AND u.role IN ('agent','agency','developer') AND u.registration_approval_state='approved'
+           AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL
+           AND (m.user_id=$2 OR m.user_id=(
+             SELECT r.requested_by FROM professional_import_runs r WHERE r.feed_id=$3 AND r.mode='dry_run'
+             AND r.source_version IN ($4::integer,$4::integer-1) AND r.status IN ('succeeded','quarantined')
+             AND (r.stats->>'valid')::integer>0 ORDER BY r.created_at DESC,r.id DESC LIMIT 1))
+         ORDER BY (m.user_id=$2) DESC LIMIT 1`,
+        [feed.organization_id, feed.created_by, feed.id, feed.version],
+        sql,
+      );
+      operator = manager?.user_id ?? operator;
+    }
     const [run] = await this.db.rows<{ id: string }>(
       `INSERT INTO professional_import_runs(feed_id,organization_id,requested_by,mode,status,stats,source_version,created_at)
        VALUES($1,$2,$3,'apply','running',$4,$5,clock_timestamp()) RETURNING id`,
       [
         feed.id,
         feed.organization_id,
-        feed.created_by,
+        operator,
         JSON.stringify({
           stage: 'queued',
           sourceHash: hash(feed.transport.url!),
@@ -167,7 +186,7 @@ export class TrustedFeedSources {
       'professional.feed.scheduled',
       'professional_import_run',
       run!.id,
-      { feedId: feed.id, version: feed.version },
+      { feedId: feed.id, version: feed.version, operatorId: operator },
     );
   }
 }
