@@ -1,0 +1,134 @@
+name: Sealed private-stage image for RAUI
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [feat/manual-rental-terms]
+permissions:
+  contents: read
+jobs:
+  sealed-stage-image:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'build/private-stage-ec55ab85'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      SOURCE_REVISION: ec55ab85e41f0a6f882ec2008cb57d4bfeba47f1
+      SOURCE_TREE: d7c4de20b10779b100c2eb65ada4cbaae83b9f4a
+      SOURCE_ARCHIVE_SHA256: 9a33b7684ee6d8ffc451cb03bd8a4ecfb932ff2485cdc9bc3e79f3af72de4610
+      SITE_URL: https://127.0.0.1:3543
+      TAG: raui-runtime:prepared-rental-ec55ab8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REVISION }}
+          persist-credentials: false
+      - name: Verify the pinned source and rebuild the approved archive
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          cd "$GITHUB_WORKSPACE"
+          git -c core.autocrlf=true -c tar.umask=0002 archive --format=tar --mtime=@1795546323 "$SOURCE_TREE" > "$RUNNER_TEMP/source.tar"
+          echo "922e905706185396519b95a110263338e0979bdea80474f1def0deadb4a1c314  $RUNNER_TEMP/source.tar" | sha256sum -c -
+          python3 - <<'PY'
+          import os, pathlib, zlib
+          d = pathlib.Path(os.environ['RUNNER_TEMP'])
+          t = (d / 'source.tar').read_bytes()
+          z = zlib.compressobj(6, zlib.DEFLATED, 31)
+          g = bytearray(z.compress(t) + z.flush())
+          g[9] = 3
+          (d / 'source.tar.gz').write_bytes(g)
+          PY
+          echo "$SOURCE_ARCHIVE_SHA256  $RUNNER_TEMP/source.tar.gz" | sha256sum -c -
+      - name: Build the canonical Dockerfile with the stage origin
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -f infra/runtime/Dockerfile \
+            --build-arg SOURCE_REVISION="$SOURCE_REVISION" --build-arg SOURCE_STATE=committed \
+            --build-arg SITE_URL="$SITE_URL" --build-arg DEPLOYMENT_ENV=staging \
+            --label raui.source-tree="$SOURCE_TREE" --label raui.archive-sha256="$SOURCE_ARCHIVE_SHA256" \
+            --iidfile "$RUNNER_TEMP/image-id" -t "$TAG" - < "$RUNNER_TEMP/source.tar.gz"
+      - name: Verify immutable image, baked origin and offline HTTP
+        run: |
+          set -euo pipefail
+          image=$(cat "$RUNNER_TEMP/image-id")
+          test "$(docker image inspect -f '{{.Id}}' "$TAG")" = "$image"
+          docker image inspect "$image" > "$RUNNER_TEMP/image-metadata.json"
+          python3 - <<'PY'
+          import os, pathlib, json
+          m = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'image-metadata.json').read_text())[0]
+          expected = {'org.opencontainers.image.revision': os.environ['SOURCE_REVISION'], 'raui.source-tree': os.environ['SOURCE_TREE'], 'raui.archive-sha256': os.environ['SOURCE_ARCHIVE_SHA256'], 'raui.source-state': 'committed', 'raui.site-url': os.environ['SITE_URL'], 'raui.deployment-env':'staging'}
+          assert all(m['Config']['Labels'].get(k) == v for k, v in expected.items())
+          assert m['Os'] == 'linux' and m['Architecture'] == 'amd64'
+          PY
+          test "$(docker run --rm --network none --entrypoint cat "$image" /app/site-origin)" = "$SITE_URL"
+          test "$(docker run --rm --network none --entrypoint cat "$image" /app/deployment-env)" = staging
+          docker run --rm --network none --entrypoint node "$image" /app/scripts/runtime-image-check.mjs
+          name="raui-closed-http-${GITHUB_RUN_ID}"
+          docker run -d --name "$name" --network none -e PORT=3000 "$image" web >/dev/null
+          trap 'docker rm -f "$name" >/dev/null' EXIT
+          docker exec "$name" node --input-type=module -e '
+            import assert from "node:assert/strict";
+            const u="http://127.0.0.1:3000";
+            let ok=false;
+            for(let i=0;i<60;i++){try{const r=await fetch(u+"/health");const x=await r.json();if(r.ok&&x.service==="web"&&x.status==="ok"){ok=true;break}}catch{} await new Promise(r=>setTimeout(r,500));}
+            assert.ok(ok);
+            const r=await fetch(u+"/robots.txt");assert.equal(r.status,200);assert.ok((await r.text()).includes("https://127.0.0.1:3543/sitemap.xml"));
+          '
+      - name: Seal image and receipt for the stage recipient
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$RUNNER_TEMP"
+          cat > recipient.pem <<'CERT'
+          -----BEGIN CERTIFICATE-----
+          MIID4TCCAkmgAwIBAgIJAJht3hS8neFkMA0GCSqGSIb3DQEBCwUAMDAxLjAsBgNV
+          BAMTJVJBVUkgdGVtcG9yYXJ5IHN0YWdpbmcgYnVpbGQgZWM1NWFiODUwHhcNMjYx
+          MTI0MTk0MDIwWhcNMjYxMjAxMTk0NTIwWjAwMS4wLAYDVQQDEyVSQVVJIHRlbXBv
+          cmFyeSBzdGFnaW5nIGJ1aWxkIGVjNTVhYjg1MIIBojANBgkqhkiG9w0BAQEFAAOC
+          AY8AMIIBigKCAYEAyXjqkTCby4izpU37f9RKWOCJ12zLpqVSALIvkzEqLYgqzTjt
+          y/W6U0iDqxvSv7fhEQslk6e1FKKs0lu/QxJ3+OVtn0EJqU/WW96Hih7jxD8F6fP1
+          9SKRxq/7aK3Doy1v1SRet3vuQoq5oO2cvoOT1didS7hDrL+HtVS2R6LERfU5p6I8
+          R8NiO/F0jWX2QcKIhVBacPWjpO/8l+GM06Q2f1VZXvRmeZeAru7BSWYs6pHLKqur
+          LCxE4FJLNfFMr6YbwNFKei/UTk6LrMUr2Cpv9jCPi1VBzHRCRo4t4DebyL8rQkdU
+          PbK4kE5bbaqBrBKKdPSKLDZEuflZutAJvOfjp4R6pcgKDHrvMKb2R5gdcYLgu1Mm
+          maJ5GN5or7JgrScNUT8R+qVjAfyPXMdWmLH/k4ajEnEqmV8divQE+e+6xFK/cK5t
+          hxzzvKsPhIxqdwGSK8Tj56MqDtSZ6PMTShkbsllBjuL/l6PdP2SsWp6D/hmexP4p
+          mg7Xl94mGxLsX7gxAgMBAAEwDQYJKoZIhvcNAQELBQADggGBAFkSRYbhken0vhGY
+          dHKuXsvmwYUpADDFslCtubeuHTX6WWYxpEbUc6IrkT92YmySBLIkSgRgoXKAe+/T
+          ld96otNDEQmL1Pyeh9KzUeuvuC2TP6THr2MdVGXGczRaf6E27JlwkEAOpcg+HHuO
+          3MwABFhO9EkdD3JBYoFyDlrpOG12sPOomdQNYqDd5oEyBPkrmvV/S35mxg4aKNZd
+          00WqVWk3W+VYBlVFetgy1651plezotmT0K9YoKbfcDQSBaL3cA2RsmlBpPRvPnfY
+          PW0ivM4vAr72VJgAEQGWmHRqt8bfM5qoUDG78XCxCpBS2dQBf0K8bUtdFB3Zm8N+
+          MMi0tudu4e/jtKqLhfZF9NOr85gg+tZXnFcIDGBLf0t32jEHvI0A/e9Y+/KfBHmv
+          2cHxTnVM//gl448zq0bWNzk11CtbiMx4UwZ/yghue7cRZ5Zyz1CS+2Qe9UYUdszE
+          Jj4B8OQ4/cps2t7tiMOUVKpQMQVf8apDJgxhAN96mvZqNp2hkQ==
+          -----END CERTIFICATE-----
+          CERT
+          docker save -o image.tar "$TAG"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          p = pathlib.Path('.')
+          with tarfile.open('image.tar') as t:
+              manifests = json.load(t.extractfile('manifest.json'))
+              assert len(manifests) == 1 and os.environ['TAG'] in manifests[0]['RepoTags']
+              cfg = t.extractfile(manifests[0]['Config']).read()
+              cfg_digest = 'sha256:' + hashlib.sha256(cfg).hexdigest()
+              labels = json.loads(cfg)['config']['Labels']
+              assert labels['org.opencontainers.image.revision'] == os.environ['SOURCE_REVISION']
+              assert labels['raui.archive-sha256'] == os.environ['SOURCE_ARCHIVE_SHA256']
+          with open('image.tar','rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
+          receipt={'version':1,'sourceRevision':os.environ['SOURCE_REVISION'],'sourceTree':os.environ['SOURCE_TREE'],'sourceArchiveSha256':os.environ['SOURCE_ARCHIVE_SHA256'],'siteUrl':os.environ['SITE_URL'],'imageId':(p/'image-id').read_text().strip(),'configDigest':cfg_digest,'dockerArchiveSha256':digest,'runId':os.environ['GITHUB_RUN_ID'],'imageContract':'passed','httpHealthAndRobots':'passed','deployment':'not_executed'}
+          (p/'receipt.json').write_text(json.dumps(receipt,sort_keys=True)+'\n')
+          PY
+          tar -cf - image.tar receipt.json | gzip -2 > private-bundle.gz
+          openssl cms -encrypt -binary -outform DER -aes-256-gcm -recip recipient.pem \
+            -keyopt rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256 \
+            -in private-bundle.gz -out private-stage.cms
+          sha256sum private-stage.cms
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sealed-private-stage-ec55ab85
+          path: ${{ runner.temp }}/private-stage.cms
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
