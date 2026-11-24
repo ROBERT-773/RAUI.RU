@@ -187,6 +187,12 @@ test('Phase 3 real PostgreSQL/PostGIS/OpenSearch HTTP acceptance', async (t) => 
           regionCode: 'moscow_oblast',
           bounds: [37, 55, 39, 57],
         });
+        assert.deepEqual(map.data.extent, [37.7, 55.8, 37.7, 55.8]);
+        const broad = await call('search/map', 'POST', {
+          bounds: [-180, -90, 180, 90],
+          limit: 1,
+        });
+        assert.deepEqual(broad.data.extent, [37.61, 55.75, 38.5, 56.5]);
         assert.deepEqual(
           (map.data.markers as { listingIds: string[] }[]).flatMap(
             (x) => x.listingIds,
@@ -229,6 +235,11 @@ test('Phase 3 real PostgreSQL/PostGIS/OpenSearch HTTP acceptance', async (t) => 
           ids(await call('search', 'POST', { regionCode: 'moscow' })),
           [],
         );
+        const hidden = await call('search/map', 'POST', {
+          regionCode: 'moscow',
+          bounds: [-180, -90, 180, 90],
+        });
+        assert.equal(hidden.data.extent, null);
         while (await search.sync()) {
           /* replay changed address */
         }

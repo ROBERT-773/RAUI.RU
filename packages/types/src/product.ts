@@ -60,6 +60,13 @@ export interface MapMarker {
   minPrice: number;
   listingIds: string[];
 }
+export interface SearchMapResult {
+  markers: MapMarker[];
+  matched: number;
+  truncated: boolean;
+  /** West, south, east, north of all eligible results, or null for empty/partial results. */
+  extent?: NonNullable<SearchDefinition['bounds']> | null;
+}
 export type AnalyticsEvent =
   | { type: 'search_performed'; resultCount: number }
   | {

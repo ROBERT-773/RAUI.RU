@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
-import { searchMapBounds } from '../lib/map-bounds';
 import AdvancedFilters, { advancedDefinition } from './advanced-filters';
 import { Card } from './card';
 import LocationInput from './location-input';
@@ -211,9 +210,14 @@ function SearchView({
               advanced.attributes.rental_minimum_nights = { max: nights };
             }
           }
+          const locality =
+            String(data.get('locality') ?? '').trim() || undefined;
+          const next = { ...definition };
+          if (locality !== definition.locality && !definition.polygon)
+            delete next.bounds;
           setNotice('');
           update({
-            ...definition,
+            ...next,
             ...advanced,
             q: String(data.get('q') ?? ''),
             category: String(data.get('category') || '') || undefined,
@@ -223,7 +227,7 @@ function SearchView({
               ...(data.get('min') ? { min: Number(data.get('min')) } : {}),
               ...(data.get('max') ? { max: Number(data.get('max')) } : {}),
             },
-            locality: String(data.get('locality') || '') || undefined,
+            locality,
             attributes: {
               ...advanced.attributes,
               ...Object.fromEntries(
@@ -497,16 +501,7 @@ function SearchView({
         <Button
           aria-pressed={mode === 'map'}
           onClick={() => {
-            update(
-              {
-                ...definition,
-                bounds: searchMapBounds(
-                  definition.regionCode,
-                  definition.bounds,
-                ),
-              },
-              'map',
-            );
+            update(definition, 'map');
             track({ type: 'mode_changed', mode: 'map' });
           }}
         >

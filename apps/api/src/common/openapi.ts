@@ -1465,6 +1465,58 @@ export function enrichOpenApi(document: OpenAPIObject) {
           },
         };
       }
+      if (operationId === 'post /v1/search/map') {
+        operation.responses['201'] = {
+          description:
+            'Map markers for eligible public listings in the requested area',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['markers', 'matched', 'truncated'],
+                properties: {
+                  markers: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: [
+                        'id',
+                        'count',
+                        'longitude',
+                        'latitude',
+                        'minPrice',
+                        'listingIds',
+                      ],
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        count: { type: 'integer', minimum: 1 },
+                        longitude: { type: 'number' },
+                        latitude: { type: 'number' },
+                        minPrice: { type: 'number' },
+                        listingIds: {
+                          type: 'array',
+                          items: { type: 'string', format: 'uuid' },
+                        },
+                      },
+                    },
+                  },
+                  matched: { type: 'integer', minimum: 0 },
+                  truncated: { type: 'boolean' },
+                  extent: {
+                    type: 'array',
+                    nullable: true,
+                    minItems: 4,
+                    maxItems: 4,
+                    items: { type: 'number' },
+                    description:
+                      'West, south, east, north of all eligible listings before clustering. Null when empty or truncated. A single location has equal lower and upper coordinates.',
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
       if (operationId === 'get /v1/search/locations') {
         operation.parameters = [
           {

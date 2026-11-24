@@ -1,3 +1,4 @@
+import type { SearchMapResult } from '@raui/types/product';
 import {
   paidPlacementProjection,
   PaidPlacementSignal,
@@ -564,7 +565,7 @@ export class Search {
       facets: response.aggregations,
     };
   }
-  async map(body: unknown) {
+  async map(body: unknown): Promise<SearchMapResult> {
     const input = parse(searchSchema, body);
     await this.validatePolygon(input);
     if (!input.bounds && !input.polygon)
@@ -594,7 +595,19 @@ export class Search {
     const dx = (b[2] - b[0]) / 12,
       dy = (b[3] - b[1]) / 8;
     const groups = new Map<string, PublicRow[]>();
+    const truncated = hits.total.value > 2000;
+    const first = rows[0];
+    const extent: SearchMapResult['extent'] =
+      first && !truncated
+        ? [first.longitude, first.latitude, first.longitude, first.latitude]
+        : null;
     for (const row of rows) {
+      if (extent) {
+        extent[0] = Math.min(extent[0], row.longitude);
+        extent[1] = Math.min(extent[1], row.latitude);
+        extent[2] = Math.max(extent[2], row.longitude);
+        extent[3] = Math.max(extent[3], row.latitude);
+      }
       const key =
         Math.floor((row.longitude - b[0]) / dx) +
         ':' +
@@ -610,7 +623,8 @@ export class Search {
         minPrice: Math.min(...g.map((r) => r.price)),
         listingIds: g.map((r) => r.id),
       })),
-      truncated: hits.total.value > 2000,
+      truncated,
+      extent,
       matched: rows.length,
     };
   }

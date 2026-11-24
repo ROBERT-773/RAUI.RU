@@ -5,11 +5,12 @@ import MapCanvas from './map-canvas';
 afterEach(cleanup);
 
 test('the search map provides one pair of Russian zoom controls', () => {
+  const onBounds = vi.fn();
   render(
     <MapCanvas
       bounds={[37.61, 55.75, 37.63, 55.77]}
       markers={[]}
-      onBounds={vi.fn()}
+      onBounds={onBounds}
       onSelect={vi.fn()}
     />,
   );
@@ -19,4 +20,5 @@ test('the search map provides one pair of Russian zoom controls', () => {
     ).toBe(label);
   }
   expect(screen.queryByRole('button', { name: /Zoom (in|out)/ })).toBeNull();
+  expect(onBounds).not.toHaveBeenCalled();
 });

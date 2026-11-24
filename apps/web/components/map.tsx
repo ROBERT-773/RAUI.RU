@@ -1,10 +1,19 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useState, useMemo } from 'react';
-import type { MapMarker, SearchDefinition } from '@raui/types/product';
+import { useEffect, useEffectEvent, useState, useMemo } from 'react';
+import type {
+  MapMarker,
+  SearchDefinition,
+  SearchMapResult,
+} from '@raui/types/product';
 import MapCanvas from './map-canvas';
 import { api } from '../lib/client';
-import { searchMapBounds } from '../lib/map-bounds';
+import {
+  constrainViewport,
+  emptyMapBounds,
+  fitResultExtent,
+  searchMapBounds,
+} from '../lib/map-bounds';
 export default function MapPanel({
   definition,
   onBounds,
@@ -24,22 +33,44 @@ export default function MapPanel({
     [loading, setLoading] = useState(true),
     [truncated, setTruncated] = useState(false),
     [polygon, setPolygon] = useState('');
-  const bounds = useMemo<[number, number, number, number]>(
-    () => searchMapBounds(definition.regionCode, definition.bounds),
-    [definition.bounds, definition.regionCode],
+  const requestBounds = useMemo(
+    () => searchMapBounds(definition),
+    [definition],
+  );
+  const bounds =
+    !definition.bounds && !definition.polygon && !markers.length && !truncated
+      ? emptyMapBounds(definition.regionCode)
+      : requestBounds;
+  const focusResults = useEffectEvent(
+    (extent: NonNullable<SearchMapResult['extent']>) => {
+      onBounds(fitResultExtent(extent));
+    },
   );
   useEffect(() => {
     let active = true;
-    api<{ markers: MapMarker[]; truncated: boolean }>('v1/search/map', 'POST', {
+    api<SearchMapResult>('v1/search/map', 'POST', {
       ...definition,
-      bounds,
+      bounds: requestBounds,
       cursor: undefined,
     })
       .then((r) => {
         if (active) {
+          if (
+            !definition.bounds &&
+            !definition.polygon &&
+            r.extent &&
+            !r.truncated
+          ) {
+            // Discovery uses a different clustering scale from the final viewport.
+            setMarkers([]);
+            setLoading(true);
+            focusResults(r.extent);
+            return;
+          }
           setMarkers(r.markers);
           setTruncated(r.truncated);
           setRequestError('');
+          setLoading(false);
         }
       })
       .catch((e) => {
@@ -47,27 +78,23 @@ export default function MapPanel({
           setMarkers([]);
           setTruncated(false);
           setRequestError((e as Error).message);
+          setLoading(false);
         }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [definition, bounds, attempt]);
+  }, [definition, requestBounds, attempt]);
   function move(dx: number, dy: number, scale = 1) {
     const [w, s, e, n] = bounds,
       cx = (w + e) / 2 + dx,
       cy = (s + n) / 2 + dy,
       hw = ((e - w) * scale) / 2,
       hh = ((n - s) * scale) / 2;
-    onBounds([
-      Math.max(-180, cx - hw),
-      Math.max(-90, cy - hh),
-      Math.min(180, cx + hw),
-      Math.min(90, cy + hh),
-    ]);
+    onBounds(
+      constrainViewport([cx - hw, cy - hh, cx + hw, cy + hh]),
+      definition.polygon,
+    );
   }
   return (
     <section aria-label="Карта результатов">
@@ -105,6 +132,9 @@ export default function MapPanel({
         </Button>
       </div>
       {loading && <p role="status">Загрузка карты…</p>}
+      {!loading && !requestError && !markers.length && (
+        <p role="status">По выбранным условиям на карте нет объявлений.</p>
+      )}
       {error && <p role="alert">{error}</p>}
       {requestError && (
         <>
