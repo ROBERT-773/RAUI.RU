@@ -1,0 +1,16 @@
+.map {
+  height: clamp(15rem, 40vh, 27rem);
+  max-width: 64rem;
+  margin-block-start: 0.75rem;
+  border-radius: 0.875rem;
+}
+
+.pin {
+  box-sizing: border-box;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: #155da1;
+  box-shadow:
+    0 0 0 2px #183e63,
+    0 2px 6px #19334d80;
+}

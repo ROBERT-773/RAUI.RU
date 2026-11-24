@@ -15,6 +15,7 @@ import { rentalFacts } from '../../../lib/rental-facts';
 import { moscowPath } from '../../../lib/moscow-search';
 import DetailActions from '../../../components/detail-actions';
 import PublicPhotoGallery from '../../../components/public-photo-gallery';
+import ListingLocationMap from '../../../components/listing-location-map';
 import { catalogHref } from '../../../lib/catalog-links';
 export async function generateMetadata({
   params,
@@ -129,7 +130,14 @@ export default async function Page({
       <h1>{data.title}</h1>
       <p className="price">{formatListingPrice(data.price, data.dealType)}</p>
       <p>{data.property.formatted}</p>
-      {locationUrl && <Link href={locationUrl}>Объявления рядом на карте</Link>}
+      {locationUrl && (
+        <>
+          <ListingLocationMap latitude={latitude} longitude={longitude} />
+          <p>
+            <Link href={locationUrl}>Объявления рядом на карте</Link>
+          </p>
+        </>
+      )}
       {facts.length > 0 && (
         <section className="panel">
           <h2>Условия аренды</h2>

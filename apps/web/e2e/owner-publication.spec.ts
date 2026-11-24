@@ -862,6 +862,59 @@ test('independent agent reopens an apartment sale draft, revises its preview and
       .click();
     await expect(gallery.getByText('1 из 5', { exact: true })).toBeVisible();
     await expect(visiblePhoto).toHaveAttribute('src', firstPhoto);
+    if (
+      info.project.use.hasTouch &&
+      browser.browserType().name() === 'chromium'
+    ) {
+      await visiblePhoto.scrollIntoViewIfNeeded();
+      const box = await visiblePhoto.boundingBox();
+      if (!box)
+        throw new Error('The guest photo is not visible for a touch gesture.');
+      const touch = await visitorContext.newCDPSession(visitor);
+      const y = box.y + box.height / 2;
+      try {
+        for (const [event, fraction] of [
+          ['touchStart', 0.72],
+          ['touchMove', 0.5],
+          ['touchMove', 0.28],
+        ] as const) {
+          await touch.send('Input.dispatchTouchEvent', {
+            type: event,
+            touchPoints: [{ x: box.x + box.width * fraction, y }],
+          });
+        }
+        await touch.send('Input.dispatchTouchEvent', {
+          type: 'touchEnd',
+          touchPoints: [],
+        });
+      } finally {
+        await touch.detach();
+      }
+      await expect(gallery.getByText('2 из 5', { exact: true })).toBeVisible();
+      await expect(visiblePhoto).not.toHaveAttribute('src', firstPhoto);
+    }
+    const showLocation = visitor.getByRole('button', {
+      name: 'Показать объект на карте',
+      exact: true,
+    });
+    await expect(showLocation).toHaveAttribute('aria-expanded', 'false');
+    await showLocation.click();
+    const locationMap = visitor.getByRole('region', {
+      name: 'Карта объекта',
+      exact: true,
+    });
+    await expect(
+      locationMap.getByText('Широта 55.76, долгота 37.62', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      locationMap.getByRole('img', { name: 'Метка объекта', exact: true }),
+    ).toBeVisible();
+    const requests = await visitor.requests();
+    expect(
+      requests.some((request) =>
+        new URL(request.url()).pathname.endsWith('/v1/search/map'),
+      ),
+    ).toBe(false);
     const mapLink = visitor.getByRole('link', {
       name: 'Объявления рядом на карте',
       exact: true,
