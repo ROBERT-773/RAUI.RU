@@ -4,6 +4,7 @@ import L from 'leaflet';
 import type { MapMarker } from '@raui/types/product';
 import { money } from '../lib/client';
 import { mapZoomTitles } from '../lib/labels';
+import { constrainViewport, priceMarkerWidth } from '../lib/map-bounds';
 export default function MapCanvas({
   bounds,
   markers,
@@ -23,6 +24,7 @@ export default function MapCanvas({
     map = useRef<L.Map | null>(null),
     layer = useRef<L.LayerGroup | null>(null),
     drawing = useRef<[number, number][]>([]),
+    applyingBounds = useRef(false),
     drawingLayer = useRef<L.Polyline | null>(null);
   const moved = useEffectEvent((b: [number, number, number, number]) =>
     onBounds(b),
@@ -35,11 +37,10 @@ export default function MapCanvas({
       zoomControl: false,
       scrollWheelZoom,
       worldCopyJump: false,
-      minZoom: 2,
+      minZoom: 0,
       maxZoom: 19,
     });
     L.control.zoom(mapZoomTitles).addTo(instance);
-    instance.setView([55.75, 37.6], 10);
     map.current = instance;
     const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL;
     if (tileUrl)
@@ -49,13 +50,16 @@ export default function MapCanvas({
       }).addTo(instance);
     layer.current = L.layerGroup().addTo(instance);
     instance.on('moveend', () => {
+      if (applyingBounds.current) return;
       const b = instance.getBounds();
-      moved([
-        Math.max(-180, b.getWest()),
-        Math.max(-90, b.getSouth()),
-        Math.min(180, b.getEast()),
-        Math.min(90, b.getNorth()),
-      ]);
+      moved(
+        constrainViewport([
+          b.getWest(),
+          b.getSouth(),
+          b.getEast(),
+          b.getNorth(),
+        ]),
+      );
     });
     instance.on('click', (event: L.LeafletMouseEvent) => {
       if (!drawingLayer.current) return;
@@ -73,21 +77,26 @@ export default function MapCanvas({
   useEffect(() => {
     const instance = map.current;
     if (!instance) return;
-    const b = instance.getBounds();
+    const b = instance.getZoom() === undefined ? null : instance.getBounds();
     if (
-      !b.isValid() ||
+      !b?.isValid() ||
       Math.abs(b.getWest() - bounds[0]) > 0.0001 ||
       Math.abs(b.getSouth() - bounds[1]) > 0.0001 ||
       Math.abs(b.getEast() - bounds[2]) > 0.0001 ||
       Math.abs(b.getNorth() - bounds[3]) > 0.0001
     ) {
-      instance.fitBounds(
-        [
-          [bounds[1], bounds[0]],
-          [bounds[3], bounds[2]],
-        ],
-        { animate: false },
-      );
+      applyingBounds.current = true;
+      try {
+        instance.fitBounds(
+          [
+            [bounds[1], bounds[0]],
+            [bounds[3], bounds[2]],
+          ],
+          { animate: false },
+        );
+      } finally {
+        applyingBounds.current = false;
+      }
     }
   }, [bounds]);
   useEffect(() => {
@@ -100,12 +109,14 @@ export default function MapCanvas({
       const icon = L.divIcon({
         className: 'price-marker',
         html: '<span data-count="' + marker.count + '">' + text + '</span>',
-        iconSize: [150, 44],
-        iconAnchor: [75, 22],
+        iconSize: [priceMarkerWidth, 44],
+        iconAnchor: [priceMarkerWidth / 2, 22],
       });
       const item = L.marker([marker.latitude, marker.longitude], {
         icon,
         keyboard: true,
+        // Focusing a price is a selection action; an automatic pan would replace the search.
+        autoPanOnFocus: false,
         title: text,
         alt: text,
       }).addTo(group);
