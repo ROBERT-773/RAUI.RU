@@ -1191,20 +1191,23 @@ export default function OwnerListings({
             После отправки модератор проверит объявление. Оно появится в
             каталоге после одобрения.
           </p>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setPreviewOpen(false)}
-          >
-            Вернуться к редактированию
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void run(() => reviewListing('submit'))}
-          >
-            Отправить на модерацию
-          </button>
+          <div className="actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPreviewOpen(false)}
+            >
+              Вернуться к редактированию
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => void run(() => reviewListing('submit'))}
+            >
+              Отправить на модерацию
+            </button>
+          </div>
         </article>
       )}
     </section>

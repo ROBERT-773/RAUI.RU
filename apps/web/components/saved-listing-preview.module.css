@@ -38,6 +38,10 @@
   font-weight: 700;
 }
 
+.preview dl {
+  display: block;
+}
+
 .preview dl > div {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
