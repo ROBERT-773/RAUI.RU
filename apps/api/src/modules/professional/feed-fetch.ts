@@ -8,6 +8,7 @@ import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { publicIPv4 } from '../../common/outbound-policy';
 import { xmlFeedMaxBytes } from './feed-limits';
+import { FeedLinkError } from './feed-link-error';
 export { publicIPv4 } from '../../common/outbound-policy';
 export abstract class FeedFetcher {
   abstract fetch(url: string): Promise<string>;
@@ -20,10 +21,15 @@ export function validateFeedUrl(value: string, hosts: string[]) {
     url.password ||
     url.hash ||
     (url.port && url.port !== '443') ||
-    !hosts.includes(url.hostname) ||
+    url.hostname.startsWith('[') ||
     isIP(url.hostname)
   )
     throw new BadRequestException('Approved HTTPS feed host required');
+  if (!hosts.includes(url.hostname))
+    throw new FeedLinkError(
+      'feed_host_not_approved',
+      'Feed host needs administrator approval',
+    );
   return url;
 }
 export async function resolveFeedHost(

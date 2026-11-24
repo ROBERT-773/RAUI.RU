@@ -279,7 +279,10 @@ export class ProfessionalFeeds {
         lastRunId: string | null;
       }>(
         `SELECT f.id,f.transport->>'provider' AS provider,f.transport->>'url' AS url,f.active,
-                (SELECT r.id FROM professional_import_runs r WHERE r.feed_id=f.id AND mode='dry_run'
+                (SELECT r.id FROM professional_import_runs r WHERE r.feed_id=f.id AND r.mode='dry_run'
+                 AND EXISTS (SELECT 1 FROM audit_events a
+                   WHERE a.entity_type='professional_import_run' AND a.entity_id=r.id::text
+                   AND a.action='professional.feed.queued' AND a.data->>'source'='url')
                  ORDER BY r.created_at DESC,r.id DESC LIMIT 1) AS "lastRunId"
          FROM professional_feed_definitions f
          WHERE f.organization_id IS NOT DISTINCT FROM $1::uuid AND ($1::uuid IS NOT NULL OR f.created_by=$2)

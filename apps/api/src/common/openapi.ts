@@ -65,10 +65,16 @@ const linkRun = object({
     valid: z.number().optional(),
     quarantined: z.number().optional(),
   }),
-  error: z.string().nullable(),
+  error: z
+    .string()
+    .nullable()
+    .describe(
+      'Safe failure code. feed_provider_mismatch_<provider> identifies the detected format (generic for unmapped XML); feed_host_not_approved requires administrator approval.',
+    ),
 });
 const linkItem = object({
   external_reference: z.string(),
+  duplicate_reference: z.string().nullable(),
   property_id: uuid.nullable(),
   listing_id: uuid.nullable(),
   status: z.string(),
@@ -491,6 +497,11 @@ export function enrichOpenApi(document: OpenAPIObject) {
         },
       };
       if (feedReads[operationId]) {
+        if (method === 'post' && path.endsWith('/link'))
+          operation.responses['400'] = {
+            description:
+              'Invalid feed link. A valid HTTPS address on a host that needs administrator approval returns code feed_host_not_approved.',
+          };
         operation.responses[method === 'post' ? '201' : '200'] = {
           description:
             method === 'post'

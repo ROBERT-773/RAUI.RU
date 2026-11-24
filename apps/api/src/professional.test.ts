@@ -114,6 +114,88 @@ test('XML geocoding uses one exact match in the same locality and caches repeate
     assert.match(rejected.message!, /однозначно/);
   }
 });
+test('YRL geocoding distinguishes identical locality and street names in different regions', async () => {
+  const street = 'Центральная улица, 1',
+    locality = 'Сосновка';
+  const feed = (region: string) =>
+    `<realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06"><offer internal-id="test"><location><region>${region}</region><locality-name>${locality}</locality-name><address>${street}</address></location></offer></realty-feed>`;
+  const regions = ['Тверская область', 'Кировская область'];
+  const rows = regions.map(
+    (region) => parseFeed(feed(region), 'xml', {}, 'yandex')[0],
+  );
+  const candidates = regions.map((region, i) => ({
+    formatted: [region, locality, street].join(', '),
+    locality,
+    latitude: 57 + i,
+    longitude: 37 + i,
+  }));
+  const queries: string[] = [];
+  const locate = new FeedGeocoding({
+    lookup: async (query) => {
+      queries.push(query);
+      return candidates;
+    },
+  });
+  for (const [index, row] of rows.entries()) {
+    assert.partialDeepStrictEqual((await locate.resolve(row)).row, {
+      address: candidates[index]!,
+    });
+    assert.deepEqual((await locate.resolve(row)).message, undefined);
+  }
+  assert.deepEqual(
+    queries,
+    candidates.map((candidate) => candidate.formatted),
+  );
+  const qualified = feed(regions[0]!).replace(
+    '<address>' + street + '</address>',
+    '<address>' + candidates[0]!.formatted + '</address>',
+  );
+  assert.partialDeepStrictEqual(parseFeed(qualified, 'xml', {})[0], {
+    address: { formatted: candidates[0]!.formatted },
+  });
+  const supplied = feed(regions[0]!).replace(
+    '</location>',
+    '<latitude>56</latitude><longitude>38</longitude></location>',
+  );
+  const [mapped] = parseFeed(supplied, 'xml', {});
+  assert.partialDeepStrictEqual(mapped, {
+    address: { formatted: street, latitude: 56, longitude: 38 },
+  });
+  assert.equal((await locate.resolve(mapped)).row, mapped);
+  assert.equal(queries.length, 2);
+  const truncated = await new FeedGeocoding({
+    lookup: async () => [
+      { ...candidates[0]!, formatted: [locality, street].join(', ') },
+    ],
+  }).resolve(rows[0]);
+  assert.match(truncated.message!, /однозначно/);
+});
+test('a supplied region code is part of both geocoding validation and the per-run cache', async () => {
+  const base = {
+    locality: 'Сосновка',
+    formatted: 'Сосновка, Центральная улица, 1',
+  };
+  const candidates = ['tver', 'kirov'].map((regionCode, i) => ({
+    ...base,
+    regionCode,
+    latitude: 57 + i,
+    longitude: 37 + i,
+  }));
+  let calls = 0;
+  const geo = new FeedGeocoding({
+    lookup: async () => {
+      calls++;
+      return candidates;
+    },
+  });
+  for (const candidate of candidates) {
+    const row = { address: { ...base, regionCode: candidate.regionCode } };
+    assert.deepEqual(await geo.resolve(row), { row: { address: candidate } });
+  }
+  assert.equal(calls, 2);
+  const unknown = { address: { ...base, regionCode: 'voronezh' } };
+  assert.match((await geo.resolve(unknown)).message!, /однозначно/);
+});
 test('Missing import items fail validation before authorization or persistence', async () => {
   const imports = new ProfessionalImports(
     {} as never,
@@ -362,7 +444,10 @@ test('legacy RAUI YRL carries its external ID, local address and monthly price i
     categoryCode: 'apartment',
     price: 45000,
     attributes: { area: 44, kitchen_area: 9, rooms: 2, floor: 1, floors: 5 },
-    address: { locality: 'Калуга', formatted: 'Примерная улица, 2' },
+    address: {
+      locality: 'Калуга',
+      formatted: 'Тестовая область, Центральный, Калуга, Примерная улица, 2',
+    },
   });
   const validation = importItem.safeParse(row);
   assert.equal(validation.success, false);

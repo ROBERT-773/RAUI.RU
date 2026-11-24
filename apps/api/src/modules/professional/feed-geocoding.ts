@@ -29,17 +29,26 @@ export class FeedGeocoding {
     if (latitude !== undefined || longitude !== undefined) return { row };
     const parsed = addressWithoutPoint.safeParse(address);
     if (!parsed.success) return { row };
-    const { formatted, locality } = parsed.data;
+    const { formatted, locality, regionCode, district } = parsed.data;
     const query = normal(formatted).includes(normal(locality))
       ? formatted
       : locality + ', ' + formatted;
-    const key = JSON.stringify([normal(locality), normal(formatted)]);
+    const key = JSON.stringify([
+      normal(locality),
+      normal(formatted),
+      regionCode,
+      district && normal(district),
+    ]);
     let match = this.matches.get(key);
     if (!match) {
       try {
         const exact = (await this.provider.lookup(query)).filter(
           (candidate) =>
             normal(candidate.locality) === normal(locality) &&
+            (!regionCode || candidate.regionCode === regionCode) &&
+            (!district ||
+              (candidate.district &&
+                normal(candidate.district) === normal(district))) &&
             [normal(formatted), normal(query)].includes(
               normal(candidate.formatted),
             ),

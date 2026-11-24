@@ -26,6 +26,32 @@ test('HTTP failures expose status without exposing backend error details', async
   });
 });
 
+test('a URL on an unapproved feed host gives safe administrator guidance', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      reply(
+        {
+          code: 'feed_host_not_approved',
+          message: 'https://private.example?token=secret',
+        },
+        400,
+      ),
+    ),
+  );
+  const { api } = await import('./client');
+  for (const path of [
+    'v1/account/feeds/link',
+    'v1/organizations/org-1/feeds/link',
+  ]) {
+    await expect(api(path)).rejects.toMatchObject({
+      status: 400,
+      message:
+        'Домен выгрузки ещё не разрешён. Попросите администратора RAUI разрешить загрузку с этого домена.',
+    });
+  }
+});
+
 test('known publication quota conflict uses safe guidance instead of backend details', async () => {
   vi.stubGlobal(
     'fetch',

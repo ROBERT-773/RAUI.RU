@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { api } from '../lib/client';
+import { api, feedHostApprovalHint } from '../lib/client';
+
+export const feedProviders = {
+  yandex: 'Яндекс Недвижимость',
+  avito: 'Авито',
+  cian: 'ЦИАН',
+  domclick: 'Домклик',
+} as const;
 
 type Report = {
   id: string;
@@ -7,8 +14,23 @@ type Report = {
   stats: { total?: number; valid?: number; quarantined?: number };
   error: string | null;
 };
-type Rejected = { external_reference: string; errors: { message: string }[] };
+type Rejected = {
+  external_reference: string;
+  duplicate_reference?: string | null;
+  errors: { message: string }[];
+};
 const failureHints = new Map([
+  ['feed_host_not_approved', feedHostApprovalHint],
+  [
+    'feed_provider_mismatch_generic',
+    'Для этого поля нужна XML-выгрузка в формате выбранной площадки.',
+  ],
+  ...Object.entries(feedProviders).map(
+    ([provider, label]): [string, string] => [
+      `feed_provider_mismatch_${provider}`,
+      `Формат файла — «${label}». Вставьте ссылку в поле «${label}».`,
+    ],
+  ),
   [
     'source_changed',
     'Ссылка изменилась. Запустите проверку для нового адреса.',
@@ -60,7 +82,10 @@ function RejectedRows({ path, total }: { path: string; total: number }) {
         <ul className="feed-errors">
           {rows.map((row) => (
             <li key={row.external_reference}>
-              <strong>{row.external_reference}</strong> ·{' '}
+              <strong>
+                {row.duplicate_reference ?? row.external_reference}
+              </strong>{' '}
+              ·{' '}
               {row.errors.map((e) => e.message).join('. ') ||
                 'Проверьте данные объявления.'}
             </li>

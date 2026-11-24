@@ -194,6 +194,9 @@ async function run() {
         [randomUUID(), `quota-${project}@e2e.test`, 'owner'],
         [randomUUID(), `agency-${project}@e2e.test`, 'agency'],
         [randomUUID(), `agent-${project}@e2e.test`, 'agent'],
+        ...(runFeeds
+          ? [[randomUUID(), `developer-${project}@e2e.test`, 'developer']]
+          : []),
         ...(staffTotpOnly
           ? [[randomUUID(), `staff-${project}@e2e.test`, 'admin']]
           : []),

@@ -3,14 +3,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { api, ApiError } from '../lib/client';
-import FeedRunReport from './feed-run-report';
-
-const sources = {
-  yandex: 'Яндекс Недвижимость',
-  avito: 'Авито',
-  cian: 'ЦИАН',
-  domclick: 'Домклик',
-} as const;
+import FeedRunReport, { feedProviders as sources } from './feed-run-report';
 type Provider = keyof typeof sources;
 type Source = {
   id: string;
@@ -78,7 +71,7 @@ function SourceRow({
     } catch (e) {
       setError(
         e instanceof ApiError && e.status === 400
-          ? 'Проверьте ссылку HTTPS и доступ к источнику выгрузки.'
+          ? e.message
           : e instanceof ApiError && e.status === 403
             ? 'Для настройки выгрузки нужны права управления.'
             : 'Не удалось запустить проверку. Попробуйте ещё раз.',
@@ -94,7 +87,8 @@ function SourceRow({
         <label htmlFor={inputId}>{label}</label>
         {source && (
           <small>
-            {source.active ? 'Подключён' : 'Отключён'} · {source.host}
+            {source.active ? 'Ссылка сохранена' : 'Источник отключён'} ·{' '}
+            {source.host}
           </small>
         )}
         <div className="feed-controls">

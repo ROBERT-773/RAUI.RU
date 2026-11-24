@@ -46,6 +46,7 @@ import {
 } from './contracts';
 import { FeedFetcher, HttpsFeedFetcher } from './feed-fetch';
 import { parseFeed } from './feed-parser';
+import { FeedLinkError } from './feed-link-error';
 import { Geocoder, GeoModule } from '../geo/geo';
 import { FeedGeocoding } from './feed-geocoding';
 interface Feed {
@@ -266,7 +267,12 @@ export class ProfessionalImports {
       query,
     );
     return this.db.rows(
-      `SELECT i.external_reference,i.property_id,i.listing_id,i.status,i.errors FROM professional_import_items i JOIN professional_import_runs r ON r.id=i.run_id WHERE i.run_id=$1 AND r.feed_id=$2 AND ($3::text IS NULL OR i.external_reference>$3) AND (NOT $5::boolean OR i.status IN ('invalid','quarantined')) ORDER BY i.external_reference LIMIT $4`,
+      `SELECT i.external_reference, CASE WHEN i.errors @> '[{"code":"duplicate"}]'
+              THEN left(btrim(i.payload->>'externalReference'),200) END AS duplicate_reference,
+              i.property_id,i.listing_id,i.status,i.errors FROM professional_import_items i
+       JOIN professional_import_runs r ON r.id=i.run_id WHERE i.run_id=$1 AND r.feed_id=$2 AND
+       ($3::text IS NULL OR i.external_reference>$3) AND (NOT $5::boolean OR i.status IN ('invalid','quarantined'))
+       ORDER BY i.external_reference LIMIT $4`,
       [
         parse(uuid, runId),
         id,
@@ -490,11 +496,13 @@ export class ProfessionalImports {
         ? 'import_failed'
         : changed
           ? 'source_changed'
-          : invalid
-            ? 'invalid_feed'
-            : failure instanceof ForbiddenException
-              ? 'access_revoked'
-              : 'source_unavailable';
+          : failure instanceof FeedLinkError
+            ? failure.code
+            : invalid
+              ? 'invalid_feed'
+              : failure instanceof ForbiddenException
+                ? 'access_revoked'
+                : 'source_unavailable';
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
           `UPDATE professional_import_jobs SET state=CASE WHEN $3::boolean OR attempts>=5 THEN 'dead' ELSE 'pending' END,

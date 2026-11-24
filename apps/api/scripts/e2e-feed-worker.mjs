@@ -30,20 +30,51 @@ function flat(id, price) {
   <FlatRoomsCount>2</FlatRoomsCount><TotalArea>55.3</TotalArea><KitchenArea>10</KitchenArea>
   <BargainTerms><Price>${price}</Price><Currency>rur</Currency></BargainTerms></Object>`;
 }
-const fixture =
+const cian =
   '<Feed><Feed_Version>2</Feed_Version>' +
   flat('e2e-flat-valid', '9500000') +
   flat('e2e-flat-invalid', 'n/a') +
   '</Feed>';
+const fixtures = new Map(
+  [
+    ['cian', cian],
+    [
+      'avito',
+      `<Ads formatVersion="3" target="Avito.ru"><Ad>
+      <Id>01</Id><Category>Квартиры</Category><OperationType>Продам</OperationType><MarketType>Новостройка</MarketType>
+      <City>Казань</City><Address>Казань, Тестовая улица, 2</Address><Latitude>55.8</Latitude><Longitude>49.1</Longitude>
+      <Square>55</Square><Rooms>2</Rooms><Price>9600000</Price></Ad></Ads>`,
+    ],
+    [
+      'yandex',
+      `<realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06"><offer internal-id="02">
+      <type>продажа</type><category>квартира</category><new-flat>да</new-flat>
+      <location><locality-name>Омск</locality-name><address>Омск, Тестовая улица, 3</address>
+      <latitude>55.0</latitude><longitude>73.4</longitude></location>
+      <area><value>55</value><unit>кв. м</unit></area><price><value>9700000</value><currency>RUR</currency></price>
+      </offer></realty-feed>`,
+    ],
+    [
+      'domclick',
+      `<complexes><complex><id>03</id><name>ЖК Тестовый</name><address>Пермь, Тестовая улица, 4</address>
+      <latitude>58.0</latitude><longitude>56.3</longitude><buildings><building><id>1</id><flats><flat>
+      <flat_id>3</flat_id><floor>3</floor><room>2</room><area>55</area><price>9800000</price>
+      </flat></flats></building></buildings></complex></complexes>`,
+    ],
+  ].map(([provider, xml]) => [
+    `https://xml-fixture.example.test/${provider}.xml`,
+    xml,
+  ]),
+);
 const context = await Test.createTestingModule({
   imports: [DatabaseModule, ProfessionalImportsModule],
 })
   .overrideProvider(FeedFetcher)
   .useValue({
     async fetch(url) {
-      if (url !== 'https://xml-fixture.example.test/cian.xml')
-        throw new Error('Unknown XML fixture');
-      return fixture;
+      const xml = fixtures.get(url);
+      if (!xml) throw new Error('Unknown XML fixture');
+      return xml;
     },
   })
   .compile();

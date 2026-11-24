@@ -57,6 +57,19 @@ async function checkFeed(page: Page, summary: string, base: string) {
   await expect(input).toHaveValue('');
   return reportUrl;
 }
+async function createOrganization(page: Page, label: string, button: string) {
+  await page.getByLabel(label).fill('XML ' + randomUUID());
+  const created = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === '/api/v1/organizations' &&
+      r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: button, exact: true }).click();
+  const org = await created;
+  expect(org.status()).toBe(201);
+  const { id } = (await org.json()) as { id: string };
+  return '/api/v1/organizations/' + id + '/feeds';
+}
 test('the personal agent and agency owner check a feed, reopen its row errors and cannot see another account’s report', async ({
   browser,
   page,
@@ -69,6 +82,25 @@ test('the personal agent and agency owner check a feed, reopen its row errors an
     'Мои XML-выгрузки',
     '/api/v1/account/feeds',
   );
+  const otherSources = [
+    ['Яндекс Недвижимость', 'yandex'],
+    ['Авито', 'avito'],
+    ['Домклик', 'domclick'],
+  ] as const;
+  for (const [label, provider] of otherSources) {
+    const row = page.getByRole('region', { name: label, exact: true });
+    await row
+      .getByRole('textbox')
+      .fill(`https://xml-fixture.example.test/${provider}.xml`);
+    await row.getByRole('button', { name: 'Проверить', exact: true }).click();
+  }
+  for (const [label] of otherSources) {
+    const row = page.getByRole('region', { name: label, exact: true });
+    await expect(row.getByRole('status')).toHaveText(
+      'Проверено объектов — 1. Прошли проверку — 1. С ошибками — 0.',
+      { timeout: 25000 },
+    );
+  }
   const agency = await browser.newContext({
     baseURL: new URL(page.url()).origin,
   });
@@ -82,20 +114,35 @@ test('the personal agent and agency owner check a feed, reopen its row errors an
     expect([403, 404]).toContain(
       (await manager.request.get(privateReport)).status(),
     );
-    await manager.getByLabel('Название агентства').fill('XML ' + randomUUID());
-    const created = manager.waitForResponse(
-      (r) =>
-        new URL(r.url()).pathname === '/api/v1/organizations' &&
-        r.request().method() === 'POST',
+    const orgBase = await createOrganization(
+      manager,
+      'Название агентства',
+      'Создать агентство',
     );
-    await manager.getByRole('button', { name: 'Создать агентство' }).click();
-    const org = await created;
-    expect(org.status()).toBe(201);
-    const { id } = (await org.json()) as { id: string };
-    const orgBase = '/api/v1/organizations/' + id + '/feeds';
     expect((await page.request.get(orgBase + '/links')).status()).toBe(403);
     await checkFeed(manager, 'XML-выгрузки организации', orgBase);
   } finally {
     await agency.close();
   }
+});
+test('a developer can connect an XML feed for their organization', async ({
+  page,
+}, info) => {
+  execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
+  await login(
+    page,
+    `developer-${info.project.name}@e2e.test`,
+    'Кабинет застройщика',
+  );
+  await createOrganization(page, 'Название застройщика', 'Создать организацию');
+  await page.getByText('XML-выгрузки организации', { exact: true }).click();
+  const row = page.getByRole('region', { name: 'Домклик', exact: true });
+  await row
+    .getByRole('textbox')
+    .fill('https://xml-fixture.example.test/domclick.xml');
+  await row.getByRole('button', { name: 'Проверить', exact: true }).click();
+  await expect(row.getByRole('status')).toHaveText(
+    'Проверено объектов — 1. Прошли проверку — 1. С ошибками — 0.',
+    { timeout: 25000 },
+  );
 });

@@ -101,7 +101,7 @@ test('reopens an existing personal source, checks it without its URL, and scopes
   });
   render(<ProfessionalFeedLinks />);
   const row = await openSection(true);
-  expect(row.getByText(/Подключён · feeds.example/)).toBeTruthy();
+  expect(row.getByText(/Ссылка сохранена · feeds.example/)).toBeTruthy();
   expect(await row.findByText(/Проверка в очереди/)).toBeTruthy();
   fireEvent.click(row.getByRole('button', { name: 'Проверить ещё раз' }));
   await waitFor(() =>
@@ -148,6 +148,25 @@ test('changing organizations clears link drafts and ignores a late report from t
   );
   expect(screen.queryByDisplayValue(/private.example/)).toBeNull();
   expect(screen.queryByText(/Прошли проверку/)).toBeNull();
+});
+
+test('a file in the wrong slot names the matching field and keeps the link marked as saved', async () => {
+  vi.mocked(api).mockImplementation(async (path) =>
+    path.endsWith('/links')
+      ? [{ ...feed, lastRunId: 'wrong-slot' }]
+      : {
+          id: 'wrong-slot',
+          status: 'failed',
+          stats: {},
+          error: 'feed_provider_mismatch_avito',
+        },
+  );
+  render(<ProfessionalFeedLinks organizationId="org-1" />);
+  const row = await openSection();
+  expect((await row.findByRole('alert')).textContent).toContain(
+    'Вставьте ссылку в поле «Авито».',
+  );
+  expect(row.getByText(/Ссылка сохранена/)).toBeTruthy();
 });
 
 test('retries an uncertain submission with the same key and renders a failed worker result without exposing a feed URL', async () => {

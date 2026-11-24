@@ -4,6 +4,7 @@ import { BadRequestException } from '@nestjs/common';
 import { parse } from '../../common/security';
 import { importInput } from './contracts';
 import { xmlFeedMaxBytes, xmlFeedMaxItems } from './feed-limits';
+import { FeedLinkError } from './feed-link-error';
 
 export type FeedProfile = 'yandex' | 'cian' | 'avito' | 'domclick' | 'generic';
 type XmlRecord = Record<string, unknown>;
@@ -106,7 +107,8 @@ function parseXml(text: string) {
 }
 function assertProfile(detected: FeedProfile, hint?: Provider) {
   if (hint && hint !== detected)
-    throw new BadRequestException(
+    throw new FeedLinkError(
+      `feed_provider_mismatch_${detected}`,
       'Формат файла отличается от выбранной площадки.',
     );
   return detected;
@@ -206,6 +208,40 @@ function dealType(sale: boolean, longRent: boolean, shortRent: boolean) {
   if (shortRent) return 'short_rent';
   return undefined;
 }
+function yandexAddress(row: unknown) {
+  const location = address(
+    row,
+    'location.address',
+    'location.latitude',
+    'location.longitude',
+    'location.locality-name',
+  );
+  const region = str(row, 'location.region');
+  const district = str(row, 'location.district');
+  if (
+    !location.formatted ||
+    (!region && !district) ||
+    location.latitude !== undefined ||
+    location.longitude !== undefined
+  )
+    return location;
+
+  // YRL frequently supplies just the street here, with region and district in sibling tags.
+  const parts = location.formatted.split(',').map((part) => part.trim());
+  const normalize = (value: string) =>
+    value.toLocaleLowerCase('ru-RU').replace(/\s+/gu, ' ').trim();
+  const qualifiers = new Map<string, string>();
+  for (const qualifier of [region, district, location.locality]) {
+    if (qualifier) qualifiers.set(normalize(qualifier), qualifier);
+  }
+  const supplied = new Set(parts.map(normalize));
+  if ([...qualifiers.keys()].every((key) => supplied.has(key))) return location;
+  const rest = parts.filter((part) => !qualifiers.has(normalize(part)));
+  return {
+    ...location,
+    formatted: [...qualifiers.values(), ...rest].join(', '),
+  };
+}
 const yandexCategories = new Map(
   Object.entries({
     дом: 'house',
@@ -260,13 +296,7 @@ function normalizedYandex(row: unknown) {
     title: listingTitle(row, attrs.area, categoryCode),
     description: str(row, 'description') ?? '',
     attributes: attrs,
-    address: address(
-      row,
-      'location.address',
-      'location.latitude',
-      'location.longitude',
-      'location.locality-name',
-    ),
+    address: yandexAddress(row),
   };
 }
 function normalizedAvito(row: unknown) {

@@ -297,17 +297,19 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             (await call(base + '/link', 'POST', first, 1, key)).status,
             403,
           );
-          assert.equal(
-            (
-              await call(
-                base + '/link',
-                'POST',
-                { ...first, url: 'https://example.invalid/any.xml' },
-                0,
-                token(),
-              )
-            ).status,
-            400,
+          const unapproved = await call(
+            base + '/link',
+            'POST',
+            { ...first, url: 'https://example.invalid/any.xml?key=private' },
+            0,
+            token(),
+          );
+          assert.equal(unapproved.status, 400);
+          const denial = (await unapproved.json()) as { code: string };
+          assert.equal(denial.code, 'feed_host_not_approved');
+          assert.doesNotMatch(
+            JSON.stringify(denial),
+            /example\.invalid|private/,
           );
           assert.equal(
             (
@@ -391,6 +393,33 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             (await loadReport(retried!.preview.runId)).error,
             'invalid_feed',
           );
+          const wrongSlot = await call(
+            base + '/link',
+            'POST',
+            { provider: 'cian' },
+            0,
+            token(),
+          );
+          assert.equal(wrongSlot.status, 201);
+          const mismatch = (await wrongSlot.json()) as typeof response;
+          fetcher.xml = '<Ads formatVersion="3" target="Avito.ru"><Ad/></Ads>';
+          await imports.once();
+          assert.equal(
+            (await loadReport(mismatch!.preview.runId)).error,
+            'feed_provider_mismatch_avito',
+          );
+          const manual = await call(
+            base + '/' + response!.feed.id + '/dry-run',
+            'POST',
+            { items: [row] },
+            0,
+            token(),
+          );
+          assert.equal(manual.status, 201);
+          await imports.once();
+          assert.deepEqual(await (await call(base + '/links')).json(), [
+            { ...response!.feed, lastRunId: retried!.preview.runId },
+          ]);
         } finally {
           delete fetcher.xml;
           if (oldHosts === undefined) delete process.env.FEED_ALLOWED_HOSTS;
@@ -474,6 +503,10 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         const items = await imports.items(actors[0]!, org, feedId, id, {});
         assert.equal(items.filter((x) => x.status === 'valid').length, 1);
         assert.equal(items.filter((x) => x.status === 'invalid').length, 2);
+        assert.equal(
+          items.find((x) => x.duplicate_reference)?.duplicate_reference,
+          row.externalReference,
+        );
         assert.equal(
           (
             await db.rows<{ count: string }>('SELECT count(*) FROM listings')
