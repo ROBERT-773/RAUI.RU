@@ -11,11 +11,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
-      SOURCE_REVISION: cc1ce38be93cc286e852d3765888bae6cd872b11
-      SOURCE_TREE: 4fa678d59d2b13e55ae0a2d83e3a7d05d39f0a0a
-      SOURCE_ARCHIVE_SHA256: 089c3fbbdf74c573b2ef7b6c708c184bab9017c04122ebd842ec2ca0310be822
+      SOURCE_REVISION: 0b49a229ae97978e5d90459f457e36f43a82c8af
+      SOURCE_TREE: 612f4a13a2e39de70d1e7140d5038d95c1497f28
+      SOURCE_ARCHIVE_SHA256: a7c76a66707773ad4322a657727b2003779e81e6e23ca08a7dec69e2e5aff0db
       SITE_URL: https://127.0.0.1:3543
-      TAG: raui-runtime:prepared-gallery-cc1ce38
+      TAG: raui-runtime:prepared-map-0b49a22
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,7 +28,7 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
           cd "$GITHUB_WORKSPACE"
           git -c core.autocrlf=false -c tar.umask=0002 archive --format=tar --mtime=@1795546323 "$SOURCE_TREE" > "$RUNNER_TEMP/source.tar"
-          echo "ad95d812da454f786f2ba0f022970206244dc207515be3a9d8367a8e0f1573ef  $RUNNER_TEMP/source.tar" | sha256sum -c -
+          echo "b415c0e5f3000daebdda8785a912b700dea14ac90435430c2847a571872deecc  $RUNNER_TEMP/source.tar" | sha256sum -c -
           python3 - <<'PY'
           import os, pathlib, zlib
           d = pathlib.Path(os.environ['RUNNER_TEMP'])
@@ -127,7 +127,7 @@ jobs:
           sha256sum private-stage.cms
       - uses: actions/upload-artifact@v4
         with:
-          name: sealed-private-stage-cc1ce38b
+          name: sealed-private-stage-0b49a229
           path: ${{ runner.temp }}/private-stage.cms
           compression-level: 0
           if-no-files-found: error
