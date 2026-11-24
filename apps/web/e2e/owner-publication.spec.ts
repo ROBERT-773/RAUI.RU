@@ -13,6 +13,10 @@ const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC',
   'base64',
 );
+const bluePhoto = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGMQSlsvlLYeAAbeAk8I75H1AAAAAElFTkSuQmCC',
+  'base64',
+);
 function endpoint(response: Response, method: string, path: string) {
   return (
     response.request().method() === method &&
@@ -36,6 +40,7 @@ async function prepareDraftPreview(
   page: Page,
   draft: Locator,
   listingId: string,
+  { withFloorPlan = false } = {},
 ) {
   const photoInput = draft.getByLabel('Добавить фотографию', { exact: true });
   await expect(
@@ -59,7 +64,7 @@ async function prepareDraftPreview(
     await photoInput.setInputFiles({
       name: `apartment-${number}.png`,
       mimeType: 'image/png',
-      buffer: png,
+      buffer: number === 2 ? bluePhoto : png,
     });
     expect((await uploaded).status()).toBe(201);
     await expect(
@@ -73,6 +78,19 @@ async function prepareDraftPreview(
         }),
       ).toBeDisabled();
   }
+  if (withFloorPlan) {
+    const planInput = draft.getByLabel('Добавить планировку', { exact: true });
+    await expect(planInput).toBeEnabled();
+    const uploaded = page.waitForResponse((response) =>
+      endpoint(response, 'POST', '/api/v1/media'),
+    );
+    await planInput.setInputFiles({
+      name: 'plan.png',
+      mimeType: 'image/png',
+      buffer: png,
+    });
+    expect((await uploaded).status()).toBe(201);
+  }
   await expect
     .poll(
       async () => {
@@ -82,7 +100,8 @@ async function prepareDraftPreview(
         expect(media.status()).toBe(200);
         const items = (await media.json()) as { state: string }[];
         return (
-          items.length === 5 && items.every((item) => item.state === 'ready')
+          items.length === (withFloorPlan ? 6 : 5) &&
+          items.every((item) => item.state === 'ready')
         );
       },
       { timeout: 30000 },
@@ -710,7 +729,9 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     });
     await page.reload();
     await page.getByRole('button', { name: title, exact: true }).click();
-    const preview = await prepareDraftPreview(page, editor, draft.id);
+    const preview = await prepareDraftPreview(page, editor, draft.id, {
+      withFloorPlan: true,
+    });
     await expect(
       preview.getByText('11 000 000 ₽', { exact: true }),
     ).toBeVisible();
@@ -780,12 +801,141 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
     ).toBeVisible();
+    const gallery = visitor.getByRole('region', {
+      name: 'Фотографии',
+      exact: true,
+    });
+    const visiblePhoto = gallery.getByRole('img', {
+      name: 'Фото недвижимости',
+      exact: true,
+    });
+    const price = visitor.getByText('10 650 000 ₽', { exact: true }).first();
+    const address = visitor
+      .getByText('Москва, Тверская улица, 19', { exact: true })
+      .first();
+    const characteristics = visitor.getByRole('heading', {
+      name: 'Характеристики',
+      exact: true,
+    });
+    const plans = visitor.getByRole('region', {
+      name: 'Планировки',
+      exact: true,
+    });
+    const description = visitor.getByText(revisedDescription, { exact: true });
     await expect(
-      visitor.getByText(revisedDescription, { exact: true }),
+      gallery
+        .or(price)
+        .or(address)
+        .or(characteristics)
+        .or(plans)
+        .or(description),
+    ).toHaveText([
+      /1 из 5/,
+      '10 650 000 ₽',
+      'Москва, Тверская улица, 19',
+      'Характеристики',
+      /Планировки/,
+      revisedDescription,
+    ]);
+    await expect(
+      plans.getByRole('img', { name: 'Планировка объекта' }),
     ).toBeVisible();
     await expect(
-      visitor.getByText('10 650 000 ₽', { exact: true }).first(),
+      gallery.getByRole('img', { name: 'Планировка объекта' }),
+    ).toHaveCount(0);
+    await expect(visiblePhoto).toHaveAttribute('src', /\/api\/v1\/media\//);
+    const firstPhoto = (await visiblePhoto.getAttribute('src'))!;
+    await gallery
+      .getByRole('button', { name: 'Следующее фото', exact: true })
+      .click();
+    await expect(gallery.getByText('2 из 5', { exact: true })).toBeVisible();
+    await expect(visiblePhoto).not.toHaveAttribute('src', firstPhoto);
+    await expect
+      .poll(() =>
+        visiblePhoto.evaluate(
+          (el: HTMLImageElement) => el.complete && el.naturalWidth > 0,
+        ),
+      )
+      .toBe(true);
+    await gallery
+      .getByRole('button', { name: 'Предыдущее фото', exact: true })
+      .click();
+    await expect(gallery.getByText('1 из 5', { exact: true })).toBeVisible();
+    await expect(visiblePhoto).toHaveAttribute('src', firstPhoto);
+    if (
+      info.project.use.hasTouch &&
+      browser.browserType().name() === 'chromium'
+    ) {
+      await visiblePhoto.scrollIntoViewIfNeeded();
+      const box = await visiblePhoto.boundingBox();
+      if (!box)
+        throw new Error('The guest photo is not visible for a touch gesture.');
+      const touch = await visitorContext.newCDPSession(visitor);
+      const y = box.y + box.height / 2;
+      try {
+        for (const [event, fraction] of [
+          ['touchStart', 0.72],
+          ['touchMove', 0.5],
+          ['touchMove', 0.28],
+        ] as const) {
+          await touch.send('Input.dispatchTouchEvent', {
+            type: event,
+            touchPoints: [{ x: box.x + box.width * fraction, y }],
+          });
+        }
+        await touch.send('Input.dispatchTouchEvent', {
+          type: 'touchEnd',
+          touchPoints: [],
+        });
+      } finally {
+        await touch.detach();
+      }
+      await expect(gallery.getByText('2 из 5', { exact: true })).toBeVisible();
+      await expect(visiblePhoto).not.toHaveAttribute('src', firstPhoto);
+    }
+    const showLocation = visitor.getByRole('button', {
+      name: 'Показать объект на карте',
+      exact: true,
+    });
+    await expect(showLocation).toHaveAttribute('aria-expanded', 'false');
+    await showLocation.click();
+    const locationMap = visitor.getByRole('region', {
+      name: 'Карта объекта',
+      exact: true,
+    });
+    await expect(
+      locationMap.getByText('Широта 55.76, долгота 37.62', { exact: true }),
     ).toBeVisible();
+    await expect(
+      locationMap.getByRole('img', { name: 'Метка объекта', exact: true }),
+    ).toBeVisible();
+    const requests = await visitor.requests();
+    expect(
+      requests.some((request) =>
+        new URL(request.url()).pathname.endsWith('/v1/search/map'),
+      ),
+    ).toBe(false);
+    const mapLink = visitor.getByRole('link', {
+      name: 'Объявления рядом на карте',
+      exact: true,
+    });
+    const mapUrl = new URL(
+      await mapLink.evaluate((link: HTMLAnchorElement) => link.href),
+    );
+    expect(mapUrl.origin).toBe(new URL(visitor.url()).origin);
+    expect(mapUrl.pathname).toBe('/search');
+    expect(mapUrl.searchParams.get('mode')).toBe('map');
+    const { bounds } = JSON.parse(
+      mapUrl.searchParams.get('definition') ?? '{}',
+    ) as {
+      bounds: [number, number, number, number];
+    };
+    expect(bounds).toHaveLength(4);
+    const [west, south, east, north] = bounds;
+    expect(west).toBeLessThan(37.62);
+    expect(east).toBeGreaterThan(37.62);
+    expect(south).toBeLessThan(55.76);
+    expect(north).toBeGreaterThan(55.76);
     const searchPath =
       '/search?' +
       new URLSearchParams({

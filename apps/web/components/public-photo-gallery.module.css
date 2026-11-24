@@ -1,0 +1,56 @@
+.gallery {
+  position: relative;
+  width: min(100%, 64rem);
+  margin-block: 0.75rem 1rem;
+  overflow: hidden;
+  border-radius: 0.875rem;
+  background: #eef2f5;
+}
+
+.photo {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  max-height: 34rem;
+  object-fit: contain;
+  touch-action: pan-y pinch-zoom;
+}
+
+.controls {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem;
+  border-radius: 2rem;
+  color: white;
+  background: #152d3ef2;
+  font-variant-numeric: tabular-nums;
+}
+
+.controls button {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  font: inherit;
+  font-size: 1.75rem;
+  cursor: pointer;
+}
+
+.controls button:focus-visible {
+  outline: 2px solid white;
+  outline-offset: -4px;
+}
+
+@media (max-width: 40rem) {
+  .photo {
+    aspect-ratio: 4 / 3;
+  }
+}
