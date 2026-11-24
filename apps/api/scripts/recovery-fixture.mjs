@@ -142,12 +142,11 @@ async function run() {
   return evidence;
 }
 try {
-  await publishRecoveryEvidence(
-    resolve('../../.cache/phase4d-recovery.json'),
-    run,
-  );
+  const output = resolve('../../.cache/phase4d-recovery.json');
+  await publishRecoveryEvidence(output, run);
+  const { migrationsVerified } = JSON.parse(await readFile(output, 'utf8'));
   console.log(
-    'Encrypted populated fixture restore verified with complete scratch cleanup: domain/history/audit,PostGIS,21 migrations and sequence identity',
+    `Encrypted populated fixture restore verified with complete scratch cleanup: domain/history/audit, PostGIS, ${migrationsVerified} migrations and sequence identity`,
   );
 } catch {
   console.error(
