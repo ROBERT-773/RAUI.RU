@@ -284,8 +284,10 @@ test('search → filter → detail → favorite and comparison', async ({ page }
 test('map viewport, zoom and keyboard selection synchronize the list', async ({
   page,
 }) => {
-  // Publication scenarios share this database and can leave other listings.
-  const query = new URLSearchParams({ q: 'Квартира' });
+  // The two seeded map listings have a district; manual publications share this database.
+  const query = new URLSearchParams({
+    definition: JSON.stringify({ category: 'apartment', district: 'Центр' }),
+  });
   await page.goto(`/search?${query}`);
   await page.getByRole('button', { name: 'Карта', exact: true }).click();
   const map = page.locator('.leaflet-map'),
