@@ -47,6 +47,7 @@ export const migrationNames = [
   '037_personal_xml_sources.sql',
   '038_trusted_xml_publication.sql',
   '039_listing_form_drafts.sql',
+  '040_seller_contact_settings.sql',
 ];
 export async function verifyMigrationPackage(root) {
   const directory = resolve(root, 'apps/api/migrations');

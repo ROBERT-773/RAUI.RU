@@ -229,6 +229,12 @@ async function run() {
           ],
         ),
       );
+    // One private verified phone per browser's owner, for explicit public contact selection.
+    await monitor.run(() =>
+      pool.query(
+        "WITH owners AS (SELECT id,row_number() OVER (ORDER BY email) n FROM users WHERE email LIKE 'quota-%@e2e.test') UPDATE users SET phone='+7000000100'||owners.n::text FROM owners WHERE users.id=owners.id",
+      ),
+    );
     if (smsOnly)
       await monitor.run(async () => {
         await pool.query(

@@ -8,6 +8,7 @@ import {
   Param,
   Body,
   Headers,
+  Header,
   Query,
   ConflictException,
   BadRequestException,
@@ -43,6 +44,13 @@ import {
 } from '../organizations/organizations';
 import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
+import {
+  ListingContacts,
+  ListingContactController,
+  publicListingContact,
+  lockContactSeller,
+  requirePublicationContact,
+} from './contact-settings';
 import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
 import {
   ListingFormDraftController,
@@ -251,7 +259,8 @@ export class Listings {
       'SELECT p.id,p.category_code,p.attributes,a.formatted,a.locality,ST_X(a.point) AS longitude,ST_Y(a.point) AS latitude FROM properties p JOIN addresses a ON a.id=p.address_id WHERE p.id=$1',
       [listing.property_id],
     );
-    const [media, professionals] = await Promise.all([
+    const [contact, media, professionals] = await Promise.all([
+      publicListingContact(this.db.pool, id),
       this.media.publicAssets(this.db.pool, id),
       this.db.rows<{ id: string; name: string; kind: 'agent' | 'agency' }>(
         `SELECT DISTINCT p.id, p.display_name AS name,
@@ -269,6 +278,7 @@ export class Listings {
       dealType: listing.deal_type,
       description: listing.description,
       rentalTerms: publicRentalTerms(listing.deal_type, listing.terms),
+      contact,
       professionals,
       property,
       media,
@@ -372,6 +382,7 @@ export class Listings {
       Number(listing.price) <= 0
     )
       throw new BadRequestException('Title and price required for publication');
+    await requirePublicationContact(sql, listing);
     await this.media.ready(sql, listing.id, minimumPhotos);
   }
   async transition(actor: Actor, id: string, body: unknown, key: unknown) {
@@ -399,6 +410,7 @@ export class Listings {
       key,
       input,
       async (sql) => {
+        if (input.status === 'moderation') await lockContactSeller(sql, id);
         const before = await this.access.get(actor, id, sql);
         await this.properties.access(actor, before.property_id, sql, true);
         const listing = await this.access.get(actor, id, sql, true);
@@ -521,7 +533,10 @@ export class ListingController {
   @Get('summary') summary(@CurrentActor() actor: Actor) {
     return this.listings.summary(actor);
   }
-  @Public() @Get(':id/public') public(@Param('id') id: string) {
+  @Public()
+  @Get(':id/public')
+  @Header('Cache-Control', 'private, no-store')
+  public(@Param('id') id: string) {
     return this.listings.published(id);
   }
   @Get(':id') get(@CurrentActor() actor: Actor, @Param('id') id: string) {
@@ -562,8 +577,12 @@ export class ListingController {
     OrganizationsModule,
     MediaModule,
   ],
-  controllers: [ListingController, ListingFormDraftController],
-  providers: [Listings, ListingFormDrafts, Idempotency],
+  controllers: [
+    ListingController,
+    ListingFormDraftController,
+    ListingContactController,
+  ],
+  providers: [Listings, ListingFormDrafts, ListingContacts, Idempotency],
   exports: [Listings],
 })
 export class ListingsModule {}

@@ -40,7 +40,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       source = randomUUID(),
       listing = randomUUID();
     await pool.query(
-      "INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone_verified_at) VALUES($1,'upgrade@example.test','fixture-only','RC upgrade','owner',now(),now())",
+      "INSERT INTO users(id,email,password_hash,display_name,role,email_verified_at,phone,phone_verified_at) VALUES($1,'upgrade@example.test','fixture-only','RC upgrade','owner',now(),'+70000000001',now())",
       [user],
     );
     await pool.query(
@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors','professional_photo_cleanup','listing_form_drafts') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors','professional_photo_cleanup','listing_form_drafts','seller_contact_phones','seller_contact_phone_challenges','listing_contact_phones') ORDER BY tablename",
         )
       ).rows;
       const legacyRows: Record<string, string> = {
@@ -103,7 +103,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
         addresses: "to_jsonb(t)-'region_code'",
         listing_sources: "to_jsonb(t)-'personal_feed_owner_id'",
         users:
-          "to_jsonb(t)-'public_id'-'registration_approval_state'-'phone_sign_in_enrolled_at'",
+          "to_jsonb(t)-'public_id'-'registration_approval_state'-'phone_sign_in_enrolled_at'-'contact_mode'",
         notifications:
           "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'-'captured_frequency'-'daily_run_id'",
         sessions: "to_jsonb(t)-'staff_totp_factor_id'-'staff_assured_until'",
@@ -163,7 +163,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 39);
+    assert.equal(upgradedLedger.length, 40);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -191,6 +191,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [36, '037_personal_xml_sources.sql'],
       [37, '038_trusted_xml_publication.sql'],
       [38, '039_listing_form_drafts.sql'],
+      [39, '040_seller_contact_settings.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -210,6 +211,8 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       'listing_daily_items',
       'professional_photo_cleanup',
       'listing_form_drafts',
+      'seller_contact_phone_challenges',
+      'listing_contact_phones',
     ]) {
       assert.equal(
         (await pool.query(`SELECT count(*)::int AS count FROM ${quote(table)}`))
@@ -218,6 +221,23 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
         `Additive table ${table} starts empty`,
       );
     }
+    assert.deepEqual(
+      (
+        await pool.query('SELECT contact_mode,phone FROM users WHERE id=$1', [
+          user,
+        ])
+      ).rows,
+      [{ contact_mode: 'messages', phone: '+70000000001' }],
+    );
+    assert.deepEqual(
+      (
+        await pool.query(
+          'SELECT phone FROM seller_contact_phones WHERE user_id=$1',
+          [user],
+        )
+      ).rows,
+      [{ phone: '+70000000001' }],
+    );
     assert.deepEqual(
       (
         await pool.query(

@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { Actor, CurrentActor, parse, uuid } from '../../common/security';
 import { Database, Sql } from '../database/database';
 import { ListingAccess, ListingAccessModule } from '../listings/access';
+import { lockContactSeller } from '../listings/contact-settings';
 import { Search, SearchModule } from '../search/search';
 import { searchSchema } from '../search/contracts';
 import {
@@ -217,9 +218,18 @@ export class Product {
   }
   async inquire(actor: Actor, listingId: string, body: unknown) {
     parse(message, body);
+    const id = parse(uuid, listingId);
     return this.db.transaction(async (sql) => {
-      const listing = await this.access.visible(parse(uuid, listingId), sql);
-      if (!listing) throw new NotFoundException();
+      const author = await lockContactSeller(sql, id);
+      const listing = await this.access.visible(id, sql);
+      if (!listing || listing.seller_id !== author.id)
+        throw new NotFoundException();
+      if (author.contact_mode === 'calls')
+        throw new ForbiddenException({
+          statusCode: 403,
+          code: 'LISTING_MESSAGES_DISABLED',
+          message: 'Автор принимает только звонки.',
+        });
       if (listing.seller_id === actor.id)
         throw new ForbiddenException('Cannot inquire about own listing');
       const [thread] = await this.db.rows<{ id: string }>(

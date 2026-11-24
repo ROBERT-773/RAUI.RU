@@ -144,6 +144,7 @@ export interface Detail {
   description: string;
   price: string;
   dealType: string;
+  contact?: { messagesAllowed: boolean; phones: string[] };
   rentalTerms?: PublicRentalTerms;
   professionals?: { id: string; name: string; kind: 'agent' | 'agency' }[];
   property: {

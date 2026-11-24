@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
 import PhoneOtpForm from './phone-otp-form';
 import PhoneSignIn from './phone-sign-in';
+import AccountContactSettings from './account-contact-settings';
 interface Profile {
   email: string;
   phone: string | null;
@@ -26,10 +27,12 @@ export default function AccountProfile({
   onRefresh,
   onSessionExpired,
   smsAvailable = false,
+  focusContacts = false,
 }: {
   onRefresh?: () => void;
   onSessionExpired?: () => void;
   smsAvailable?: boolean;
+  focusContacts?: boolean;
 }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [numericOtp, setNumericOtp] = useState<boolean | null>(null);
@@ -278,6 +281,18 @@ export default function AccountProfile({
                 </Button>
               </form>
             ))}
+          {profile.registration_approval_state === 'approved' &&
+            profile.email_verified_at &&
+            profile.phone_verified_at &&
+            ['owner', 'agent', 'agency', 'developer', 'admin'].includes(
+              profile.role,
+            ) && (
+              <AccountContactSettings
+                focusOnMount={focusContacts}
+                key={profile.email + '-' + profile.phone}
+                onSessionExpired={expireSession}
+              />
+            )}
         </>
       )}
       <Button

@@ -53,6 +53,35 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+test('opens the profile directly for contact settings and allows returning to the ordinary cabinet', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    json: async () =>
+      url.endsWith('/auth/me')
+        ? {
+            display_name: 'Агент',
+            role: 'agent',
+            registration_approval_state: 'approved',
+          }
+        : { items: [], cursor: null },
+  }));
+  render(<Account initialContacts />);
+  expect(
+    await screen.findByRole('button', { name: 'Обновить профиль' }),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Вернуться к разделам аккаунта' }),
+  );
+  fireEvent.click(
+    await screen.findByRole('button', {
+      name: 'Профиль и подтверждение контактов',
+    }),
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Обновить профиль' }),
+  ).toBeTruthy();
+});
+
 test('opens the requested messages tab for a signed-in visitor', async () => {
   const fetch = vi.fn(async (url: string) => ({
     ok: true,

@@ -26,6 +26,44 @@ test('HTTP failures expose status without exposing backend error details', async
   });
 });
 
+test('seller contact errors distinguish disabled messages, stale selection, and listings which need a phone', async () => {
+  const listing = {
+    id: '5ae72277-e111-4272-8bdb-4ebfacb79afa',
+    title: 'Квартира с террасой',
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockResolvedValueOnce(reply({ code: 'LISTING_MESSAGES_DISABLED' }, 403))
+      .mockResolvedValueOnce(
+        reply({ code: 'LISTING_CONTACT_SELECTION_CHANGED' }, 409),
+      )
+      .mockResolvedValueOnce(
+        reply(
+          {
+            code: 'contact_phone_required',
+            total: 2,
+            listings: [listing, { id: 'invalid', title: 'Ignore' }],
+          },
+          409,
+        ),
+      ),
+  );
+  const { api, ListingContactSelectionChangedError } = await import('./client');
+  await expect(api('v1/account/inquiries/' + listing.id)).rejects.toMatchObject(
+    { status: 403, message: 'Автор принимает только звонки.' },
+  );
+  await expect(
+    api('v1/listings/' + listing.id + '/contact-settings'),
+  ).rejects.toBeInstanceOf(ListingContactSelectionChangedError);
+  await expect(api('v1/account/contact-settings')).rejects.toMatchObject({
+    status: 409,
+    total: 2,
+    listings: [listing],
+  });
+});
+
 test('a URL on an unapproved feed host gives safe administrator guidance', async () => {
   vi.stubGlobal(
     'fetch',

@@ -47,6 +47,23 @@ async function proxy(
   const personalFeeds = path[1] === 'account' && path[2] === 'feeds';
   const formDrafts = path[1] === 'account' && path[2] === 'listing-drafts';
   const saveFormDraft = formDrafts && path.length === 4 && isUuid(path[3]);
+  const listingContacts =
+    path[1] === 'listings' && path[3] === 'contact-settings';
+  const listingContactsRoute =
+    listingContacts &&
+    path.length === 4 &&
+    isUuid(path[2]) &&
+    ['GET', 'PUT'].includes(request.method);
+  const accountContacts =
+    path[1] === 'account' &&
+    ['contact-settings', 'contact-phones'].includes(path[2] ?? '');
+  const accountContactsRoute =
+    path[2] === 'contact-settings'
+      ? path.length === 3 && ['GET', 'PATCH'].includes(request.method)
+      : path.length === 4 &&
+        ((request.method === 'POST' &&
+          ['request', 'verify'].includes(path[3] ?? '')) ||
+          (request.method === 'DELETE' && isUuid(path[3])));
   const organizationFeeds =
     path[1] === 'organizations' && isUuid(path[2]) && path[3] === 'feeds';
   const tail = path.slice(personalFeeds ? 3 : 4);
@@ -109,7 +126,9 @@ async function proxy(
         request.method === 'PATCH'));
   if (
     path[0] !== 'v1' ||
-    (request.method === 'PUT' && !saveFormDraft) ||
+    (request.method === 'PUT' && !saveFormDraft && !listingContactsRoute) ||
+    (listingContacts && !listingContactsRoute) ||
+    (accountContacts && !accountContactsRoute) ||
     (formDrafts &&
       request.method !== 'PUT' &&
       !(request.method === 'GET' && path.length === 3)) ||

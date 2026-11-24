@@ -8,7 +8,10 @@ import {
 } from '@testing-library/react';
 import AccountProfile from './account-profile';
 import { api } from '../lib/client';
-vi.mock('../lib/client', () => ({ api: vi.fn() }));
+vi.mock('../lib/client', async (original) => ({
+  ...(await original<typeof import('../lib/client')>()),
+  api: vi.fn(),
+}));
 const user = {
   email: 'owner@example.test',
   phone: null,
@@ -22,6 +25,54 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
+test('approved sellers can edit contact settings on the normal profile and a parent rerender preserves typed phone and pending proof', async () => {
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path === 'v1/auth/me')
+      return {
+        ...user,
+        phone: '+79990000001',
+        email_verified_at: 'now',
+        phone_verified_at: 'now',
+        registration_approval_state: 'approved',
+      };
+    if (path === 'v1/account/contact-settings')
+      return {
+        mode: 'messages',
+        phones: [{ id: 'primary', phone: '+79990000001', primary: true }],
+      };
+    if (path.endsWith('/request'))
+      return { delivery: 'accepted', resendAfter: new Date(0).toISOString() };
+    return {};
+  });
+  const page = render(<AccountProfile onRefresh={() => {}} />);
+  await screen.findByRole('combobox', {
+    name: 'Способ связи для всех объявлений',
+  });
+  fireEvent.change(screen.getByLabelText('Дополнительный номер'), {
+    target: { value: '+79990000002' },
+  });
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Получить код для номера' }),
+  );
+  const code = await screen.findByLabelText<HTMLInputElement>(
+    'Код для дополнительного номера',
+  );
+  fireEvent.change(code, { target: { value: '123' } });
+  page.rerender(<AccountProfile onRefresh={() => {}} />);
+  expect(
+    screen.getByLabelText<HTMLInputElement>('Дополнительный номер').value,
+  ).toBe('+79990000002');
+  expect(
+    screen.getByLabelText<HTMLInputElement>('Код для дополнительного номера')
+      .value,
+  ).toBe('123');
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === 'v1/account/contact-settings'),
+  ).toHaveLength(1);
+});
+
 test('shows persisted contact and independent pending approval states', async () => {
   vi.mocked(api).mockResolvedValue(user);
   render(<AccountProfile />);

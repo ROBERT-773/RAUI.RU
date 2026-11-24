@@ -69,14 +69,16 @@ interface Message {
 export default function Account({
   continueListing = false,
   initialTab = 'favorite',
+  initialContacts = false,
   smsAvailable = false,
 }: {
   continueListing?: boolean;
   initialTab?: 'favorite' | 'messages' | 'notifications';
+  initialContacts?: boolean;
   smsAvailable?: boolean;
 } = {}) {
   const [user, setUser] = useState<AccountUser | null>(null),
-    [profileOpen, setProfileOpen] = useState(false),
+    [profileOpen, setProfileOpen] = useState(initialContacts),
     [checking, setChecking] = useState(true),
     [tab, setTab] = useState<Tab>(initialTab),
     [notice, setNotice] = useState(''),
@@ -112,7 +114,7 @@ export default function Account({
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab(initialTab);
-    setProfileOpen(false);
+    setProfileOpen(initialContacts);
     setNotice('');
     setRegister(false);
     setLoginById(false);
@@ -505,6 +507,7 @@ export default function Account({
         )}
         {notice && <p role="status">{notice}</p>}
         <AccountProfile
+          focusContacts={initialContacts}
           key={identityEpoch.current}
           smsAvailable={smsAvailable}
           onRefresh={refreshProfile}

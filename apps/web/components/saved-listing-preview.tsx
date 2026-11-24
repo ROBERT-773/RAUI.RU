@@ -4,12 +4,15 @@ import { listingAttributeFields } from '../lib/listing-attribute-fields';
 import { rentalFacts } from '../lib/rental-facts';
 import type { ListingTerms } from './listing-terms';
 import styles from './saved-listing-preview.module.css';
+import { PreviewContacts } from './listing-contacts';
+import type { ListingContactSettings } from '../lib/contact-settings';
 
 export default function SavedListingPreview({
   listing,
   property,
   propertyFields,
   media,
+  contacts,
 }: {
   listing: {
     title: string;
@@ -25,6 +28,7 @@ export default function SavedListingPreview({
   } | null;
   propertyFields: { code: string; name: string; required: boolean }[];
   media: { id: string; kind: string; state: string }[];
+  contacts?: ListingContactSettings | null;
 }) {
   const savedRentalFacts = ['long_rent', 'short_rent'].includes(
     listing.deal_type,
@@ -107,6 +111,7 @@ export default function SavedListingPreview({
       <p className={styles.description}>
         {listing.description.trim() || 'Описание ещё не сохранено.'}
       </p>
+      {contacts && <PreviewContacts settings={contacts} />}
     </section>
   );
 }
