@@ -41,7 +41,7 @@ test('a dead XML delivery resumes the same saved file without fetching or geocod
     offer('202', 2000000) +
     '</realty-feed>';
   let fetches = 0;
-  let duringFetch: (() => Promise<unknown>) | undefined;
+  const fixture: { duringFetch?: () => Promise<unknown> } = {};
   const queried: string[] = [];
   const module = await Test.createTestingModule({
     imports: [DatabaseModule, ProfessionalFeedsModule],
@@ -50,7 +50,7 @@ test('a dead XML delivery resumes the same saved file without fetching or geocod
     .useValue({
       fetch: async () => {
         fetches++;
-        await duringFetch?.();
+        await fixture.duringFetch?.();
         return xml;
       },
     })
@@ -147,19 +147,27 @@ test('a dead XML delivery resumes the same saved file without fetching or geocod
   );
   assert.equal(fetches, 1);
   const lost = await feeds.createFromLink(
-    actor, null, {provider:'yandex'}, randomUUID(),
+    actor,
+    null,
+    { provider: 'yandex' },
+    randomUUID(),
   );
   queried.length = 0;
-  duringFetch = () => db.pool.query(
-    "UPDATE professional_import_jobs SET lease_until=now()-interval '1 second' WHERE run_id=$1",
-    [lost.preview.runId],
-  );
+  fixture.duringFetch = () =>
+    db.pool.query(
+      "UPDATE professional_import_jobs SET lease_until=now()-interval '1 second' WHERE run_id=$1",
+      [lost.preview.runId],
+    );
   await imports.once();
-  const [expired] = await db.rows<{state:string; payload:unknown; items:number}>(
+  const [expired] = await db.rows<{
+    state: string;
+    payload: unknown;
+    items: number;
+  }>(
     `SELECT j.state,j.payload,(SELECT count(*)::int FROM professional_import_items i WHERE i.run_id=j.run_id) AS items
      FROM professional_import_jobs j WHERE j.run_id=$1`,
     [lost.preview.runId],
   );
-  assert.deepEqual(expired,{state:'running',payload:null,items:0});
-  assert.deepEqual(queried,[]);
+  assert.deepEqual(expired, { state: 'running', payload: null, items: 0 });
+  assert.deepEqual(queried, []);
 });
