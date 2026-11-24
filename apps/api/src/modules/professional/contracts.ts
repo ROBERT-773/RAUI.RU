@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { addressSchema } from '../geo/geo';
 import { fields } from '../listings/listings';
 import { codeSchema } from '../catalog/catalog';
+export const feedProvider = z.enum(['yandex', 'avito', 'cian', 'domclick']);
 export const importItem = z
   .object({
     externalReference: z.string().trim().min(1).max(200),
@@ -33,8 +34,16 @@ export const feedInput = z
       .object({
         kind: z.enum(['manual', 'https']),
         url: z.string().url().optional(),
+        provider: feedProvider.optional(),
       })
       .strict(),
+  })
+  .strict();
+export const feedLinkInput = z
+  .object({
+    url: z.string().trim().url().max(4096).optional(),
+    provider: feedProvider,
+    name: z.string().trim().min(2).max(120).optional(),
   })
   .strict();
 export const feedConfig = z

@@ -43,9 +43,11 @@ async function run() {
   const onboardingOnly = process.argv.includes('--onboarding-only');
   const staffTotpOnly = process.argv.includes('--staff-totp-only');
   const smsOnly = process.argv.includes('--sms-only');
+  const feedsOnly = process.argv.includes('--feeds-only');
   if (
-    [publicationOnly, onboardingOnly, staffTotpOnly, smsOnly].filter(Boolean)
-      .length > 1
+    [publicationOnly, onboardingOnly, staffTotpOnly, smsOnly, feedsOnly].filter(
+      Boolean,
+    ).length > 1
   )
     throw new Error('Select one focused E2E scenario');
   const focusedSpecs = publicationOnly
@@ -56,7 +58,10 @@ async function run() {
         ? ['e2e/staff-two-factor.spec.ts']
         : smsOnly
           ? ['e2e/phone-sign-in.spec.ts']
-          : [];
+          : feedsOnly
+            ? ['e2e/professional-feeds.spec.ts']
+            : [];
+  const runFeeds = feedsOnly || !focusedSpecs.length;
   if (
     precreated !== undefined &&
     (!/^raui_test_[a-f0-9]{16}$/.test(precreated) ||
@@ -96,6 +101,12 @@ async function run() {
       ? randomBytes(32).toString('hex')
       : undefined,
     E2E_SMS: smsOnly ? 'true' : 'false',
+    ...(runFeeds
+      ? {
+          E2E_XML_FEEDS: 'true',
+          FEED_ALLOWED_HOSTS: 'xml-fixture.example.test',
+        }
+      : {}),
     ...(smsOnly
       ? {
           PHONE_OTP_PEPPER: randomBytes(32).toString('base64url'),
@@ -269,6 +280,8 @@ async function run() {
     );
     start(['dist/worker.js'], process.cwd(), 'e2e-media-worker');
     start(['dist/search-worker.js'], process.cwd(), 'e2e-search-worker');
+    if (runFeeds)
+      start(['scripts/e2e-feed-worker.mjs'], process.cwd(), 'e2e-feed-worker');
     start(
       [
         'node_modules/next/dist/bin/next',
@@ -461,7 +474,9 @@ async function run() {
               ? 'staff-totp-e2e-summary.json'
               : smsOnly
                 ? 'sms-e2e-summary.json'
-                : 'phase4d-e2e-summary.json',
+                : feedsOnly
+                  ? 'feeds-e2e-summary.json'
+                  : 'phase4d-e2e-summary.json',
       ),
       JSON.stringify(
         {

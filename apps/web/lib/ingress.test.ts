@@ -330,6 +330,91 @@ test('owner and moderation proxy exposes only selected methods and preserves ide
   ).toBe(404);
 });
 
+test('organization feed proxy admits the one-link import entry point only', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn(async (...args: unknown[]) => {
+    void args;
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, POST } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const link = ['v1', 'organizations', id, 'feeds', 'link'];
+  expect(
+    (
+      await POST(
+        new NextRequest('https://staging.raui.ru/api/' + link.join('/'), {
+          method: 'POST',
+          headers: { origin: 'https://staging.raui.ru' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path: link }) },
+      )
+    ).status,
+  ).toBe(200);
+  for (const base of [
+    ['v1', 'organizations', id, 'feeds'],
+    ['v1', 'account', 'feeds'],
+  ]) {
+    for (const tail of [
+      ['links'],
+      [id, 'runs', id],
+      [id, 'runs', id, 'items'],
+    ]) {
+      const path = [...base, ...tail];
+      expect(
+        (
+          await GET(
+            new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+            { params: Promise.resolve({ path }) },
+          )
+        ).status,
+      ).toBe(200);
+    }
+    for (const tail of [
+      [],
+      ['link'],
+      ['links', 'unknown'],
+      [id, 'runs', 'bad'],
+      [id, 'runs', id, 'retry'],
+    ]) {
+      const path = [...base, ...tail];
+      expect(
+        (
+          await GET(
+            new NextRequest('https://staging.raui.ru/api/' + path.join('/')),
+            { params: Promise.resolve({ path }) },
+          )
+        ).status,
+      ).toBe(404);
+    }
+  }
+  expect(
+    (
+      await POST(
+        new NextRequest(
+          'https://staging.raui.ru/api/' +
+            ['v1', 'organizations', id, 'feeds', 'unexpected'].join('/'),
+          {
+            method: 'POST',
+            headers: { origin: 'https://staging.raui.ru' },
+            body: '{}',
+          },
+        ),
+        {
+          params: Promise.resolve({
+            path: ['v1', 'organizations', id, 'feeds', 'unexpected'],
+          }),
+        },
+      )
+    ).status,
+  ).toBe(404);
+});
+
 test('registration approval proxy admits only queue, detail and idempotent decision', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'development');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');

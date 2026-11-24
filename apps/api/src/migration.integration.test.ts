@@ -164,7 +164,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 36);
+    assert.equal(upgradedLedger.length, 37);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -189,6 +189,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [33, '034_staff_totp.sql'],
       [34, '035_phone_sign_in.sql'],
       [35, '036_phone_sign_in_enrollment.sql'],
+      [36, '037_personal_xml_sources.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(

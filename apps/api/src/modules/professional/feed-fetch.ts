@@ -7,6 +7,7 @@ import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { publicIPv4 } from '../../common/outbound-policy';
+import { xmlFeedMaxBytes } from './feed-limits';
 export { publicIPv4 } from '../../common/outbound-policy';
 export abstract class FeedFetcher {
   abstract fetch(url: string): Promise<string>;
@@ -94,10 +95,15 @@ export class HttpsFeedFetcher extends FeedFetcher {
             return;
           }
           let size = 0;
+          const maxBytes = /^(application|text)\/xml(?:;|$)/i.test(
+            res.headers['content-type'] ?? '',
+          )
+            ? xmlFeedMaxBytes
+            : 2_000_000;
           const chunks: Buffer[] = [];
           res.on('data', (chunk: Buffer) => {
             size += chunk.length;
-            if (size > 2_000_000) {
+            if (size > maxBytes) {
               req.destroy();
               reject(new ServiceUnavailableException('Feed too large'));
             } else chunks.push(chunk);

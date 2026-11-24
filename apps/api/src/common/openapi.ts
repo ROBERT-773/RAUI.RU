@@ -11,6 +11,8 @@ import {
 } from '../modules/auth/phone-sign-in';
 import {
   feedInput,
+  feedLinkInput,
+  feedProvider,
   feedConfig,
   importInput,
 } from '../modules/professional/contracts';
@@ -48,6 +50,52 @@ import {
 } from '../modules/auth/staff-totp-controller';
 const object = (shape: z.ZodRawShape) => z.object(shape).strict();
 const version = z.number().int().positive();
+const linkSummary = object({
+  id: uuid,
+  provider: feedProvider,
+  host: z.string(),
+  active: z.boolean(),
+});
+const linkRun = object({
+  id: uuid,
+  status: z.enum(['running', 'succeeded', 'quarantined', 'failed']),
+  stats: z.object({
+    stage: z.string().optional(),
+    total: z.number().optional(),
+    valid: z.number().optional(),
+    quarantined: z.number().optional(),
+  }),
+  error: z.string().nullable(),
+});
+const linkItem = object({
+  external_reference: z.string(),
+  property_id: uuid.nullable(),
+  listing_id: uuid.nullable(),
+  status: z.string(),
+  errors: z.array(
+    z.object({
+      code: z.string(),
+      message: z.string(),
+      field: z.string().optional(),
+    }),
+  ),
+});
+const feedReads: Record<string, z.ZodType> = {};
+for (const prefix of [
+  '/v1/organizations/{organizationId}/feeds',
+  '/v1/account/feeds',
+]) {
+  feedReads['post ' + prefix + '/link'] = object({
+    feed: linkSummary,
+    preview: object({ runId: uuid, status: z.literal('queued') }),
+  });
+  feedReads['get ' + prefix + '/links'] = z.array(
+    linkSummary.extend({ lastRunId: uuid.nullable() }),
+  );
+  feedReads['get ' + prefix + '/{feedId}/runs/{runId}'] = linkRun;
+  feedReads['get ' + prefix + '/{feedId}/runs/{runId}/items'] =
+    z.array(linkItem);
+}
 const name = z.string().min(1).max(200);
 const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/auth/staff-totp/enroll': staffTotpEnrollmentInput,
@@ -60,6 +108,8 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/admin/trust/candidates/{id}/decision': duplicateDecision,
   'post /v1/analytics/events': analyticsEvent,
   'post /v1/organizations/{organizationId}/feeds': feedInput,
+  'post /v1/organizations/{organizationId}/feeds/link': feedLinkInput,
+  'post /v1/account/feeds/link': feedLinkInput,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run': importInput,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/apply': importInput,
   'patch /v1/organizations/{organizationId}/feeds/{feedId}': feedConfig,
@@ -323,6 +373,8 @@ post /v1/trust/listings/{id}/scan
 post /v1/admin/trust/listings/{id}/decision
 post /v1/admin/trust/candidates/{id}/decision
 post /v1/organizations/{organizationId}/feeds
+post /v1/organizations/{organizationId}/feeds/link
+post /v1/account/feeds/link
 post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run
 post /v1/organizations/{organizationId}/feeds/{feedId}/apply
 post /v1/organizations/{organizationId}/professional/portfolios
@@ -438,6 +490,39 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (feedReads[operationId]) {
+        operation.responses[method === 'post' ? '201' : '200'] = {
+          description:
+            method === 'post'
+              ? 'Saved link and queued preview'
+              : 'Import preview',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(feedReads[operationId]!) as SchemaObject,
+            },
+          },
+        };
+        if (path.endsWith('/items'))
+          operation.parameters = [
+            ...(operation.parameters ?? []),
+            { in: 'query', name: 'errorsOnly', schema: { type: 'boolean' } },
+            {
+              in: 'query',
+              name: 'limit',
+              schema: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 200,
+                default: 50,
+              },
+            },
+            {
+              in: 'query',
+              name: 'after',
+              schema: { type: 'string', maxLength: 200 },
+            },
+          ];
+      }
       if (operationId === 'get /v1/listings/{id}/history') {
         const historyWindow =
           'The 200 most recent listing events at most, returned in ascending event ID order.';

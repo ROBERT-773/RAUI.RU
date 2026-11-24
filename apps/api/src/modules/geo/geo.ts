@@ -106,6 +106,6 @@ export class GeoController {
         ),
     },
   ],
-  exports: [Geo, RegionCatalogue],
+  exports: [Geo, RegionCatalogue, Geocoder],
 })
 export class GeoModule {}

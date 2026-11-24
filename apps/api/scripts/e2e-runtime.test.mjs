@@ -284,6 +284,9 @@ test('media worker is tracked with the same bounded cleanup contract as other se
   child.emit('exit', 0, null);
   assert.equal((await record.completion).code, 0);
   assert.equal(record.label, 'media-worker');
+  const feed = trackProcess(child, 'feed-worker');
+  child.emit('exit', 0, null);
+  assert.equal((await feed.completion).code, 0);
   assert.throws(
     () => trackProcess(child, 'arbitrary'),
     /Invalid service label/,
