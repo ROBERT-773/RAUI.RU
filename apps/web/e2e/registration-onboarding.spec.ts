@@ -347,7 +347,7 @@ test('new owner registers, saves a draft and publishes after moderation', async 
       endpoint(response, 'POST', '/api/v1/listings'),
     );
     await form
-      .getByRole('button', { name: 'Сохранить черновик', exact: true })
+      .getByRole('button', { name: 'Перейти к фотографиям', exact: true })
       .click();
     const saved = await save;
     expect(saved.status()).toBe(201);

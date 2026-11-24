@@ -255,24 +255,29 @@ test('finishing a saved form binds one listing to its last saved version', async
   await screen.findByText(/Черновик сохранён в кабинете/);
   const [id] = drafts.keys();
   await fill();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(drafts.get(id!)?.form).toMatchObject({
     step: 3,
     title: 'Квартира рядом с парком',
   });
-  expect(api).toHaveBeenCalledWith('v1/properties', 'POST', expect.anything(), {
-    idempotencyKey: 'draft-property-' + id + '-2',
-  });
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/properties'),
+  ).toHaveLength(0);
   expect(api).toHaveBeenCalledWith(
     'v1/listings',
     'POST',
-    expect.objectContaining({ formDraft: { id, version: 2 } }),
+    expect.objectContaining({
+      formDraft: { id, version: 2 },
+      property: expect.objectContaining({ category: 'apartment' }),
+    }),
     { idempotencyKey: 'draft-listing-' + id + '-2' },
   );
 });
 
-test('reopening the saved final step after interruption retries the same property and listing keys', async () => {
+test('reopening the saved final step after interruption replays one atomic listing request', async () => {
   setupListingDrafts(true);
   const created = vi.fn();
   const first = render(<NewListing onCreated={created} />);
@@ -281,28 +286,31 @@ test('reopening the saved final step after interruption retries the same propert
     screen.getByRole('button', { name: 'Сохранить в черновики' }),
   );
   await screen.findByText(/Черновик сохранён в кабинете/);
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
-  await screen.findByText(/Не удалось сохранить черновик/);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
+  await screen.findByText(/Не удалось перейти к фотографиям/);
   first.unmount();
   render(<NewListing onCreated={created} />);
   fireEvent.click(
     await screen.findByRole('button', { name: /Продолжить.*Квартира рядом/ }),
   );
   const submit = screen.getByRole<HTMLButtonElement>('button', {
-    name: 'Сохранить черновик',
+    name: 'Перейти к фотографиям',
   });
   await waitFor(() => expect(submit.disabled).toBe(false));
   fireEvent.click(submit);
   await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
-  for (const endpoint of ['v1/properties', 'v1/listings']) {
-    const writes = vi
-      .mocked(api)
-      .mock.calls.filter(
-        ([path, method]) => path === endpoint && method === 'POST',
-      );
-    expect(writes).toHaveLength(2);
-    expect(writes[1]).toEqual(writes[0]);
-  }
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/properties'),
+  ).toHaveLength(0);
+  const writes = vi
+    .mocked(api)
+    .mock.calls.filter(
+      ([path, method]) => path === 'v1/listings' && method === 'POST',
+    );
+  expect(writes).toHaveLength(2);
+  expect(writes[1]).toEqual(writes[0]);
 });
 
 async function fill(
@@ -399,7 +407,9 @@ test('an expired session during creation keeps the typed fields and offers sign-
   });
   render(<NewListing onCreated={vi.fn()} />);
   await fill();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   const link = await screen.findByRole('link', { name: 'Войти снова' });
   expect(link.getAttribute('href')).toBe('/account?action=publish');
   expect(screen.getByLabelText<HTMLInputElement>('Заголовок').value).toBe(
@@ -414,6 +424,142 @@ test('an expired session during creation keeps the typed fields and offers sign-
     vi.mocked(api).mock.calls.some(([path]) => path === 'v1/listings'),
   ).toBe(false);
 });
+test.each([
+  { role: 'agent', replacement: '', step: 3 },
+  { role: 'agency', replacement: 'agency-3', step: 2 },
+  { role: 'agency', replacement: '', step: 3 },
+])(
+  'restored $role draft at step $step requires explicit representation when access is lost (replacement $replacement)',
+  async ({ role, replacement, step }) => {
+    const drafts = setupListingDrafts();
+    const created = vi.fn();
+    const initial = render(
+      <NewListing sellerRole={role} onCreated={created} />,
+    );
+    await fill('sale', 'agency-1');
+    if (step === 2)
+      fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Сохранить в черновики' }),
+    );
+    await screen.findByText(/Черновик сохранён в кабинете/);
+    expect([...drafts.values()][0]?.form.organizationId).toBe('agency-1');
+    initial.unmount();
+    const base = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path, ...args) =>
+      path === 'v1/organizations'
+        ? replacement
+          ? [
+              {
+                id: replacement,
+                name: 'Новое агентство',
+                kind: 'agency',
+                active: true,
+                membership_active: true,
+              },
+            ]
+          : []
+        : base(path, ...args),
+    );
+    render(<NewListing sellerRole={role} onCreated={created} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Продолжить.*Квартира рядом/ }),
+    );
+    const advance = () =>
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Далее' });
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', {
+        name: step === 3 ? 'Перейти к фотографиям' : 'Далее',
+      }).disabled,
+    ).toBe(true);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Изменить выбор на первом шаге',
+      }),
+    );
+    const who = await screen.findByRole<HTMLSelectElement>('combobox', {
+      name: 'От чьего имени',
+    });
+    expect(who.selectedOptions[0]?.textContent).toContain('недоступно');
+    if (role === 'agency' && !replacement) {
+      expect(
+        screen.queryByRole('option', { name: 'От своего имени' }),
+      ).toBeNull();
+      expect(advance().disabled).toBe(true);
+      return;
+    }
+    const option = screen.getByRole<HTMLOptionElement>('option', {
+      name: replacement ? 'Новое агентство' : 'От своего имени',
+    });
+    fireEvent.change(who, { target: { value: option.value } });
+    fireEvent.click(advance());
+    expect(screen.getByLabelText<HTMLInputElement>('Адрес').value).toBe(
+      'Москва, улица 1',
+    );
+    fireEvent.click(advance());
+    fireEvent.click(advance());
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+    );
+    await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+    const write = vi
+      .mocked(api)
+      .mock.calls.find(
+        ([path, method]) => path === 'v1/listings' && method === 'POST',
+      );
+    const payload = write?.[2] as { property: { organizationId?: string } };
+    expect(payload.property.organizationId).toBe(replacement || undefined);
+  },
+);
+
+test.each([false, true])(
+  'restoring coordinates preserves their manual or suggestion origin (%s)',
+  async (suggested) => {
+    setupListingDrafts();
+    const initial = render(<NewListing onCreated={vi.fn()} />);
+    await screen.findByRole('option', { name: 'Квартира' });
+    fireEvent.change(screen.getByLabelText('Категория'), {
+      target: { value: 'apartment' },
+    });
+    await screen.findByLabelText('Площадь *');
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    fireEvent.change(screen.getByLabelText('Адрес'), {
+      target: { value: 'улица 1' },
+    });
+    if (suggested) {
+      fireEvent.click(screen.getByRole('button', { name: 'Найти адрес' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Москва, улица 1' }),
+      );
+    } else {
+      fireEvent.change(screen.getByLabelText('Долгота'), {
+        target: { value: '37.6' },
+      });
+      fireEvent.change(screen.getByLabelText('Широта'), {
+        target: { value: '55.7' },
+      });
+    }
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Сохранить в черновики' }),
+    );
+    await screen.findByText(/Черновик сохранён в кабинете/);
+    initial.unmount();
+    render(<NewListing onCreated={vi.fn()} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Продолжить.*улица 1/ }),
+    );
+    fireEvent.change(screen.getByLabelText('Адрес'), {
+      target: { value: 'Москва, улица 2' },
+    });
+    expect(screen.getByLabelText<HTMLInputElement>('Долгота').value).toBe(
+      suggested ? '' : '37.6',
+    );
+    expect(screen.getByLabelText<HTMLInputElement>('Широта').value).toBe(
+      suggested ? '' : '55.7',
+    );
+  },
+);
+
 test('an agency without an organization can open its setup section', async () => {
   setup();
   const respond = vi.mocked(api).getMockImplementation()!;
@@ -444,7 +590,9 @@ test('a revoked agency selection refreshes choices and keeps entered fields', as
   });
   render(<NewListing onCreated={vi.fn()} sellerRole="agent" />);
   await fill('sale', 'agency-1');
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
 
   expect((await screen.findByRole('alert')).textContent).toContain(
     'Введённые данные сохранены в форме.',
@@ -454,6 +602,15 @@ test('a revoked agency selection refreshes choices and keeps entered fields', as
       vi.mocked(api).mock.calls.filter(([path]) => path === 'v1/organizations'),
     ).toHaveLength(2),
   );
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Далее' }).disabled,
+  ).toBe(true);
+  const personal = await screen.findByRole<HTMLOptionElement>('option', {
+    name: 'От своего имени',
+  });
+  fireEvent.change(screen.getByLabelText('От чьего имени'), {
+    target: { value: personal.value },
+  });
   const next = () =>
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
   next();
@@ -500,7 +657,9 @@ test('an agency account with multiple organizations submits the explicitly selec
   ).toBe(true);
   await fill('sale', 'agency-3');
   expect(screen.getByText('Агентство: Квартал', { exact: true })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/properties',
@@ -541,7 +700,9 @@ test('an agency account defaults to its only active organization', async () => {
     screen.queryByRole('option', { name: 'Архивное агентство' }),
   ).toBeNull();
   await fill();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/properties',
@@ -611,7 +772,9 @@ test('commercial offers select their subtype before moving to the address', asyn
   fireEvent.change(screen.getByLabelText('Цена, ₽'), {
     target: { value: '5000000' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/properties',
@@ -739,7 +902,9 @@ test('long rental offers use rent-specific terms when saving a draft', async () 
     target: { value: '10000' },
   });
   fireEvent.click(screen.getByLabelText('Коммунальные платежи включены'));
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/listings',
@@ -762,7 +927,9 @@ test('short rental drafts save guest capacity and the minimum stay', async () =>
   fireEvent.change(screen.getByLabelText('Минимум ночей'), {
     target: { value: '2' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/listings',
@@ -788,7 +955,9 @@ test('creates a draft with explicit region and zero coordinates', async () => {
   );
   await fill('sale', undefined, 'novosibirsk');
   expect(screen.getByText('Регион: Новосибирская область')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
   expect(api).toHaveBeenCalledWith(
     'v1/properties',
@@ -809,7 +978,7 @@ test('an invalid floor keeps the user on the characteristics step until correcte
   render(<NewListing onCreated={vi.fn()} />);
   await fill('sale', undefined, undefined, true);
   expect(
-    screen.getByRole('button', { name: 'Сохранить черновик' }),
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
   ).toBeTruthy();
 });
 test.each([undefined, 'agency-1'])(
@@ -824,7 +993,9 @@ test.each([undefined, 'agency-1'])(
       />,
     );
     await fill('sale', agency);
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+    );
     const alert = await screen.findByRole('alert');
     if (agency)
       expect(alert.textContent).toContain('Проверьте доступ к агентству');
@@ -960,7 +1131,9 @@ test('completed creation cannot resubmit and explicit reset creates a new attemp
   const created = vi.fn();
   render(<NewListing onCreated={created} />);
   await fill();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await screen.findByRole('status');
   fireEvent.submit(screen.getByLabelText('Заголовок').closest('form')!);
   expect(created).toHaveBeenCalledTimes(1);
@@ -968,7 +1141,9 @@ test('completed creation cannot resubmit and explicit reset creates a new attemp
     screen.getByRole('button', { name: 'Создать ещё объявление' }),
   );
   await fill();
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(created).toHaveBeenCalledTimes(2));
   const properties = vi
     .mocked(api)
@@ -998,7 +1173,9 @@ test('unmount during property creation does not create a listing or notify paren
         release = resolve;
       }),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   view.unmount();
   await act(async () => {
     release?.({ id: 'property-1' });
@@ -1022,7 +1199,9 @@ test('parent disabling while property request is pending pauses before listing c
         })
       : { id: 'listing-1' },
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   view.rerender(<NewListing disabled onCreated={created} />);
   await act(async () => {
     release?.({ id: 'property-1' });
@@ -1050,7 +1229,9 @@ test('reports busy until the final listing request settles', async () => {
           release = resolve;
         }),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к фотографиям' }),
+  );
   await waitFor(() => expect(release).toBeDefined());
   expect(busy.mock.calls).toEqual([[true]]);
   await act(async () => {

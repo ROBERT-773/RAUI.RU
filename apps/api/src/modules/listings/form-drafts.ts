@@ -31,6 +31,7 @@ export const listingForm = z
     address: text,
     longitude: z.string().max(100),
     latitude: z.string().max(100),
+    coordinatesFromSuggestion: z.boolean().optional(),
     attributes: z.record(key, text).refine((v) => Object.keys(v).length <= 100),
     title: text,
     price: z.string().max(100),

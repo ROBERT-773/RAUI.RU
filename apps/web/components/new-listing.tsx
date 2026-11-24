@@ -111,6 +111,12 @@ export default function NewListing({
         ? agencies[0]
         : agencies.find(({ id }) => id === organizationId)
       : undefined;
+  const needsAgencyChoice =
+    canRepresentAgency &&
+    (requiresAgency || Boolean(organizationId)) &&
+    !selectedAgency;
+  const lostAgency =
+    agencyStatus === 'ready' && Boolean(organizationId) && !selectedAgency;
   const [categories, setCategories] = useState<Category[]>([]);
   const [category, setCategory] = useState('');
   const [definitions, setDefinitions] = useState<Attribute[] | null>(null);
@@ -185,7 +191,8 @@ export default function NewListing({
   const saving = useRef(false);
   const definitionRequest = useRef(0);
   const addressRequest = useRef(0);
-  const hasGeocodedCoordinates = useRef(false);
+  const [coordinatesFromSuggestion, setCoordinatesFromSuggestion] =
+    useState(false);
   const [drafts, setDrafts] = useState<AccountListingDraft[]>([]);
   const [activeDraft, setActiveDraft] = useState<AccountListingDraft | null>(
     null,
@@ -206,6 +213,7 @@ export default function NewListing({
     address,
     longitude,
     latitude,
+    ...(coordinatesFromSuggestion ? { coordinatesFromSuggestion: true } : {}),
     attributes,
     title,
     price,
@@ -303,8 +311,8 @@ export default function NewListing({
   function invalidateAddressLookup() {
     addressRequest.current++;
     setAddressLookup(undefined);
-    if (!hasGeocodedCoordinates.current) return;
-    hasGeocodedCoordinates.current = false;
+    if (!coordinatesFromSuggestion) return;
+    setCoordinatesFromSuggestion(false);
     setLongitude('');
     setLatitude('');
   }
@@ -394,12 +402,10 @@ export default function NewListing({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (saving.current || disabled || completed || sessionExpired) return;
-    if (
-      !locked &&
-      (requiresAgency || (canRepresentAgency && organizationId)) &&
-      !selectedAgency
-    ) {
-      setError('Выберите агентство для объявления.');
+    if (!locked && needsAgencyChoice) {
+      setError(
+        'На первом шаге выберите, от чьего имени разместить объявление.',
+      );
       return;
     }
     if (!locked && step >= 2) {
@@ -555,10 +561,10 @@ export default function NewListing({
         }
         if (!mounted.current || !allowed.current) return;
         current.listing.formDraft = { id: record.id, version: record.version };
-        current.propertyKey = `draft-property-${record.id}-${record.version}`;
+        current.listing.property = current.property;
         current.listingKey = `draft-listing-${record.id}-${record.version}`;
       }
-      if (!current.propertyId) {
+      if (!current.listing.formDraft && !current.propertyId) {
         const property = await api<{ id: string }>(
           'v1/properties',
           'POST',
@@ -571,7 +577,9 @@ export default function NewListing({
       const listing = await api<{ id: string }>(
         'v1/listings',
         'POST',
-        { ...current.listing, propertyId: current.propertyId },
+        current.listing.formDraft
+          ? current.listing
+          : { ...current.listing, propertyId: current.propertyId },
         { idempotencyKey: current.listingKey },
       );
       if (mounted.current) {
@@ -612,7 +620,6 @@ export default function NewListing({
       ) {
         attempt.current = undefined;
         setLocked(false);
-        setOrganizationId('');
         setAgencyStatus('loading');
         setAgencyRequest((value) => value + 1);
         setStep(0);
@@ -623,7 +630,9 @@ export default function NewListing({
         setError(
           selectedAgency && error instanceof ApiError && error.status === 403
             ? 'Объект сохранён. Проверьте доступ к агентству и повторите сохранение объявления после восстановления доступа.'
-            : 'Не удалось сохранить черновик. Повторите сохранение: уже созданный объект будет использован повторно.',
+            : activeDraft
+              ? 'Не удалось перейти к фотографиям. Повторите попытку. Сохранённый черновик доступен в кабинете.'
+              : 'Не удалось сохранить черновик. Повторите сохранение: уже созданный объект будет использован повторно.',
         );
       }
     } finally {
@@ -697,7 +706,7 @@ export default function NewListing({
     setLocality(saved.locality);
     setLongitude(saved.longitude);
     setLatitude(saved.latitude);
-    hasGeocodedCoordinates.current = Boolean(saved.longitude && saved.latitude);
+    setCoordinatesFromSuggestion(saved.coordinatesFromSuggestion === true);
     setPrice(saved.price);
     setTitle(saved.title);
     setTerms(saved.terms);
@@ -719,6 +728,25 @@ export default function NewListing({
       }}
     >
       <h2>Новое объявление</h2>
+      {step > 0 &&
+        !completed &&
+        !locked &&
+        needsAgencyChoice &&
+        agencyStatus !== 'loading' && (
+          <p role="status">
+            Проверьте, от чьего имени размещается это объявление.{' '}
+            <button
+              type="button"
+              disabled={busy || disabled}
+              onClick={() => {
+                setStep(0);
+                setError('');
+              }}
+            >
+              Изменить выбор на первом шаге
+            </button>
+          </p>
+        )}
       <ListingFormDrafts
         drafts={drafts}
         categories={categories}
@@ -729,8 +757,8 @@ export default function NewListing({
         onRetry={() => void reloadDrafts()}
       />
       <p>
-        Сохраните черновик, затем добавьте фотографии и отправьте объявление на
-        проверку.
+        Черновик можно сохранить на любом шаге. После заполнения цены и условий
+        перейдите к фотографиям.
       </p>
       {!completed && (
         <ol
@@ -769,19 +797,36 @@ export default function NewListing({
               </>
             )}
             {agencyStatus === 'ready' &&
-              (requiresAgency || agencies.length > 0) && (
+              (requiresAgency ||
+                agencies.length > 0 ||
+                lostAgency ||
+                activeDraft?.form.organizationId) && (
                 <label>
                   От чьего имени
                   <select
-                    value={selectedAgency?.id ?? ''}
+                    value={
+                      selectedAgency?.id ??
+                      (requiresAgency || lostAgency ? '' : 'personal')
+                    }
                     required={requiresAgency}
-                    onChange={(event) => setOrganizationId(event.target.value)}
+                    onChange={(event) =>
+                      setOrganizationId(
+                        event.target.value === 'personal'
+                          ? ''
+                          : event.target.value,
+                      )
+                    }
                   >
-                    <option value="">
-                      {requiresAgency
-                        ? 'Выберите агентство'
-                        : 'От своего имени'}
-                    </option>
+                    {(requiresAgency || lostAgency) && (
+                      <option value="" disabled>
+                        {lostAgency
+                          ? 'Ранее выбранное агентство недоступно'
+                          : 'Выберите агентство'}
+                      </option>
+                    )}
+                    {!requiresAgency && (
+                      <option value="personal">От своего имени</option>
+                    )}
                     {agencies.map(({ id, name }) => (
                       <option key={id} value={id}>
                         {name}
@@ -929,7 +974,7 @@ export default function NewListing({
                     setLocality(match.locality);
                     setLongitude(String(match.longitude));
                     setLatitude(String(match.latitude));
-                    hasGeocodedCoordinates.current = true;
+                    setCoordinatesFromSuggestion(true);
                     setAddressLookup(undefined);
                   }}
                 >
@@ -952,7 +997,10 @@ export default function NewListing({
             min={-180}
             max={180}
             value={longitude}
-            onChange={(event) => setLongitude(event.target.value)}
+            onChange={(event) => {
+              setCoordinatesFromSuggestion(false);
+              setLongitude(event.target.value);
+            }}
           />
         </label>
         <label>
@@ -964,7 +1012,10 @@ export default function NewListing({
             min={-90}
             max={90}
             value={latitude}
-            onChange={(event) => setLatitude(event.target.value)}
+            onChange={(event) => {
+              setCoordinatesFromSuggestion(false);
+              setLatitude(event.target.value);
+            }}
           />
         </label>
       </fieldset>
@@ -1131,7 +1182,7 @@ export default function NewListing({
               !definitions ||
               disabled ||
               sessionExpired ||
-              (requiresAgency && !selectedAgency)
+              (!locked && needsAgencyChoice)
             }
             type="submit"
           >
@@ -1141,7 +1192,7 @@ export default function NewListing({
                 ? 'Повторить сохранение'
                 : step < steps.length - 1
                   ? 'Далее'
-                  : 'Сохранить черновик'}
+                  : 'Перейти к фотографиям'}
           </button>
         </div>
       )}

@@ -13,6 +13,36 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+test('personal drafts can be listed and saved through the authenticated web proxy', async () => {
+  const origin = 'https://staging.raui.ru';
+  const collection = ['v1', 'account', 'listing-drafts'];
+  const item = [...collection, '11111111-1111-4111-8111-111111111111'];
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('WEB_ORIGIN', origin);
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const fetcher = vi.fn(async () => Response.json({}));
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, PUT } = await import('../app/api/[...path]/route');
+  async function request(path: string[], method: 'GET' | 'PUT', from = origin) {
+    const req = new NextRequest(origin + '/api/' + path.join('/'), {
+      method,
+      headers: { origin: from, 'x-csrf-token': 'test-token' },
+      ...(method === 'PUT' ? { body: '{}' } : {}),
+    });
+    return (method === 'GET' ? GET : PUT)(req, {
+      params: Promise.resolve({ path }),
+    });
+  }
+  expect((await request(collection, 'GET')).status).toBe(200);
+  expect((await request(item, 'PUT')).status).toBe(200);
+  expect((await request(item, 'PUT', 'https://other.example')).status).toBe(
+    403,
+  );
+  expect((await request(item, 'GET')).status).toBe(404);
+  expect((await request(collection, 'PUT')).status).toBe(404);
+  expect((await request(['v1', 'listings'], 'PUT')).status).toBe(404);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
 test('Production web proxy refuses absent ingress identity before contacting API', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'production');
   vi.stubEnv('WEB_ORIGIN', 'https://raui.ru');

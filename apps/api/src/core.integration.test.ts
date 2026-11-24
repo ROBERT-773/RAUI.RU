@@ -769,6 +769,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           address: 'Москва, ул.',
           longitude: '-',
           latitude: '',
+          coordinatesFromSuggestion: false,
           attributes: { area: '1,' },
           title: '',
           price: '',
@@ -827,9 +828,14 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(latest.version, 2);
         assert.deepEqual((await save(1, latest.form)).data, latest);
         assert.deepEqual((await save(2, latest.form)).data, latest);
-        const source = await property(author, 'form-property');
-        const completeBody = {
-          propertyId: source.id,
+        const firstAddress = 'Проверка черновика, старая улица';
+        const finalAddress = 'Проверка черновика, новый адрес';
+        const firstAttempt = {
+          property: {
+            category: 'apartment',
+            address: { ...address, formatted: firstAddress },
+            attributes: { area: 55, kitchen_area: 10 },
+          },
           dealType: 'sale',
           title: 'Квартира у парка',
           price: 1000000,
@@ -840,20 +846,19 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             await call(
               '/listings',
               'POST',
-              { ...completeBody, formDraft: { id, version: 1 } },
+              { ...firstAttempt, formDraft: { id, version: 1 } },
               author,
               'old-form-completion',
             )
           ).status,
           409,
         );
-        const otherProperty = await property(other, 'other-form-property');
         assert.equal(
           (
             await call(
               '/listings',
               'POST',
-              { ...completeBody, propertyId: otherProperty.id },
+              firstAttempt,
               other,
               'wrong-form-owner',
             )
@@ -861,6 +866,67 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           404,
         );
         assert.deepEqual(await list(author), [latest]);
+        // Fail the listing insert after the new address and property have been written.
+        await pool.query(
+          "ALTER TABLE listings ADD CONSTRAINT form_draft_late_failure CHECK (title <> 'Квартира у парка') NOT VALID",
+        );
+        try {
+          assert.ok(
+            (
+              await call(
+                '/listings',
+                'POST',
+                firstAttempt,
+                author,
+                'late-form-failure',
+              )
+            ).status >= 400,
+          );
+          assert.deepEqual(await list(author), [latest]);
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT count(*)::int AS n FROM properties WHERE created_by=$1',
+                [author.user.id],
+              )
+            ).rows[0].n,
+            0,
+          );
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT count(*)::int AS n FROM addresses WHERE formatted=$1',
+                [firstAddress],
+              )
+            ).rows[0].n,
+            0,
+          );
+        } finally {
+          await pool.query(
+            'ALTER TABLE listings DROP CONSTRAINT form_draft_late_failure',
+          );
+        }
+        const revision = await save(2, {
+          ...latest.form,
+          price: '1250000',
+          address: finalAddress,
+          coordinatesFromSuggestion: true,
+        });
+        assert.equal(revision.status, 200);
+        assert.equal((revision.data as Saved).version, 3);
+        assert.equal(
+          (await list(author))[0]!.form.coordinatesFromSuggestion,
+          true,
+        );
+        const completeBody = {
+          ...firstAttempt,
+          property: {
+            ...firstAttempt.property,
+            address: { ...address, formatted: finalAddress },
+          },
+          price: 1250000,
+          formDraft: { id, version: 3 },
+        };
         const keys = ['finish-form-intent-a', 'finish-form-intent-b'];
         const done = await Promise.all(
           keys.map((key) =>
@@ -871,6 +937,15 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         const winner = done.findIndex(({ status }) => status === 201);
         const saved = done[winner]!.data as Entity;
         assert.equal(saved.status, 'draft');
+        assert.deepEqual(
+          (
+            await pool.query(
+              'SELECT p.id,a.formatted FROM properties p JOIN addresses a ON a.id=p.address_id WHERE p.created_by=$1',
+              [author.user.id],
+            )
+          ).rows,
+          [{ id: saved.property_id, formatted: finalAddress }],
+        );
         assert.deepEqual(
           (await call('/listings', 'POST', completeBody, author, keys[winner]))
             .data,

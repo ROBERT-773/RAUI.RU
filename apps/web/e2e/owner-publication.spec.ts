@@ -247,7 +247,7 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       endpoint(response, 'POST', '/api/v1/listings'),
     );
     await creation
-      .getByRole('button', { name: 'Сохранить черновик', exact: true })
+      .getByRole('button', { name: 'Перейти к фотографиям', exact: true })
       .click();
     const response = await saved;
     expect(response.status()).toBe(201);
@@ -383,7 +383,7 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     await creation.getByLabel('Заголовок', { exact: true }).fill(secondTitle);
     await creation.getByLabel('Цена, ₽', { exact: true }).fill('11000000');
     const saveDraft = creation.getByRole('button', {
-      name: 'Сохранить черновик',
+      name: 'Перейти к фотографиям',
       exact: true,
     });
     await expect(saveDraft).toBeEnabled();
@@ -443,7 +443,7 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
 
 async function fillApartmentDetails(
   form: Locator,
-  savePartialAddress?: () => Promise<void>,
+  savePartialAddress?: (address: string) => Promise<void>,
 ) {
   await form.getByLabel('Категория').selectOption('apartment');
   const next = form.getByRole('button', { name: 'Далее', exact: true });
@@ -452,12 +452,11 @@ async function fillApartmentDetails(
     .getByRole('combobox', { name: 'Регион', exact: true })
     .selectOption('moscow');
   if (savePartialAddress) {
-    await form
-      .getByLabel('Адрес', { exact: true })
-      .fill('Москва, Тверская улица');
-    await savePartialAddress();
+    const partialAddress = `Москва, Тверская улица ${randomUUID()}`;
+    await form.getByLabel('Адрес', { exact: true }).fill(partialAddress);
+    await savePartialAddress(partialAddress);
     await expect(form.getByLabel('Адрес', { exact: true })).toHaveValue(
-      'Москва, Тверская улица',
+      partialAddress,
     );
   }
   for (const [label, value] of [
@@ -504,7 +503,7 @@ test('agency creates its first organization and publishes a listing after modera
     endpoint(response, 'POST', '/api/v1/listings'),
   );
   await form
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
+    .getByRole('button', { name: 'Перейти к фотографиям', exact: true })
     .click();
   const saved = await saving;
   expect(saved.status()).toBe(201);
@@ -603,7 +602,7 @@ test('independent agent reopens an apartment sale draft, revises its preview and
   await page.getByRole('link', { name: 'Мои объявления', exact: true }).click();
   const form = page.locator('#new-listing');
   let partialId: string | undefined;
-  await fillApartmentDetails(form, async () => {
+  await fillApartmentDetails(form, async (partialAddress) => {
     const savingForm = page.waitForResponse(
       (response) =>
         response.request().method() === 'PUT' &&
@@ -630,11 +629,11 @@ test('independent agent reopens an apartment sale draft, revises its preview and
         .click();
       await otherPage
         .getByRole('region', { name: 'Незавершённые объявления' })
-        .getByRole('button', { name: /Продолжить/ })
+        .getByRole('button', { name: new RegExp(partialAddress) })
         .click();
       await expect(
         otherPage.locator('#new-listing').getByLabel('Адрес', { exact: true }),
-      ).toHaveValue('Москва, Тверская улица');
+      ).toHaveValue(partialAddress);
     } finally {
       await otherSession.close();
     }
@@ -642,7 +641,9 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     const drafts = page.getByRole('region', {
       name: 'Незавершённые объявления',
     });
-    await drafts.getByRole('button', { name: /Продолжить/ }).click();
+    await drafts
+      .getByRole('button', { name: new RegExp(partialAddress) })
+      .click();
   });
   const title = `Объявление риелтора ${randomUUID()}`;
   await form.getByLabel('Заголовок', { exact: true }).fill(title);
@@ -651,7 +652,7 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     endpoint(response, 'POST', '/api/v1/listings'),
   );
   await form
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
+    .getByRole('button', { name: 'Перейти к фотографиям', exact: true })
     .click();
   const saved = await saving;
   expect(saved.status()).toBe(201);
@@ -848,7 +849,7 @@ for (const [
       endpoint(response, 'POST', '/api/v1/listings'),
     );
     await form
-      .getByRole('button', { name: 'Сохранить черновик', exact: true })
+      .getByRole('button', { name: 'Перейти к фотографиям', exact: true })
       .click();
     const saved = await saving;
     expect(saved.status()).toBe(201);
@@ -917,7 +918,7 @@ test('guest and unverified seller cannot use publication controls', async ({
 }) => {
   await page.goto('/account/listings');
   await expect(
-    page.getByRole('button', { name: 'Сохранить черновик', exact: true }),
+    page.getByRole('button', { name: 'Перейти к фотографиям', exact: true }),
   ).toHaveCount(0);
   expect((await page.request.get('/api/v1/listings')).status()).toBe(401);
   await login(page, 'unverified@e2e.test');
@@ -926,6 +927,6 @@ test('guest and unverified seller cannot use publication controls', async ({
     'Подтвердите email и телефон',
   );
   await expect(
-    page.getByRole('button', { name: 'Сохранить черновик', exact: true }),
+    page.getByRole('button', { name: 'Перейти к фотографиям', exact: true }),
   ).toHaveCount(0);
 });

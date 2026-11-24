@@ -41,11 +41,10 @@ import {
 } from '../modules/auth/auth';
 import { uploadSchema } from '../modules/media/media';
 import { createSchema } from '../modules/properties/properties';
-import { fields } from '../modules/listings/listings';
+import { createListingSchema, fields } from '../modules/listings/listings';
 import {
   savedListingForm,
   saveListingForm,
-  listingFormReference,
 } from '../modules/listings/form-drafts';
 import { addressSchema } from '../modules/geo/geo';
 import { staffPermissions, uuid } from './security';
@@ -287,15 +286,7 @@ const bodyContracts: Record<string, z.ZodType> = {
         'Only an administrator may correct the address after a listing has been created.',
       ),
   }),
-  'post /v1/listings': object({
-    formDraft: listingFormReference.optional(),
-    propertyId: uuid,
-    dealType: z.enum(['sale', 'long_rent', 'short_rent']),
-    title: fields.title.default(''),
-    price: fields.price.optional(),
-    description: fields.description.default(''),
-    terms: fields.terms.default({}),
-  }),
+  'post /v1/listings': createListingSchema,
   'patch /v1/listings/{id}': object({
     version,
     title: fields.title.optional(),

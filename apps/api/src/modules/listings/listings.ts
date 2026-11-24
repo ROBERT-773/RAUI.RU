@@ -32,7 +32,11 @@ import {
   ListingAccess,
   ListingAccessModule,
 } from './access';
-import { Properties, PropertiesModule } from '../properties/properties';
+import {
+  createSchema as propertySchema,
+  Properties,
+  PropertiesModule,
+} from '../properties/properties';
 import {
   Organizations,
   OrganizationsModule,
@@ -96,6 +100,24 @@ export const fields = {
       { path: ['availableUntil'], message: 'Invalid availability period' },
     ),
 };
+const createFields = {
+  dealType: z.enum(['sale', 'long_rent', 'short_rent']),
+  title: fields.title.default(''),
+  price: fields.price.optional(),
+  description: fields.description.default(''),
+  terms: fields.terms.default({}),
+};
+export const createListingSchema = z.union([
+  z.object({ propertyId: uuid, ...createFields }).strict(),
+  z
+    .object({
+      property: propertySchema,
+      ...createFields,
+      formDraft: listingFormReference,
+    })
+    .strict(),
+]);
+
 @Injectable()
 export class Listings {
   constructor(
@@ -122,27 +144,14 @@ export class Listings {
   }
   async create(actor: Actor, body: unknown, key: unknown) {
     seller(actor);
-    const input = parse(
-      z
-        .object({
-          propertyId: uuid,
-          dealType: z.enum(['sale', 'long_rent', 'short_rent']),
-          title: fields.title.default(''),
-          price: fields.price.optional(),
-          description: fields.description.default(''),
-          terms: fields.terms.default({}),
-          formDraft: listingFormReference.optional(),
-        })
-        .strict(),
-      body,
-    );
+    const input = parse(createListingSchema, body);
     return this.idem.run(
       actor,
       'listing.create',
       key,
       input,
       async (sql) => {
-        if (input.formDraft) {
+        if ('formDraft' in input) {
           const [draft] = await this.db.rows<{
             version: number;
             listing_id: string | null;
@@ -158,12 +167,10 @@ export class Listings {
               'Listing form draft is stale or already completed',
             );
         }
-        const property = await this.properties.access(
-          actor,
-          input.propertyId,
-          sql,
-          true,
-        );
+        const property =
+          'propertyId' in input
+            ? await this.properties.access(actor, input.propertyId, sql, true)
+            : await this.properties.createWithSql(actor, input.property, sql);
         let kind = 'direct';
         if (property.organization_id)
           kind = (
@@ -206,14 +213,24 @@ export class Listings {
           {},
           listing!,
         );
-        if (input.formDraft)
+        if ('formDraft' in input)
           await sql.query(
             'UPDATE listing_form_drafts SET listing_id=$2,form=NULL,updated_at=now() WHERE id=$1',
             [input.formDraft.id, listing!.id],
           );
         return listing!;
       },
-      (sql) => this.properties.access(actor, input.propertyId, sql),
+      async (sql) => {
+        if ('propertyId' in input)
+          await this.properties.access(actor, input.propertyId, sql);
+        else if (input.property.organizationId)
+          await this.orgs.permission(
+            actor,
+            input.property.organizationId,
+            false,
+            sql,
+          );
+      },
     );
   }
   async privateGet(actor: Actor, id: string) {

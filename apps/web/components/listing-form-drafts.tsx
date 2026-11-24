@@ -10,6 +10,7 @@ export type ListingForm = {
   address: string;
   longitude: string;
   latitude: string;
+  coordinatesFromSuggestion?: boolean;
   attributes: Record<string, string>;
   title: string;
   price: string;
