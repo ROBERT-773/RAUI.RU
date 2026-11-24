@@ -59,6 +59,7 @@ function parseXml(text: string) {
     parseTagValue: false,
     ignoreDeclaration: true,
     ignorePiTags: true,
+    isArray: (name) => name === 'item',
     updateTag(name, path) {
       if (typeof path !== 'string') return name;
       const cianRow = /^feed\.object$/i.test(path);
@@ -82,6 +83,12 @@ function parseXml(text: string) {
     root['@_xmlns'] === 'http://webmaster.yandex.ru/schemas/feed/realty/2010-06'
   )
     profile = 'yandex';
+  else if (
+    name === 'feed' &&
+    Object.hasOwn(root, 'item') &&
+    field(root, 'feed_version') === undefined
+  )
+    profile = 'generic';
   else if (root['@_xmlns'])
     throw new BadRequestException('Неизвестная схема XML.');
   else if (name.toLowerCase() === 'feed' && str(root, 'feed_version') === '2')
@@ -94,12 +101,6 @@ function parseXml(text: string) {
     profile = 'avito';
   else if (name === 'complexes' && Object.hasOwn(root, 'complex'))
     profile = 'domclick';
-  else if (
-    name === 'feed' &&
-    Object.hasOwn(root, 'item') &&
-    field(root, 'feed_version') === undefined
-  )
-    profile = 'generic';
   else throw new BadRequestException('Формат XML не поддерживается.');
   return { root, profile };
 }

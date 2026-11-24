@@ -203,6 +203,14 @@ test('JSON, bounded CSV and entity-free XML decode into normalized mapped feeds'
     map,
   );
   assert.deepEqual(xml, json);
+  assert.deepEqual(
+    parseFeed(
+      '<feed xmlns="urn:agency"><item><x><item>first</item></x></item></feed>',
+      'xml',
+      { title: 'x.item.0' },
+    ),
+    [{ title: 'first' }],
+  );
   assert.throws(() =>
     parseFeed(
       '<!DOCTYPE foo [<!ENTITY x SYSTEM "file:///etc/passwd">]><feed/>',
