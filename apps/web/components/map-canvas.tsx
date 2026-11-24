@@ -3,6 +3,7 @@ import { useEffect, useRef, useEffectEvent } from 'react';
 import L from 'leaflet';
 import type { MapMarker } from '@raui/types/product';
 import { money } from '../lib/client';
+import { mapZoomTitles } from '../lib/labels';
 export default function MapCanvas({
   bounds,
   markers,
@@ -31,12 +32,13 @@ export default function MapCanvas({
   useEffect(() => {
     if (!element.current) return;
     const instance = L.map(element.current, {
-      zoomControl: true,
+      zoomControl: false,
       scrollWheelZoom,
       worldCopyJump: false,
       minZoom: 2,
       maxZoom: 19,
     });
+    L.control.zoom(mapZoomTitles).addTo(instance);
     instance.setView([55.75, 37.6], 10);
     map.current = instance;
     const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL;

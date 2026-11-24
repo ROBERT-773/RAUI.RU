@@ -1,3 +1,8 @@
+export const mapZoomTitles = {
+  zoomInTitle: 'Увеличить масштаб',
+  zoomOutTitle: 'Уменьшить масштаб',
+};
+
 export const attributeLabels: Record<string, string> = {
   area: 'Площадь, м²',
   rooms: 'Комнаты',

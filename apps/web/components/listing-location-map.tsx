@@ -3,6 +3,7 @@
 import { Button } from '@raui/ui';
 import type { Map as LeafletMap } from 'leaflet';
 import { useEffect, useId, useRef, useState } from 'react';
+import { mapZoomTitles } from '../lib/labels';
 import styles from './listing-location-map.module.css';
 
 type Point = { latitude: number; longitude: number };
@@ -21,10 +22,12 @@ function LocationView({ latitude, longitude }: Point) {
       if (disposed || !container) return;
       const position: [number, number] = [latitude, longitude];
       map = L.map(container, {
+        zoomControl: false,
         scrollWheelZoom: false,
         minZoom: 2,
         maxZoom: 19,
       });
+      L.control.zoom(mapZoomTitles).addTo(map);
       map.setView(position, 16);
       const marker = L.marker(position, {
         keyboard: false,
@@ -69,9 +72,18 @@ function LocationView({ latitude, longitude }: Point) {
         Широта {latitude}, долгота {longitude}
       </p>
       {(!tileUrl || failed) && (
-        <p role="status">
-          Фон карты недоступен. Местоположение указано координатами.
-        </p>
+        <>
+          <p role="status">
+            Фон карты недоступен. Местоположение указано координатами.
+          </p>
+          <a
+            href={`https://yandex.ru/maps/?text=${encodeURIComponent(`${latitude},${longitude}`)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Открыть в Яндекс Картах
+          </a>
+        </>
       )}
     </>
   );
