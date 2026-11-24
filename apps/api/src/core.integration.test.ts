@@ -2088,6 +2088,33 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(counts.properties[key]?.minimum, 0);
       }
       assert.ok(schema.paths['/v1/auth/verification/phone/capabilities']);
+      const publicContact = schema.paths[
+        '/v1/listings/{id}/public/contact'
+      ] as {
+        get: {
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    required: string[];
+                    properties: { phones: { maxItems: number } };
+                    additionalProperties: boolean;
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+      const contactResponse =
+        publicContact.get.responses['200'].content['application/json'].schema;
+      assert.deepEqual(contactResponse.required.sort(), [
+        'messagesAllowed',
+        'phones',
+      ]);
+      assert.equal(contactResponse.additionalProperties, false);
+      assert.equal(contactResponse.properties.phones.maxItems, 2);
       assert.ok(schema.paths['/v1/auth/verification/phone/otp']);
       assert.ok(schema.paths['/v1/auth/verification/phone/otp/confirm']);
       const propertyContract = schema.paths['/v1/properties'] as {
@@ -2143,6 +2170,7 @@ get /health/ready
 get /v1/categories
 get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
+get /v1/listings/{id}/public/contact
 get /v1/media/{id}/{variant}
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
