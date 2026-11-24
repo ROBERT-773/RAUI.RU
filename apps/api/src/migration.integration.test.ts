@@ -98,20 +98,19 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
           "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors') ORDER BY tablename",
         )
       ).rows;
+      const legacyRows: Record<string, string> = {
+        search_jobs: "to_jsonb(t)-'enqueued_at'",
+        addresses: "to_jsonb(t)-'region_code'",
+        listing_sources: "to_jsonb(t)-'personal_feed_owner_id'",
+        users:
+          "to_jsonb(t)-'public_id'-'registration_approval_state'-'phone_sign_in_enrolled_at'",
+        notifications:
+          "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'-'captured_frequency'-'daily_run_id'",
+        sessions: "to_jsonb(t)-'staff_totp_factor_id'-'staff_assured_until'",
+      };
       const facts = [];
       for (const { tablename } of tables) {
-        const data =
-          tablename === 'search_jobs'
-            ? "to_jsonb(t)-'enqueued_at'"
-            : tablename === 'addresses'
-              ? "to_jsonb(t)-'region_code'"
-              : tablename === 'users'
-                ? "to_jsonb(t)-'public_id'-'registration_approval_state'-'phone_sign_in_enrolled_at'"
-                : tablename === 'notifications'
-                  ? "to_jsonb(t)-'listing_id'-'subscription_version'-'listing_version'-'dedupe_key'-'payload'-'captured_frequency'-'daily_run_id'"
-                  : tablename === 'sessions'
-                    ? "to_jsonb(t)-'staff_totp_factor_id'-'staff_assured_until'"
-                    : 'to_jsonb(t)';
+        const data = legacyRows[tablename] ?? 'to_jsonb(t)';
         const rows = (
           await pool.query(
             `SELECT ${data} AS data FROM public.${quote(tablename)} t ORDER BY (${data})::text`,
@@ -164,7 +163,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 36);
+    assert.equal(upgradedLedger.length, 37);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -189,6 +188,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [33, '034_staff_totp.sql'],
       [34, '035_phone_sign_in.sql'],
       [35, '036_phone_sign_in_enrollment.sql'],
+      [36, '037_personal_xml_sources.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -221,6 +221,15 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
         )
       ).rows,
       [{ kind: 'seller', identity: user, generation: '0' }],
+    );
+    assert.deepEqual(
+      (
+        await pool.query(
+          'SELECT kind, organization_id, personal_feed_owner_id FROM listing_sources WHERE id=$1',
+          [source],
+        )
+      ).rows,
+      [{ kind: 'direct', organization_id: null, personal_feed_owner_id: null }],
     );
     const identity = (
       await pool.query('SELECT public_id::text FROM users WHERE id=$1', [user])

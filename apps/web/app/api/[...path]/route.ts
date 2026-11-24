@@ -44,6 +44,19 @@ async function proxy(
         isUuid(path[2]) &&
         path[3] === 'members' &&
         ['GET', 'PATCH'].includes(request.method)));
+  const personalFeeds = path[1] === 'account' && path[2] === 'feeds';
+  const organizationFeeds =
+    path[1] === 'organizations' && isUuid(path[2]) && path[3] === 'feeds';
+  const tail = path.slice(personalFeeds ? 3 : 4);
+  const feedRun = isUuid(tail[0]) && tail[1] === 'runs' && isUuid(tail[2]);
+  const ownFeedsRoute =
+    (personalFeeds || organizationFeeds) &&
+    ((tail.length === 1 && tail[0] === 'link' && request.method === 'POST') ||
+      (request.method === 'GET' &&
+        ((tail.length === 1 && tail[0] === 'links') ||
+          (feedRun &&
+            (tail.length === 3 ||
+              (tail.length === 4 && tail[3] === 'items'))))));
   const propertyRoute =
     path[1] === 'properties' &&
     ((path.length === 2 && request.method === 'POST') ||
@@ -85,10 +98,12 @@ async function proxy(
         request.method === 'POST'));
   if (
     path[0] !== 'v1' ||
+    (personalFeeds && !ownFeedsRoute) ||
     (!staffPermissionsRoute &&
       !registrationRoute &&
       !propertyRoute &&
       !ownOrganizationsRoute &&
+      !ownFeedsRoute &&
       !moderationRoute &&
       ![
         'auth',

@@ -45,10 +45,11 @@ class TestAdapter extends NotificationAdapter {
 }
 class TestFetcher extends FeedFetcher {
   rows: unknown[] = [];
+  xml?: string;
   fail = false;
   async fetch() {
     if (this.fail) throw new Error('private-credentials');
-    return JSON.stringify(this.rows);
+    return this.xml ?? JSON.stringify(this.rows);
   }
 }
 test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
@@ -139,7 +140,14 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
     return result.runId;
   }
   try {
-    for (const role of ['agency', 'agency', 'admin', 'developer'] as const) {
+    for (const role of [
+      'agency',
+      'agency',
+      'admin',
+      'developer',
+      'agent',
+      'agent',
+    ] as const) {
       const id = randomUUID(),
         session = randomUUID(),
         secret = token();
@@ -177,7 +185,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               'SELECT count(*) FROM schema_migrations',
             )
           )[0]!.count,
-          '36',
+          '37',
         );
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);
@@ -238,6 +246,250 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
       },
     );
     await t.test(
+      'XML link slots persist per provider, replay atomically and return a redacted preview report',
+      async () => {
+        const oldHosts = process.env.FEED_ALLOWED_HOSTS;
+        process.env.FEED_ALLOWED_HOSTS = 'feeds.example';
+        const base = `/v1/organizations/${org}/feeds`;
+        const key = token();
+        const first = {
+          provider: 'cian',
+          url: 'https://feeds.example/private.xml?access=fixture-only',
+        };
+        try {
+          const missing = await call(
+            base + '/link',
+            'POST',
+            { provider: 'cian' },
+            0,
+            token(),
+          );
+          assert.equal(missing.status, 400);
+          const replies = await Promise.all(
+            [0, 1].map(() => call(base + '/link', 'POST', first, 0, key)),
+          );
+          const [response, replay] = await Promise.all(
+            replies.map(async (res) => {
+              assert.equal(res.status, 201);
+              return (await res.json()) as {
+                feed: {
+                  id: string;
+                  provider: string;
+                  host: string;
+                  active: boolean;
+                };
+                preview: { runId: string };
+              };
+            }),
+          );
+          assert.deepEqual(replay, response);
+          assert.deepEqual(response!.feed, {
+            id: response!.feed.id,
+            provider: 'cian',
+            host: 'feeds.example',
+            active: true,
+          });
+          assert.ok(!JSON.stringify(response).includes('fixture-only'));
+          assert.ok(
+            !(await (await call(base)).text()).includes('fixture-only'),
+          );
+          assert.equal(
+            (await call(base + '/link', 'POST', first, 1, key)).status,
+            403,
+          );
+          const unapproved = await call(
+            base + '/link',
+            'POST',
+            { ...first, url: 'https://example.invalid/any.xml?key=private' },
+            0,
+            token(),
+          );
+          assert.equal(unapproved.status, 400);
+          const denial = (await unapproved.json()) as { code: string };
+          assert.equal(denial.code, 'feed_host_not_approved');
+          assert.doesNotMatch(
+            JSON.stringify(denial),
+            /example\.invalid|private/,
+          );
+          assert.equal(
+            (
+              await call(
+                base + '/link',
+                'POST',
+                { ...first, url: 'https://feeds.example/changed.xml' },
+                0,
+                key,
+              )
+            ).status,
+            409,
+          );
+          const changed = await call(
+            base + '/link',
+            'POST',
+            { ...first, url: 'https://feeds.example/changed.xml' },
+            0,
+            token(),
+          );
+          assert.equal(changed.status, 201);
+          const updated = (await changed.json()) as typeof response;
+          assert.equal(updated!.feed.id, response!.feed.id);
+          assert.notEqual(updated!.preview.runId, response!.preview.runId);
+          const reportUrl = base + '/' + response!.feed.id + '/runs/';
+          const loadReport = async (id: string) =>
+            (await (await call(reportUrl + id)).json()) as {
+              status: string;
+              stats: { quarantined: number; total: number };
+              error: string;
+            };
+          await imports.once();
+          assert.equal(
+            (await loadReport(response!.preview.runId)).error,
+            'source_changed',
+          );
+          fetcher.xml =
+            '<Feed><Feed_Version>2</Feed_Version><Object><ExternalId>unit-5</ExternalId><Category>newBuildingFlatSale</Category></Object></Feed>';
+          await imports.once();
+          const runId = updated!.preview.runId;
+          const report = await loadReport(runId);
+          assert.equal(report.status, 'quarantined');
+          assert.equal(report.stats.quarantined, 1);
+          assert.equal(report.stats.total, 1);
+          const errors = (await (
+            await call(reportUrl + runId + '/items?errorsOnly=true')
+          ).json()) as {
+            external_reference: string;
+            errors: { field?: string }[];
+          }[];
+          assert.equal(errors[0]!.external_reference, 'unit-5');
+          assert.ok(
+            errors[0]!.errors.some(
+              (error: { field?: string }) => error.field === 'price',
+            ),
+          );
+          assert.equal(
+            (await call(reportUrl + runId, 'GET', undefined, 1)).status,
+            403,
+          );
+          assert.equal(
+            (await call(base + '/' + feedId + '/runs/' + runId)).status,
+            404,
+          );
+          const again = await call(
+            base + '/link',
+            'POST',
+            { provider: 'cian' },
+            0,
+            token(),
+          );
+          assert.equal(again.status, 201);
+          const retried = (await again.json()) as typeof response;
+          assert.equal(retried!.feed.id, response!.feed.id);
+          assert.deepEqual(await (await call(base + '/links')).json(), [
+            { ...response!.feed, lastRunId: retried!.preview.runId },
+          ]);
+          fetcher.xml = '<invalid>';
+          await imports.once();
+          assert.equal(
+            (await loadReport(retried!.preview.runId)).error,
+            'invalid_feed',
+          );
+          const wrongSlot = await call(
+            base + '/link',
+            'POST',
+            { provider: 'cian' },
+            0,
+            token(),
+          );
+          assert.equal(wrongSlot.status, 201);
+          const mismatch = (await wrongSlot.json()) as typeof response;
+          fetcher.xml = '<Ads formatVersion="3" target="Avito.ru"><Ad/></Ads>';
+          await imports.once();
+          assert.equal(
+            (await loadReport(mismatch!.preview.runId)).error,
+            'feed_provider_mismatch_avito',
+          );
+          const manual = await call(
+            base + '/' + response!.feed.id + '/dry-run',
+            'POST',
+            { items: [row] },
+            0,
+            token(),
+          );
+          assert.equal(manual.status, 201);
+          await imports.once();
+          assert.deepEqual(await (await call(base + '/links')).json(), [
+            { ...response!.feed, lastRunId: mismatch!.preview.runId },
+          ]);
+        } finally {
+          delete fetcher.xml;
+          if (oldHosts === undefined) delete process.env.FEED_ALLOWED_HOSTS;
+          else process.env.FEED_ALLOWED_HOSTS = oldHosts;
+        }
+      },
+    );
+    await t.test(
+      'Independent agents keep separate XML sources and can read only their own result',
+      async () => {
+        const oldHosts = process.env.FEED_ALLOWED_HOSTS;
+        process.env.FEED_ALLOWED_HOSTS = 'feeds.example';
+        const root = '/v1/account/feeds';
+        const body = {
+          provider: 'cian',
+          url: 'https://feeds.example/agent.xml',
+        };
+        try {
+          const mine = await call(root + '/link', 'POST', body, 4, token());
+          assert.equal(mine.status, 201);
+          const { feed, preview } = (await mine.json()) as {
+            feed: { id: string };
+            preview: { runId: string };
+          };
+          const report = root + '/' + feed.id + '/runs/' + preview.runId;
+          assert.equal((await call(report, 'GET', undefined, 4)).status, 200);
+          assert.equal((await call(report, 'GET', undefined, 5)).status, 404);
+          assert.equal(
+            (await call(report + '/items', 'GET', undefined, 5)).status,
+            404,
+          );
+          assert.deepEqual(
+            await (await call(root + '/links', 'GET', undefined, 5)).json(),
+            [],
+          );
+          assert.equal(
+            (await call(root + '/link', 'POST', body, 0, token())).status,
+            403,
+          );
+          const other = await call(root + '/link', 'POST', body, 5, token());
+          assert.equal(other.status, 201);
+          assert.notEqual(
+            ((await other.json()) as { feed: { id: string } }).feed.id,
+            feed.id,
+          );
+          fetcher.xml =
+            '<Feed><Feed_Version>2</Feed_Version><Object><Category>newBuildingFlatSale</Category><ExternalId>incomplete-unit</ExternalId></Object></Feed>';
+          await imports.once();
+          await imports.once();
+          const result = (await (
+            await call(report, 'GET', undefined, 4)
+          ).json()) as { stats: { total: number; quarantined: number } };
+          assert.equal(result.stats.total, 1);
+          assert.equal(result.stats.quarantined, 1);
+          assert.equal(
+            (
+              await db.rows('SELECT 1 FROM memberships WHERE user_id=$1', [
+                actors[4]!.id,
+              ])
+            ).length,
+            0,
+          );
+        } finally {
+          delete fetcher.xml;
+          if (oldHosts === undefined) delete process.env.FEED_ALLOWED_HOSTS;
+          else process.env.FEED_ALLOWED_HOSTS = oldHosts;
+        }
+      },
+    );
+    await t.test(
       'Dry-run shares apply validation, quarantines duplicates and creates no domain objects',
       async () => {
         const id = await run(
@@ -251,6 +503,10 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
         const items = await imports.items(actors[0]!, org, feedId, id, {});
         assert.equal(items.filter((x) => x.status === 'valid').length, 1);
         assert.equal(items.filter((x) => x.status === 'invalid').length, 2);
+        assert.equal(
+          items.find((x) => x.duplicate_reference)?.duplicate_reference,
+          row.externalReference,
+        );
         assert.equal(
           (
             await db.rows<{ count: string }>('SELECT count(*) FROM listings')

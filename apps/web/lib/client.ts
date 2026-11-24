@@ -13,6 +13,8 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+export const feedHostApprovalHint =
+  'Домен выгрузки ещё не разрешён. Попросите администратора RAUI разрешить загрузку с этого домена.';
 const publicMutations = new Set([
   'v1/auth/register',
   'v1/auth/login',
@@ -76,6 +78,22 @@ export async function api<T>(
   if (!response.ok) {
     if ([400, 409, 429, 503].includes(response.status)) {
       const failure: unknown = await response.json().catch(() => null);
+      if (
+        response.status === 400 &&
+        /^v1\/(?:account|organizations\/[^/]+)\/feeds\/link$/.test(path)
+      ) {
+        const unapproved =
+          failure &&
+          typeof failure === 'object' &&
+          'code' in failure &&
+          failure.code === 'feed_host_not_approved';
+        throw new ApiError(
+          unapproved
+            ? feedHostApprovalHint
+            : 'Проверьте ссылку HTTPS на XML-файл.',
+          response.status,
+        );
+      }
       if (
         path.startsWith('v1/auth/verification/phone/otp') &&
         failure &&

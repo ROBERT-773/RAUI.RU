@@ -7,6 +7,11 @@ import { createServer } from 'node:http';
 import * as config from './config';
 import { BadRequestException } from '@nestjs/common';
 import { ProfessionalImports } from './modules/professional/imports';
+import {
+  xmlFeedMaxBytes,
+  xmlFeedMaxItems,
+} from './modules/professional/feed-limits';
+import { FeedGeocoding } from './modules/professional/feed-geocoding';
 import { ConfiguredDelivery } from './modules/auth/delivery';
 import {
   publicIPv4,
@@ -14,7 +19,10 @@ import {
   resolveFeedHost,
   HttpsFeedFetcher,
 } from './modules/professional/feed-fetch';
-import { parseFeed } from './modules/professional/feed-parser';
+import {
+  detectFeedProfile,
+  parseFeed,
+} from './modules/professional/feed-parser';
 import {
   GatewayNotificationAdapter,
   validateNotificationGatewayUrl,
@@ -69,8 +77,128 @@ test('professional preference writers share the user mutex', async () => {
   assert.match(calls[1]!.query, /notification_preferences/);
   assert.equal(calls[1]!.sql, transactionSql);
 });
+test('XML geocoding uses one exact match in the same locality and caches repeated addresses', async () => {
+  const row = {
+    address: { locality: 'Москва', formatted: 'ул. Примерная, 2' },
+  };
+  const point = { latitude: 55.4, longitude: 37.1 };
+  const candidate = {
+    ...row.address,
+    ...point,
+    formatted: 'Москва, ул. Примерная, 2',
+  };
+  let calls = 0;
+  const geocoding = new FeedGeocoding({
+    lookup: async (query) => {
+      assert.equal(query, candidate.formatted);
+      calls++;
+      return [candidate];
+    },
+  });
+  for (let i = 0; i < 2; i++)
+    assert.deepEqual(await geocoding.resolve(row), {
+      row: { address: { ...row.address, ...point } },
+    });
+  const supplied = { address: { ...row.address, ...point } };
+  assert.deepEqual(await geocoding.resolve(supplied), { row: supplied });
+  assert.equal(calls, 1);
+  for (const results of [
+    [],
+    [candidate, candidate],
+    [{ ...candidate, locality: 'Омск' }],
+  ]) {
+    const rejected = await new FeedGeocoding({
+      lookup: async () => results,
+    }).resolve(row);
+    assert.equal(rejected.row, row);
+    assert.match(rejected.message!, /однозначно/);
+  }
+});
+test('YRL geocoding distinguishes identical locality and street names in different regions', async () => {
+  const street = 'Центральная улица, 1',
+    locality = 'Сосновка';
+  const feed = (region: string) =>
+    `<realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06"><offer internal-id="test"><location><region>${region}</region><locality-name>${locality}</locality-name><address>${street}</address></location></offer></realty-feed>`;
+  const regions = ['Тверская область', 'Кировская область'];
+  const rows = regions.map(
+    (region) => parseFeed(feed(region), 'xml', {}, 'yandex')[0],
+  );
+  const candidates = regions.map((region, i) => ({
+    formatted: [region, locality, street].join(', '),
+    locality,
+    latitude: 57 + i,
+    longitude: 37 + i,
+  }));
+  const queries: string[] = [];
+  const locate = new FeedGeocoding({
+    lookup: async (query) => {
+      queries.push(query);
+      return candidates;
+    },
+  });
+  for (const [index, row] of rows.entries()) {
+    assert.partialDeepStrictEqual((await locate.resolve(row)).row, {
+      address: candidates[index]!,
+    });
+    assert.deepEqual((await locate.resolve(row)).message, undefined);
+  }
+  assert.deepEqual(
+    queries,
+    candidates.map((candidate) => candidate.formatted),
+  );
+  const qualified = feed(regions[0]!).replace(
+    '<address>' + street + '</address>',
+    '<address>' + candidates[0]!.formatted + '</address>',
+  );
+  assert.partialDeepStrictEqual(parseFeed(qualified, 'xml', {})[0], {
+    address: { formatted: candidates[0]!.formatted },
+  });
+  const supplied = feed(regions[0]!).replace(
+    '</location>',
+    '<latitude>56</latitude><longitude>38</longitude></location>',
+  );
+  const [mapped] = parseFeed(supplied, 'xml', {});
+  assert.partialDeepStrictEqual(mapped, {
+    address: { formatted: street, latitude: 56, longitude: 38 },
+  });
+  assert.equal((await locate.resolve(mapped)).row, mapped);
+  assert.equal(queries.length, 2);
+  const truncated = await new FeedGeocoding({
+    lookup: async () => [
+      { ...candidates[0]!, formatted: [locality, street].join(', ') },
+    ],
+  }).resolve(rows[0]);
+  assert.match(truncated.message!, /однозначно/);
+});
+test('a supplied region code is part of both geocoding validation and the per-run cache', async () => {
+  const base = {
+    locality: 'Сосновка',
+    formatted: 'Сосновка, Центральная улица, 1',
+  };
+  const candidates = ['tver', 'kirov'].map((regionCode, i) => ({
+    ...base,
+    regionCode,
+    latitude: 57 + i,
+    longitude: 37 + i,
+  }));
+  let calls = 0;
+  const geo = new FeedGeocoding({
+    lookup: async () => {
+      calls++;
+      return candidates;
+    },
+  });
+  for (const candidate of candidates) {
+    const row = { address: { ...base, regionCode: candidate.regionCode } };
+    assert.deepEqual(await geo.resolve(row), { row: { address: candidate } });
+  }
+  assert.equal(calls, 2);
+  const unknown = { address: { ...base, regionCode: 'voronezh' } };
+  assert.match((await geo.resolve(unknown)).message!, /однозначно/);
+});
 test('Missing import items fail validation before authorization or persistence', async () => {
   const imports = new ProfessionalImports(
+    {} as never,
     {} as never,
     {} as never,
     {} as never,
@@ -157,6 +285,14 @@ test('JSON, bounded CSV and entity-free XML decode into normalized mapped feeds'
     map,
   );
   assert.deepEqual(xml, json);
+  assert.deepEqual(
+    parseFeed(
+      '<feed xmlns="urn:agency"><item><x><item>first</item></x></item></feed>',
+      'xml',
+      { title: 'x.item.0' },
+    ),
+    [{ title: 'first' }],
+  );
   assert.throws(() =>
     parseFeed(
       '<!DOCTYPE foo [<!ENTITY x SYSTEM "file:///etc/passwd">]><feed/>',
@@ -166,6 +302,263 @@ test('JSON, bounded CSV and entity-free XML decode into normalized mapped feeds'
   );
   assert.throws(() => parseFeed('[{}]', 'json', { '__proto__.p': 'x' }));
   assert.throws(() => parseFeed('x'.repeat(2_000_001), 'json', {}));
+});
+const cianXml = `<feed><feed_version>2</feed_version><object>
+  <Category>newBuildingFlatSale</Category><ExternalId>001</ExternalId>
+  <Address>Москва, улица Тестовая, 1</Address><Coordinates><Lat>55.7</Lat><Lng>37.6</Lng></Coordinates>
+  <FloorNumber>4</FloorNumber><FlatRoomsCount>2</FlatRoomsCount><TotalArea>55.3</TotalArea>
+  <BargainTerms><Price>9500000</Price><Currency>rub</Currency></BargainTerms>
+</object></feed>`;
+const avitoXml = `<Ads formatVersion="3" target="Avito.ru"><Ad>
+  <Id>002</Id><Category>Квартиры</Category><OperationType>Продам</OperationType><MarketType>Новостройка</MarketType>
+  <Price>9600000</Price><City>Казань</City><Address>Казань, улица Тестовая, 2</Address>
+  <Latitude>55.8</Latitude><Longitude>49.1</Longitude><Square>55.3</Square><Rooms>2</Rooms>
+</Ad></Ads>`;
+const yandexXml = `<realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06"><offer internal-id="003">
+  <type>продажа</type><category>квартира</category><new-flat>да</new-flat>
+  <location><locality-name>Омск</locality-name><address>Омск, улица Тестовая, 3</address>
+  <latitude>55.0</latitude><longitude>73.4</longitude></location>
+  <price><value>9700000</value><currency>RUR</currency></price>
+  <area><value>55.3</value><unit>кв. м</unit></area><kitchen-space><value>10</value></kitchen-space>
+</offer></realty-feed>`;
+const domclickBuilding = (id: string) => `<building><id>${id}</id><flats><flat>
+  <flat_id>007</flat_id><apartment>12</apartment><domrf_id>42</domrf_id><floor>3</floor><room>2</room>
+  <plan>https://example.test/plan.jpg</plan><price>9800000</price><area>55.3</area>
+</flat></flats></building>`;
+const domclickXml = `<complexes><complex><id>001</id><name>ЖК Берег</name><address>Пермь, Тестовая улица, 1</address>
+  <latitude>58.0</latitude><longitude>56.3</longitude><buildings>${domclickBuilding('01')}${domclickBuilding('02')}</buildings>
+  <developer><name>Застройщик</name></developer></complex></complexes>`;
+test('provider new-build rows preserve identifiers and normalize the source price, address and area', () => {
+  for (const [provider, xml, price, locality] of [
+    ['cian', cianXml, 9500000, 'Москва'],
+    ['avito', avitoXml, 9600000, 'Казань'],
+    ['yandex', yandexXml, 9700000, 'Омск'],
+    ['domclick', domclickXml, 9800000, 'Пермь'],
+  ] as const) {
+    assert.equal(detectFeedProfile(xml), provider);
+    const items = parseFeed(xml, 'xml', {}, provider).map((row) =>
+      importItem.parse(row),
+    );
+    for (const item of items) {
+      assert.equal(item.dealType, 'sale');
+      assert.equal(item.categoryCode, 'new_build');
+      assert.equal(item.price, price);
+      assert.equal(item.address.locality, locality);
+      assert.equal(item.attributes.area, 55.3);
+    }
+    if (provider === 'domclick') {
+      assert.equal(items.length, 2);
+      assert.notEqual(items[0]!.externalReference, items[1]!.externalReference);
+      const rerun = parseFeed(
+        xml.replace('9800000', '9900000'),
+        'xml',
+        {},
+        provider,
+      );
+      assert.equal(
+        importItem.parse(rerun[0]).externalReference,
+        items[0]!.externalReference,
+      );
+    } else {
+      assert.equal(
+        items[0]!.externalReference,
+        { cian: '001', avito: '002', yandex: '003' }[provider],
+      );
+    }
+  }
+});
+test('selected provider must match the XML envelope; words in comments, other namespaces and unknown wrappers cannot select an adapter', () => {
+  assert.throws(() => parseFeed(yandexXml, 'xml', {}, 'cian'));
+  assert.throws(() =>
+    parseFeed(
+      '<realty-feed><offer id="1"/></realty-feed>',
+      'xml',
+      {},
+      'domclick',
+    ),
+  );
+  assert.throws(() =>
+    parseFeed(
+      yandexXml.replace('webmaster.yandex.ru', 'example.com'),
+      'xml',
+      {},
+      'yandex',
+    ),
+  );
+  assert.throws(() =>
+    parseFeed(
+      '<!-- <Feed><Object> --> <feed><item>ok</item></feed>',
+      'xml',
+      {},
+      'cian',
+    ),
+  );
+  assert.throws(() =>
+    parseFeed(
+      avitoXml.replace('target="Avito.ru"', 'target="Example"'),
+      'xml',
+      {},
+      'avito',
+    ),
+  );
+});
+test('a foreign currency or an invalid number cannot become a rouble price, while good siblings remain available', () => {
+  const bad = yandexXml.replace('RUR', 'USD');
+  assert.equal(
+    importItem.safeParse(parseFeed(bad, 'xml', {})[0]).success,
+    false,
+  );
+  assert.equal(
+    importItem.safeParse(
+      parseFeed(yandexXml.replace('9700000', '0x112'), 'xml', {})[0],
+    ).success,
+    false,
+  );
+  const xml = cianXml.replace(
+    '</feed>',
+    cianXml
+      .slice(cianXml.indexOf('<object>'), cianXml.indexOf('</feed>'))
+      .replace('001', '004')
+      .replace('9500000', 'n/a') + '</feed>',
+  );
+  const rows = parseFeed(xml, 'xml', {});
+  assert.deepEqual(
+    rows.map((row) => importItem.safeParse(row).success),
+    [true, false],
+  );
+});
+test('legacy RAUI YRL carries its external ID, local address and monthly price into the report even without coordinates', () => {
+  const legacy = `<?xml version="1.0" encoding="UTF-8"?>
+    <realty-feed xmlns="http://webmaster.yandex.ru/schemas/feed/realty/2010-06">
+      <generation-date>2020-03-04T12:00:00+03:00</generation-date><offer internal-id="test-003">
+      <type>аренда</type><property-type>жилая</property-type><category>квартира</category>
+      <location><country>Россия</country><region>Тестовая область</region><district>Центральный</district>
+      <locality-name>Калуга</locality-name><address>Примерная улица, 2</address></location>
+      <price><value>45000</value><currency>RUR</currency><period>месяц</period></price>
+      <rooms>2</rooms><area><value>44</value><unit>кв. м</unit></area><floor>1</floor><floors-total>5</floors-total>
+      <kitchen-space><value>9</value><unit>кв. м</unit></kitchen-space></offer></realty-feed>`;
+  const [row] = parseFeed(legacy, 'xml', {}, 'yandex');
+  assert.partialDeepStrictEqual(row, {
+    externalReference: 'test-003',
+    dealType: 'long_rent',
+    categoryCode: 'apartment',
+    price: 45000,
+    attributes: { area: 44, kitchen_area: 9, rooms: 2, floor: 1, floors: 5 },
+    address: {
+      locality: 'Калуга',
+      formatted: 'Тестовая область, Центральный, Калуга, Примерная улица, 2',
+    },
+  });
+  const validation = importItem.safeParse(row);
+  assert.equal(validation.success, false);
+  assert.deepEqual(
+    validation.error?.issues.map((issue) => issue.path.join('.')).sort(),
+    ['address.latitude', 'address.longitude'],
+  );
+});
+test('XML has separate size and item limits while JSON and CSV retain their existing bounds', () => {
+  const envelope = (count: number) =>
+    '<feed>' + '<item>example</item>'.repeat(count) + '</feed>';
+  assert.equal(
+    parseFeed(envelope(xmlFeedMaxItems), 'xml', {}).length,
+    xmlFeedMaxItems,
+  );
+  assert.throws(
+    () => parseFeed(envelope(xmlFeedMaxItems + 1), 'xml', {}),
+    BadRequestException,
+  );
+  const prefix = '<feed><item>',
+    suffix = '</item></feed>';
+  const maxSize =
+    prefix +
+    'a'.repeat(xmlFeedMaxBytes - prefix.length - suffix.length) +
+    suffix;
+  assert.equal(parseFeed(maxSize, 'xml', {}).length, 1);
+  assert.throws(() => parseFeed(maxSize + ' ', 'xml', {}), BadRequestException);
+  for (const format of ['json', 'csv']) {
+    const tooMany =
+      format === 'json'
+        ? JSON.stringify(Array(1001).fill({}))
+        : 'id\n' + '0\n'.repeat(1001);
+    assert.throws(() => parseFeed(tooMany, format, {}), BadRequestException);
+    assert.throws(
+      () => parseFeed('x'.repeat(2_000_001), format, {}),
+      BadRequestException,
+    );
+  }
+});
+test('Cian mixed-case object tags retain feed order and price per square metre is scaled to the full apartment', () => {
+  const lowerCase = cianXml.slice(
+    cianXml.indexOf('<object>'),
+    cianXml.indexOf('</feed>'),
+  );
+  const mixed = lowerCase
+    .replace('<object>', '<Object>')
+    .replace('</object>', '</Object>')
+    .replace('001', '007');
+  const [first, second, third] = parseFeed(
+    cianXml.replace('</feed>', mixed + lowerCase + '</feed>'),
+    'xml',
+    {},
+  ).map((row) => importItem.parse(row));
+  assert.deepEqual(
+    [
+      first?.externalReference,
+      second?.externalReference,
+      third?.externalReference,
+    ],
+    ['001', '007', '001'],
+  );
+  const perMeter = cianXml.replace(
+    '<Price>9500000</Price>',
+    '<Price>200000</Price><PriceType>squareMeter</PriceType>',
+  );
+  assert.equal(
+    importItem.parse(parseFeed(perMeter, 'xml', {})[0]).price,
+    11060000,
+  );
+});
+test('Cian studio layout is not nine rooms and building prices with unsupported units require correction', () => {
+  const studio = cianXml.replace(
+    '<FlatRoomsCount>2</FlatRoomsCount>',
+    '<FlatRoomsCount>9</FlatRoomsCount>',
+  );
+  const [item] = parseFeed(studio, 'xml', {}).map((row) =>
+    importItem.parse(row),
+  );
+  assert.match(item!.title, /Студия/);
+  assert.equal(item!.attributes.rooms, 0);
+  assert.equal(
+    importItem.safeParse(
+      parseFeed(
+        yandexXml.replace('<currency>RUR</currency>', ''),
+        'xml',
+        {},
+      )[0],
+    ).success,
+    false,
+  );
+  assert.equal(
+    importItem.safeParse(
+      parseFeed(
+        cianXml.replace(
+          '<Price>9500000</Price>',
+          '<Price>100</Price><PriceType>sotka</PriceType>',
+        ),
+        'xml',
+        {},
+      )[0],
+    ).success,
+    false,
+  );
+  const rows = domclickXml.replaceAll(
+    '<apartment>12</apartment>',
+    '<apartment>24</apartment>',
+  );
+  assert.deepEqual(
+    parseFeed(rows, 'xml', {}),
+    parseFeed(domclickXml, 'xml', {}),
+  );
 });
 test('Only supported UTC schedules and safe normalized fields are accepted', () => {
   assert.equal(cadence('*/15 * * * *'), 15);
@@ -216,6 +609,67 @@ test('Feed DNS deadline and mixed private/public DNS answers fail closed', async
   assert.equal(addresses[0]!.address, '8.8.8.8');
 });
 
+test('XML uses the declared wire encoding and preserves Cyrillic in Cian addresses and descriptions', () => {
+  const body = Buffer.concat([
+    Buffer.from('<Feed><Feed_Version>2</Feed_Version><Object><Address>'),
+    Buffer.from('CCEEF1EAE2E02C20F3EBE8F6E020A8EBEAE8EDE02C2031', 'hex'),
+    Buffer.from('</Address><Description>'),
+    Buffer.from('CFE5F2F0EEE22C20EFEEE4FAE5E7E42033', 'hex'),
+    Buffer.from('</Description></Object></Feed>'),
+  ]);
+  const declaration = (encoding: string) =>
+    Buffer.from(`<?xml version="1.0" encoding="${encoding}"?>`);
+  const read = (bytes: Buffer, contentType = 'application/xml') =>
+    parseFeed({ bytes, contentType }, 'xml', {})[0];
+  for (const source of [
+    read(Buffer.concat([declaration('windows-1251'), body])),
+    read(body, 'text/xml; charset="WINDOWS-1251"'),
+    read(
+      Buffer.concat([declaration('cp1251'), body]),
+      'application/xml; charset=windows-1251',
+    ),
+    read(
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(
+          new TextDecoder('windows-1251', { fatal: true }).decode(body),
+        ),
+      ]),
+    ),
+  ])
+    assert.partialDeepStrictEqual(source, {
+      description: 'Петров, подъезд 3',
+      address: { formatted: 'Москва, улица Ёлкина, 1', locality: 'Москва' },
+    });
+
+  const badEncoding = (error: unknown) =>
+    error instanceof BadRequestException &&
+    (error.getResponse() as { code?: string }).code === 'feed_encoding_invalid';
+  for (const [bytes, header] of [
+    [body, 'application/xml'],
+    [
+      Buffer.concat([declaration('windows-1251'), body]),
+      'application/xml; charset=utf-8',
+    ],
+    [Buffer.concat([declaration('KOI8-R'), body]), 'text/xml'],
+    [body, 'application/xml; charset=iso-8859-1'],
+    [
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        declaration('windows-1251'),
+        body,
+      ]),
+      'application/xml',
+    ],
+    [Buffer.from(yandexXml), 'text/xml; charset=windows-1251'],
+  ] as const)
+    assert.throws(() => read(bytes, header), badEncoding);
+  assert.throws(
+    () =>
+      parseFeed(declaration('windows-1251').toString() + yandexXml, 'xml', {}),
+    badEncoding,
+  );
+});
 test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects redirects', async (t) => {
   const previous = process.env.FEED_ALLOWED_HOSTS;
   process.env.FEED_ALLOWED_HOSTS = 'feeds.example';
@@ -231,6 +685,8 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
     return [{ address: dnsCalls === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 }];
   });
   let captured: https.RequestOptions | undefined;
+  let mime = 'application/json',
+    source = Buffer.from('[]');
   t.mock.method(https, 'request', ((
     url: URL,
     options: https.RequestOptions,
@@ -258,11 +714,11 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
             assert.equal(address, '8.8.8.8');
             const res = Object.assign(new EventEmitter(), {
               statusCode,
-              headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': mime },
             });
             callback(res);
             if (statusCode === 200) {
-              res.emit('data', Buffer.from('[]'));
+              res.emit('data', source);
               res.emit('end');
             }
           },
@@ -289,6 +745,16 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
     /Feed response rejected/,
   );
   assert.equal(requests, 2);
+  statusCode = 200;
+  dnsCalls = 0;
+  mime = 'Application/XML; charset=windows-1251';
+  source = Buffer.concat([
+    Buffer.from('<feed><item>'),
+    Buffer.from('a8ebeae8ed', 'hex'),
+    Buffer.from('</item></feed>'),
+  ]);
+  const received = await fetcher.fetch('https://feeds.example/listings', 'xml');
+  assert.deepEqual(parseFeed(received, 'xml', {}), ['Ёлкин']);
 });
 
 test('Verification challenge delivery refuses redirects and sanitizes transport failures', async (t) => {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api } from '../lib/client';
 import AgentPublicProfile from './agent-public-profile';
 import AgencyMembers from './agency-members';
+import ProfessionalFeedLinks from './professional-feed-links';
 
 type Organization = {
   id: string;
@@ -18,9 +19,13 @@ type Organization = {
 export default function AgencyPublicProfiles({
   userId,
   canCreate,
+  kind = 'agency',
+  onVerifyContacts,
 }: {
   userId: string;
   canCreate: boolean;
+  kind?: 'developer' | 'agency';
+  onVerifyContacts?: (() => void) | undefined;
 }) {
   const [agencies, setAgencies] = useState<Organization[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -29,20 +34,21 @@ export default function AgencyPublicProfiles({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const creation = useRef<{ name: string; key: string } | null>(null);
+  const developer = kind === 'developer';
+  const sectionName = developer ? 'Организации застройщика' : 'Агентства';
   useEffect(() => {
     let active = true;
     api<Organization[]>('v1/organizations')
       .then((organizations) => {
         if (!active) return;
         const manageable = organizations.filter(
-          (item) =>
-            item.active && item.kind === 'agency' && item.membership_active,
+          (item) => item.active && item.kind === kind && item.membership_active,
         );
         setAgencies(manageable);
         setSelectedId(manageable[0]?.id ?? '');
       })
       .catch(() => {
-        if (active) setError('Не удалось загрузить агентства.');
+        if (active) setError('Не удалось загрузить организации.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -50,13 +56,13 @@ export default function AgencyPublicProfiles({
     return () => {
       active = false;
     };
-  }, []);
+  }, [kind]);
   const selected = agencies.find(({ id }) => id === selectedId);
   async function createAgency() {
     if (creating || loading) return;
     const trimmed = name.trim();
     if (trimmed.length < 2) {
-      setError('Введите название агентства от двух символов.');
+      setError('Введите название организации от двух символов.');
       return;
     }
     setCreating(true);
@@ -67,7 +73,7 @@ export default function AgencyPublicProfiles({
       const organization = await api<Organization>(
         'v1/organizations',
         'POST',
-        { name: trimmed, kind: 'agency' },
+        { name: trimmed, kind },
         { idempotencyKey: creation.current.key },
       );
       setAgencies((previous) => [
@@ -81,16 +87,16 @@ export default function AgencyPublicProfiles({
       setError(
         failure instanceof Error
           ? failure.message
-          : 'Не удалось создать агентство.',
+          : 'Не удалось создать организацию.',
       );
     } finally {
       setCreating(false);
     }
   }
   return (
-    <section id="agencies" aria-label="Агентства">
-      <h2>Агентства</h2>
-      {loading && <p role="status">Загружаем агентства…</p>}
+    <section id="agencies" aria-label={sectionName}>
+      <h2>{sectionName}</h2>
+      {loading && <p role="status">Загружаем организации…</p>}
       {error && <p role="alert">{error}</p>}
       {canCreate && (
         <form
@@ -100,7 +106,7 @@ export default function AgencyPublicProfiles({
           }}
         >
           <label>
-            Название агентства
+            {developer ? 'Название застройщика' : 'Название агентства'}
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -110,11 +116,15 @@ export default function AgencyPublicProfiles({
             />
           </label>
           <button disabled={creating || loading}>
-            {creating ? 'Создаём…' : 'Создать агентство'}
+            {creating
+              ? 'Создаём…'
+              : developer
+                ? 'Создать организацию'
+                : 'Создать агентство'}
           </button>
         </form>
       )}
-      {userId && (
+      {userId && !developer && (
         <details>
           <summary>Мой код для добавления в агентство</summary>
           <p>
@@ -125,7 +135,7 @@ export default function AgencyPublicProfiles({
       {selected && (
         <>
           <label>
-            Агентство
+            {developer ? 'Организация' : 'Агентство'}
             <select
               value={selectedId}
               onChange={(event) => setSelectedId(event.target.value)}
@@ -137,22 +147,35 @@ export default function AgencyPublicProfiles({
               ))}
             </select>
           </label>
-          <Link
-            href={`/account/listings?agency=${encodeURIComponent(selected.id)}#new-listing`}
-          >
-            Перейти к подаче объявления
-          </Link>
-          <AgencyMembers
-            key={selectedId}
-            agencyId={selectedId}
-            userId={userId}
-            role={selected.membership_role}
-          />
+          {!developer && (
+            <>
+              <Link
+                href={`/account/listings?agency=${encodeURIComponent(selected.id)}#new-listing`}
+              >
+                Перейти к подаче объявления
+              </Link>
+              <AgencyMembers
+                key={selectedId}
+                agencyId={selectedId}
+                userId={userId}
+                role={selected.membership_role}
+              />
+            </>
+          )}
           {['owner', 'admin'].includes(selected.membership_role) && (
-            <AgentPublicProfile
-              key={`profile-${selectedId}`}
-              agencyId={selectedId}
-            />
+            <>
+              <ProfessionalFeedLinks
+                key={'feeds-' + selected.id}
+                organizationId={selected.id}
+                onVerifyContacts={onVerifyContacts}
+              />
+              {!developer && (
+                <AgentPublicProfile
+                  key={`profile-${selectedId}`}
+                  agencyId={selectedId}
+                />
+              )}
+            </>
           )}
         </>
       )}

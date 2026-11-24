@@ -596,6 +596,39 @@ dd {
 .account-form {
   max-width: 480px;
 }
+.feed-import {
+  margin-block: 1rem;
+  max-width: 48rem;
+}
+.feed-import summary,
+.feed-row label {
+  font-weight: 650;
+}
+.feed-import summary {
+  cursor: pointer;
+  padding-block: 0.5rem;
+}
+.feed-row {
+  padding-block: 0.75rem;
+  border-top: 1px solid #d7e1e7;
+}
+.feed-row label,
+.feed-row small {
+  display: block;
+}
+.feed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 0.3rem;
+}
+.feed-controls input {
+  flex: 1 1 15rem;
+  min-width: 0;
+}
+.feed-errors {
+  overflow-wrap: anywhere;
+}
 .account-form label {
   margin: 1rem 0;
 }

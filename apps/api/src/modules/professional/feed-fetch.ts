@@ -7,9 +7,15 @@ import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
 import { isIP } from 'node:net';
 import { publicIPv4 } from '../../common/outbound-policy';
+import { xmlFeedMaxBytes } from './feed-limits';
+import { FeedLinkError } from './feed-link-error';
+import type { XmlFeedDownload } from './feed-parser';
 export { publicIPv4 } from '../../common/outbound-policy';
 export abstract class FeedFetcher {
-  abstract fetch(url: string): Promise<string>;
+  abstract fetch(
+    url: string,
+    format?: string,
+  ): Promise<string | XmlFeedDownload>;
 }
 export function validateFeedUrl(value: string, hosts: string[]) {
   const url = new URL(value);
@@ -19,10 +25,15 @@ export function validateFeedUrl(value: string, hosts: string[]) {
     url.password ||
     url.hash ||
     (url.port && url.port !== '443') ||
-    !hosts.includes(url.hostname) ||
+    url.hostname.startsWith('[') ||
     isIP(url.hostname)
   )
     throw new BadRequestException('Approved HTTPS feed host required');
+  if (!hosts.includes(url.hostname))
+    throw new FeedLinkError(
+      'feed_host_not_approved',
+      'Feed host needs administrator approval',
+    );
   return url;
 }
 export async function resolveFeedHost(
@@ -52,7 +63,10 @@ export async function resolveFeedHost(
 }
 @Injectable()
 export class HttpsFeedFetcher extends FeedFetcher {
-  async fetch(value: string): Promise<string> {
+  async fetch(
+    value: string,
+    format?: string,
+  ): Promise<string | XmlFeedDownload> {
     const hosts = (process.env.FEED_ALLOWED_HOSTS ?? '')
       .split(',')
       .map((x) => x.trim())
@@ -79,6 +93,8 @@ export class HttpsFeedFetcher extends FeedFetcher {
           lookup: (_host, _options, done) => done(null, selected.address, 4),
         },
         (res) => {
+          const contentType = res.headers['content-type'] ?? '';
+          const mime = contentType.split(';', 1)[0]!.trim().toLowerCase();
           if (
             res.statusCode !== 200 ||
             ![
@@ -86,7 +102,7 @@ export class HttpsFeedFetcher extends FeedFetcher {
               'text/csv',
               'application/xml',
               'text/xml',
-            ].some((t) => (res.headers['content-type'] ?? '').includes(t))
+            ].includes(mime)
           ) {
             req.destroy();
             clearTimeout(timer);
@@ -94,10 +110,16 @@ export class HttpsFeedFetcher extends FeedFetcher {
             return;
           }
           let size = 0;
+          const maxBytes =
+            format === 'xml' ||
+            (format === undefined &&
+              (mime === 'application/xml' || mime === 'text/xml'))
+              ? xmlFeedMaxBytes
+              : 2_000_000;
           const chunks: Buffer[] = [];
           res.on('data', (chunk: Buffer) => {
             size += chunk.length;
-            if (size > 2_000_000) {
+            if (size > maxBytes) {
               req.destroy();
               reject(new ServiceUnavailableException('Feed too large'));
             } else chunks.push(chunk);
@@ -108,7 +130,12 @@ export class HttpsFeedFetcher extends FeedFetcher {
           });
           res.on('end', () => {
             clearTimeout(timer);
-            resolve(Buffer.concat(chunks).toString('utf8'));
+            const bytes = Buffer.concat(chunks);
+            resolve(
+              format === 'xml'
+                ? { bytes, contentType }
+                : bytes.toString('utf8'),
+            );
           });
         },
       );

@@ -720,7 +720,53 @@ test('the listing link follows the selected agency in the cabinet', async () => 
   expect(link.getAttribute('href')).toBe(
     '/account/listings?agency=agency-2#new-listing',
   );
+  expect(screen.queryByText('XML-выгрузки организации')).toBeNull();
 });
+
+test.each(['agency', 'developer'])(
+  'a %s manager accesses the XML sources of the selected organization',
+  async (role) => {
+    const requests: string[] = [];
+    stubFetch('fetch', async (url) => {
+      requests.push(url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          if (url.endsWith('/auth/me'))
+            return {
+              id: 'manager',
+              role,
+              display_name: 'Управляющий',
+              email_verified_at: 'now',
+              phone_verified_at: 'now',
+              public_id: '7',
+            };
+          if (url.endsWith('/organizations'))
+            return [
+              {
+                id: 'org-b',
+                name: 'Проект',
+                kind: role,
+                active: true,
+                membership_role: 'admin',
+                membership_active: true,
+              },
+            ];
+          if (url.endsWith('/members') || url.endsWith('/links')) return [];
+          return { items: [], cursor: null };
+        },
+      };
+    });
+    render(<Account />);
+    fireEvent.click(await screen.findByText('XML-выгрузки организации'));
+    expect(
+      await screen.findByRole('textbox', { name: 'Домклик' }),
+    ).toBeTruthy();
+    expect(requests).toContain('/api/v1/organizations/org-b/feeds/links');
+    expect(screen.queryByText('Мои XML-выгрузки')).toBeNull();
+  },
+);
 
 test.each([false, true])(
   'publication entry offers the correct next step when contacts verified: %s',

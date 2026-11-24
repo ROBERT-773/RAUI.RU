@@ -12,6 +12,7 @@ import { attributeLabels } from '../lib/labels';
 import { savedSearchSummary } from '../lib/saved-search-summary';
 import { Card } from './card';
 import AgencyPublicProfiles from './agency-public-profiles';
+import ProfessionalFeedLinks from './professional-feed-links';
 import AgentPublicProfile from './agent-public-profile';
 import AccountProfile from './account-profile';
 import AccountSubscriptions from './account-subscriptions';
@@ -528,11 +529,23 @@ export default function Account({
         ))}
       {canList && <Link href="/account/listings">Мои объявления</Link>}
       {user.role === 'agent' && <AgentPublicProfile key={user.public_id} />}
-      {(user.role === 'agent' || user.role === 'agency') && (
+      {user.role === 'agent' && (
+        <ProfessionalFeedLinks
+          key={'feeds-' + user.id}
+          onVerifyContacts={
+            canContinueListing ? undefined : () => setProfileOpen(true)
+          }
+        />
+      )}
+      {['agent', 'agency', 'developer'].includes(user.role) && (
         <AgencyPublicProfiles
           key={user.public_id}
           userId={user.id}
-          canCreate={user.role === 'agency'}
+          canCreate={user.role === 'agency' || user.role === 'developer'}
+          kind={user.role === 'developer' ? 'developer' : 'agency'}
+          onVerifyContacts={
+            canContinueListing ? undefined : () => setProfileOpen(true)
+          }
         />
       )}
       {logoutButton}

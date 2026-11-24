@@ -46,25 +46,33 @@ import {
 } from './contracts';
 import { FeedFetcher, HttpsFeedFetcher } from './feed-fetch';
 import { parseFeed } from './feed-parser';
+import { FeedLinkError } from './feed-link-error';
+import { Geocoder, GeoModule } from '../geo/geo';
+import { FeedGeocoding } from './feed-geocoding';
 interface Feed {
   id: string;
-  organization_id: string;
+  organization_id: string | null;
   created_by: string;
   active: boolean;
   schedule_cron: string | null;
   format: string;
-  transport: { kind: string; url?: string };
+  transport: {
+    kind: string;
+    url?: string;
+    provider?: 'yandex' | 'avito' | 'cian' | 'domclick';
+  };
   mapping: Record<string, string>;
 }
 interface Job {
   run_id: string;
   feed_id: string;
-  organization_id: string;
+  organization_id: string | null;
   requested_by: string;
   mode: 'apply' | 'dry_run';
   payload: unknown[] | null;
   lease_token: string;
   attempts: number;
+  source_hash?: string | null;
 }
 interface RecordRow {
   listing_id: string;
@@ -88,10 +96,11 @@ export class ProfessionalImports {
     private readonly catalog: Catalog,
     private readonly properties: Properties,
     private readonly fetcher: FeedFetcher,
+    private readonly geocoder: Geocoder,
   ) {}
   async permission(
     actor: Actor,
-    organization: string,
+    organization: string | null,
     feedId: string,
     manage = false,
     sql: Sql = this.db.pool,
@@ -100,6 +109,9 @@ export class ProfessionalImports {
     if (admin) {
       verified(actor);
       if (actor.role !== 'admin') throw new ForbiddenException();
+    } else if (organization === null) {
+      seller(actor);
+      if (actor.role !== 'agent') throw new ForbiddenException();
     } else
       await this.organizations.permission(
         actor,
@@ -108,8 +120,8 @@ export class ProfessionalImports {
         sql,
       );
     const [feed] = await this.db.rows<Feed>(
-      'SELECT * FROM professional_feed_definitions WHERE id=$1 AND organization_id=$2',
-      [parse(uuid, feedId), organization],
+      'SELECT * FROM professional_feed_definitions WHERE id=$1 AND organization_id IS NOT DISTINCT FROM $2::uuid AND ($2::uuid IS NOT NULL OR created_by=$3 OR $4)',
+      [parse(uuid, feedId), organization, actor.id, admin],
       sql,
     );
     if (!feed) throw new NotFoundException();
@@ -163,9 +175,40 @@ export class ProfessionalImports {
       (sql) => this.permission(actor, organizationId, feedId, true, sql),
     );
   }
+  async enqueueLinkPreview(
+    sql: Sql,
+    actor: Actor,
+    organizationId: string | null,
+    feedId: string,
+    sourceHash: string,
+  ) {
+    const [run] = await this.db.rows<{ id: string }>(
+      `INSERT INTO professional_import_runs(feed_id,organization_id,requested_by,mode,status,stats,created_at)
+       VALUES($1,$2,$3,'dry_run','running',$4,clock_timestamp()) RETURNING id`,
+      [
+        feedId,
+        organizationId,
+        actor.id,
+        JSON.stringify({ stage: 'queued', sourceHash }),
+      ],
+      sql,
+    );
+    await sql.query('INSERT INTO professional_import_jobs(run_id) VALUES($1)', [
+      run!.id,
+    ]);
+    await this.audit.record(
+      sql,
+      actor.id,
+      'professional.feed.queued',
+      'professional_import_run',
+      run!.id,
+      { feedId, mode: 'dry_run', source: 'url' },
+    );
+    return { runId: run!.id, status: 'queued' };
+  }
   async configure(
     actor: Actor,
-    org: string,
+    org: string | null,
     id: string,
     body: unknown,
     admin = false,
@@ -193,7 +236,7 @@ export class ProfessionalImports {
   }
   async logs(
     actor: Actor,
-    org: string,
+    org: string | null,
     id: string,
     query: unknown,
     admin = false,
@@ -207,7 +250,7 @@ export class ProfessionalImports {
   }
   async items(
     actor: Actor,
-    org: string,
+    org: string | null,
     id: string,
     runId: string,
     query: unknown,
@@ -217,19 +260,41 @@ export class ProfessionalImports {
       z
         .object({
           after: z.string().max(200).optional(),
+          errorsOnly: z.enum(['true', 'false']).optional(),
           limit: z.coerce.number().int().min(1).max(200).default(50),
         })
         .strict(),
       query,
     );
     return this.db.rows(
-      'SELECT i.external_reference,i.property_id,i.listing_id,i.status,i.errors FROM professional_import_items i JOIN professional_import_runs r ON r.id=i.run_id WHERE i.run_id=$1 AND r.feed_id=$2 AND ($3::text IS NULL OR i.external_reference>$3) ORDER BY i.external_reference LIMIT $4',
-      [parse(uuid, runId), id, q.after ?? null, q.limit],
+      `SELECT i.external_reference, CASE WHEN i.errors @> '[{"code":"duplicate"}]'
+              THEN left(btrim(i.payload->>'externalReference'),200) END AS duplicate_reference,
+              i.property_id,i.listing_id,i.status,i.errors FROM professional_import_items i
+       JOIN professional_import_runs r ON r.id=i.run_id WHERE i.run_id=$1 AND r.feed_id=$2 AND
+       ($3::text IS NULL OR i.external_reference>$3) AND (NOT $5::boolean OR i.status IN ('invalid','quarantined'))
+       ORDER BY i.external_reference LIMIT $4`,
+      [
+        parse(uuid, runId),
+        id,
+        q.after ?? null,
+        q.limit,
+        q.errorsOnly === 'true',
+      ],
     );
+  }
+  async report(actor: Actor, org: string | null, id: string, runId: string) {
+    await this.permission(actor, org, id);
+    const [run] = await this.db.rows(
+      `SELECT id,status,stats-'sourceHash' AS stats,error FROM professional_import_runs
+       WHERE feed_id=$1 AND id=$2`,
+      [id, parse(uuid, runId)],
+    );
+    if (!run) throw new NotFoundException();
+    return run;
   }
   async retry(
     actor: Actor,
-    org: string,
+    org: string | null,
     id: string,
     runId: string,
     admin = false,
@@ -311,7 +376,7 @@ export class ProfessionalImports {
     await this.schedule();
     const job = await this.db.transaction(async (sql) => {
       const [j] = await this.db.rows<Job>(
-        "SELECT j.*,r.feed_id,r.organization_id,r.requested_by,r.mode FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id JOIN professional_feed_definitions f ON f.id=r.feed_id WHERE j.state IN ('pending','running') AND j.available_at<=now() AND (j.lease_until IS NULL OR j.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM professional_import_jobs prior JOIN professional_import_runs pr ON pr.id=prior.run_id WHERE pr.feed_id=r.feed_id AND prior.state IN ('pending','running') AND (pr.created_at,pr.id)<(r.created_at,r.id)) ORDER BY j.available_at,j.run_id LIMIT 1 FOR UPDATE OF j,f SKIP LOCKED",
+        "SELECT j.*,r.feed_id,r.organization_id,r.requested_by,r.mode,r.stats->>'sourceHash' AS source_hash FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id JOIN professional_feed_definitions f ON f.id=r.feed_id WHERE j.state IN ('pending','running') AND j.available_at<=now() AND (j.lease_until IS NULL OR j.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM professional_import_jobs prior JOIN professional_import_runs pr ON pr.id=prior.run_id WHERE pr.feed_id=r.feed_id AND prior.state IN ('pending','running') AND (pr.created_at,pr.id)<(r.created_at,r.id)) ORDER BY j.available_at,j.run_id LIMIT 1 FOR UPDATE OF j,f SKIP LOCKED",
         [],
         sql,
       );
@@ -338,12 +403,15 @@ export class ProfessionalImports {
         true,
       );
       if (!feed.active) throw new ConflictException();
+      if (job.source_hash && hash(feed.transport.url ?? '') !== job.source_hash)
+        throw new ConflictException('Feed URL changed');
       const payload =
         job.payload ??
         parseFeed(
-          await this.fetcher.fetch(feed.transport.url!),
+          await this.fetcher.fetch(feed.transport.url!, feed.format),
           feed.format,
           feed.mapping,
+          feed.transport.provider,
         );
       if (!job.payload)
         await this.db.pool.query(
@@ -351,17 +419,35 @@ export class ProfessionalImports {
           [job.run_id, job.lease_token, JSON.stringify(payload)],
         );
       const seen = new Set<string>();
+      const geo = new FeedGeocoding(this.geocoder);
       for (let i = 0; i < payload.length; i++) {
-        const parsed = importItem.safeParse(payload[i]);
-        const reference = parsed.success
-          ? parsed.data.externalReference
+        const raw = payload[i];
+        const rawReference = importItem.shape.externalReference.safeParse(
+          raw && typeof raw === 'object' && 'externalReference' in raw
+            ? raw.externalReference
+            : undefined,
+        );
+        const reference = rawReference.success
+          ? rawReference.data
           : `invalid:${i}`;
         const duplicate = seen.has(reference);
         seen.add(reference);
         const logKey = duplicate
           ? `duplicate:${i}:${hash(reference)}`
           : reference;
-        await this.process(job, actor, feed, payload[i], logKey, duplicate);
+        const resolved =
+          feed.format === 'xml' && feed.transport.kind === 'https' && !duplicate
+            ? await geo.resolve(raw)
+            : { row: raw };
+        await this.process(
+          job,
+          actor,
+          feed,
+          resolved.row,
+          logKey,
+          duplicate,
+          resolved.message,
+        );
       }
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
@@ -397,16 +483,38 @@ export class ProfessionalImports {
           counts,
         );
       });
-    } catch {
+    } catch (failure) {
+      const changed =
+        failure instanceof ConflictException &&
+        failure.message === 'Feed URL changed';
+      const invalid = failure instanceof BadRequestException;
+      const permanent = Boolean(
+        job.source_hash &&
+        (changed || invalid || failure instanceof ForbiddenException),
+      );
+      const code = !job.source_hash
+        ? 'import_failed'
+        : changed
+          ? 'source_changed'
+          : failure instanceof FeedLinkError
+            ? failure.code
+            : invalid
+              ? 'invalid_feed'
+              : failure instanceof ForbiddenException
+                ? 'access_revoked'
+                : 'source_unavailable';
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
-          "UPDATE professional_import_jobs SET state=CASE WHEN attempts>=5 THEN 'dead' ELSE 'pending' END,lease_token=NULL,lease_until=NULL,last_error='import_failed',available_at=now()+interval '1 second'*LEAST(3600,30*power(2,attempts)) WHERE run_id=$1 AND lease_token=$2 RETURNING state",
-          [job.run_id, job.lease_token],
+          `UPDATE professional_import_jobs SET state=CASE WHEN $3::boolean OR attempts>=5 THEN 'dead' ELSE 'pending' END,
+           lease_token=NULL,lease_until=NULL,last_error=$4,
+           available_at=now()+interval '1 second'*LEAST(3600,30*power(2,attempts))
+           WHERE run_id=$1 AND lease_token=$2 RETURNING state`,
+          [job.run_id, job.lease_token, permanent, code],
         );
         if (result.rows[0]?.state === 'dead') {
           await sql.query(
-            "UPDATE professional_import_runs SET status='failed',error='import_failed',finished_at=now() WHERE id=$1",
-            [job.run_id],
+            "UPDATE professional_import_runs SET status='failed',error=$2,finished_at=now() WHERE id=$1",
+            [job.run_id, code],
           );
           await this.audit.record(
             sql,
@@ -427,6 +535,7 @@ export class ProfessionalImports {
     raw: unknown,
     logKey: string,
     duplicate: boolean,
+    coordinateError?: string,
   ) {
     await this.db.transaction(async (sql) => {
       const [held] = await this.db.rows(
@@ -492,13 +601,19 @@ export class ProfessionalImports {
               district: string | null;
               longitude: number;
               latitude: number;
-              organization_id: string;
+              organization_id: string | null;
+              seller_id: string;
             }>(
-              `SELECT l.status,l.organization_id,p.category_code,p.attributes,a.formatted,a.locality,a.district,ST_X(a.point) AS longitude,ST_Y(a.point) AS latitude FROM listings l JOIN properties p ON p.id=l.property_id JOIN addresses a ON a.id=p.address_id WHERE l.id=$1 AND l.source_id=$2 FOR UPDATE OF l,p`,
+              `SELECT l.status,l.organization_id,l.seller_id,p.category_code,p.attributes,a.formatted,a.locality,a.district,ST_X(a.point) AS longitude,ST_Y(a.point) AS latitude FROM listings l JOIN properties p ON p.id=l.property_id JOIN addresses a ON a.id=p.address_id WHERE l.id=$1 AND l.source_id=$2 FOR UPDATE OF l,p`,
               [record.listing_id, record.source_id],
               sql,
             );
-            if (!existing || existing.organization_id !== feed.organization_id)
+            if (
+              !existing ||
+              existing.organization_id !== feed.organization_id ||
+              (feed.organization_id === null &&
+                existing.seller_id !== feed.created_by)
+            )
               throw new ForbiddenException('Source mismatch');
             if (!['draft', 'paused', 'rejected'].includes(existing.status))
               throw new ConflictException(
@@ -551,7 +666,9 @@ export class ProfessionalImports {
                 await this.properties.createWithSql(
                   actor,
                   {
-                    organizationId: feed.organization_id,
+                    ...(feed.organization_id
+                      ? { organizationId: feed.organization_id }
+                      : {}),
                     category: item.categoryCode,
                     address: item.address,
                     attributes: item.attributes,
@@ -560,7 +677,7 @@ export class ProfessionalImports {
                 )
               ).id;
               const [source] = await this.db.rows<{ id: string }>(
-                "INSERT INTO listing_sources(kind,organization_id,external_reference,metadata) VALUES('feed',$1,$2,$3) RETURNING id",
+                "INSERT INTO listing_sources(kind,organization_id,external_reference,metadata,personal_feed_owner_id) VALUES('feed',$1,$2,$3,$4) RETURNING id",
                 [
                   feed.organization_id,
                   `${feed.id}:${hash(item.externalReference)}`,
@@ -569,6 +686,7 @@ export class ProfessionalImports {
                     externalReference: item.externalReference,
                     lastRunId: job.run_id,
                   }),
+                  feed.organization_id === null ? feed.created_by : null,
                 ],
                 sql,
               );
@@ -618,19 +736,98 @@ export class ProfessionalImports {
         status = job.mode === 'dry_run' ? 'invalid' : 'quarantined';
         listingId = null;
         propertyId = null;
-        errors = [
-          {
-            code:
-              e instanceof ConflictException
-                ? 'conflict'
-                : e instanceof ForbiddenException
-                  ? 'forbidden'
-                  : 'validation',
-            message: duplicate
-              ? 'Duplicate external reference'
-              : 'Row rejected; verify values and listing state',
-          },
-        ];
+        if (!(
+          e instanceof BadRequestException ||
+          e instanceof ConflictException ||
+          e instanceof ForbiddenException
+        ))
+          throw e;
+        const parsed = importItem.safeParse(raw);
+        if (duplicate)
+          errors = [
+            {
+              code: 'duplicate',
+              message: 'Идентификатор повторяется в этой выгрузке.',
+            },
+          ];
+        else if (!parsed.success) {
+          const labels: Record<string, string> = {
+            externalReference: 'идентификатор объявления',
+            title: 'заголовок',
+            price: 'цену',
+            dealType: 'тип сделки',
+            categoryCode: 'категорию',
+            description: 'описание',
+            attributes: 'характеристики',
+            address: 'адрес',
+            'address.locality': 'населённый пункт',
+            'address.formatted': 'адрес',
+            'address.latitude': 'широту',
+            'address.longitude': 'долготу',
+          };
+          errors = parsed.error.issues.slice(0, 12).map((issue) => {
+            const field = issue.path.join('.');
+            return Object.hasOwn(labels, field)
+              ? {
+                  code: 'validation',
+                  field,
+                  message: 'Проверьте ' + labels[field] + '.',
+                }
+              : {
+                  code: 'validation',
+                  message: 'Проверьте поля объявления и их значения.',
+                };
+          });
+          if (coordinateError) {
+            errors = errors.filter(
+              (error) =>
+                !(
+                  typeof error === 'object' &&
+                  error !== null &&
+                  'field' in error &&
+                  (error.field === 'address.latitude' ||
+                    error.field === 'address.longitude')
+                ),
+            );
+            errors.push({
+              code: 'coordinates',
+              field: 'address',
+              message: coordinateError,
+            });
+          }
+        } else if (e instanceof ConflictException)
+          errors = [
+            {
+              code: 'conflict',
+              message:
+                e.message === 'Pause listing before importing changes'
+                  ? 'Приостановите объявление перед обновлением.'
+                  : 'Характеристики объекта изменились. Проверьте адрес и параметры.',
+            },
+          ];
+        else if (e instanceof ForbiddenException)
+          errors = [
+            {
+              code: 'forbidden',
+              message: 'Источник объявления не совпадает с текущей выгрузкой.',
+            },
+          ];
+        else if (e.message === 'Inactive or unknown category')
+          errors = [
+            {
+              code: 'validation',
+              field: 'categoryCode',
+              message: 'Выберите доступную категорию объекта.',
+            },
+          ];
+        else
+          errors = [
+            {
+              code: 'validation',
+              field: 'attributes',
+              message: 'Проверьте характеристики объекта для этой категории.',
+            },
+          ];
       }
       await sql.query('RELEASE SAVEPOINT feed_row');
       await sql.query(
@@ -657,7 +854,7 @@ export class ProfessionalImports {
   async adminOrganization(actor: Actor, id: string) {
     verified(actor);
     if (actor.role !== 'admin') throw new ForbiddenException();
-    const [feed] = await this.db.rows<{ organization_id: string }>(
+    const [feed] = await this.db.rows<{ organization_id: string | null }>(
       'SELECT organization_id FROM professional_feed_definitions WHERE id=$1',
       [parse(uuid, id)],
     );
@@ -692,6 +889,14 @@ export class ProfessionalImportsController {
     @Query() q: unknown,
   ) {
     return this.imports.logs(a, o, id, q);
+  }
+  @Get('runs/:runId') report(
+    @CurrentActor() a: Actor,
+    @Param('organizationId') o: string,
+    @Param('feedId') id: string,
+    @Param('runId') r: string,
+  ) {
+    return this.imports.report(a, o, id, r);
   }
   @Get('runs/:runId/items') items(
     @CurrentActor() a: Actor,
@@ -759,7 +964,13 @@ export class ProfessionalAdminController {
   }
 }
 @Module({
-  imports: [OrganizationsModule, CatalogModule, PropertiesModule, AuditModule],
+  imports: [
+    OrganizationsModule,
+    CatalogModule,
+    PropertiesModule,
+    AuditModule,
+    GeoModule,
+  ],
   controllers: [ProfessionalImportsController, ProfessionalAdminController],
   providers: [
     ProfessionalImports,
