@@ -41,7 +41,9 @@ async function saveHomeRegion(form: FormData) {
 
 export default async function Home({
   searchParams,
-}: { searchParams?: Promise<{ feedback?: string | string[] }> } = {}) {
+}: {
+  searchParams: Promise<{ feedback?: string | string[] }>;
+}) {
   const [listings, regions, regionCounts] = await Promise.all([
     recentListings(),
     publicRegions(),
@@ -165,7 +167,7 @@ export default async function Home({
       </section>
       <BetaInvitation
         initialDismissed={preferences.get('raui_beta_closed')?.value === '1'}
-        initialOpen={(await searchParams)?.feedback === '1'}
+        initialOpen={(await searchParams).feedback === '1'}
       />
       {listings && listings.items.length > 0 && (
         <section
