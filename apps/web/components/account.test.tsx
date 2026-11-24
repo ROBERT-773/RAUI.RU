@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from '@testing-library/react';
 import Account from './account';
 const profileCallbacks = vi.hoisted(() => ({
@@ -639,6 +640,8 @@ test('Account displays its permanent ID without rounding large numeric identifie
               display_name: 'Buyer',
               public_id: '9007199254740993',
               role: 'buyer',
+              email_verified_at: 'now',
+              phone_verified_at: 'now',
             }
           : { items: [], cursor: null },
     })),
@@ -646,6 +649,7 @@ test('Account displays its permanent ID without rounding large numeric identifie
   render(<Account />);
   expect(await screen.findByText('ID: 9007199254740993')).toBeTruthy();
   expect(screen.queryByRole('link', { name: 'Мои объявления' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Мои объявления' })).toBeNull();
 });
 
 test.each([
@@ -792,6 +796,9 @@ test.each([false, true])(
       ).toBeTruthy();
     } else {
       expect(
+        screen.queryByRole('region', { name: 'Мои объявления' }),
+      ).toBeNull();
+      expect(
         screen.queryByRole('link', { name: 'Продолжить подачу объявления' }),
       ).toBeNull();
       expect(
@@ -800,6 +807,115 @@ test.each([false, true])(
     }
   },
 );
+
+test('a verified seller can retry unavailable counters and see confirmed zeros', async () => {
+  let attempts = 0;
+  const seller = {
+    id: 'seller',
+    role: 'owner',
+    public_id: '18',
+    display_name: 'Owner',
+    email_verified_at: 'now',
+    phone_verified_at: 'now',
+    registration_approval_state: 'approved',
+  };
+  stubFetch('fetch', async (url) => {
+    if (url.endsWith('/listings/summary')) {
+      attempts++;
+      return {
+        ok: attempts > 1,
+        status: attempts > 1 ? 200 : 503,
+        json: async () => ({ total: 0, sale: 0, rent: 0 }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () =>
+        url.endsWith('/auth/me') ? seller : { items: [], cursor: null },
+    };
+  });
+  render(<Account />);
+  const summary = within(
+    await screen.findByRole('region', { name: 'Мои объявления' }),
+  );
+  await summary.findByRole('alert');
+  expect(summary.queryByText('0')).toBeNull();
+  fireEvent.click(summary.getByRole('button', { name: 'Повторить загрузку' }));
+  await summary.findByText('Всего');
+  expect(summary.getAllByText('0')).toHaveLength(3);
+  expect(attempts).toBe(2);
+});
+
+test('a late listing summary cannot replace the next seller’s counters', async () => {
+  const seller = {
+    role: 'owner',
+    email_verified_at: 'now',
+    phone_verified_at: 'now',
+    registration_approval_state: 'approved',
+  };
+  let release!: () => void;
+  const firstRequest = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let summaryCalls = 0;
+  stubFetch('fetch', async (url) => {
+    let result: unknown = { items: [], cursor: null };
+    if (url.endsWith('/auth/me')) {
+      result = {
+        ...seller,
+        id: 'first',
+        public_id: '1',
+        display_name: 'First',
+      };
+    } else if (url.endsWith('/auth/login')) {
+      result = {
+        csrfToken: 'test-login',
+        user: {
+          ...seller,
+          id: 'second',
+          public_id: '2',
+          display_name: 'Second',
+        },
+      };
+    } else if (url.endsWith('/listings/summary')) {
+      const request = ++summaryCalls;
+      if (request === 1) await firstRequest;
+      result =
+        request === 1
+          ? { total: 777, sale: 700, rent: 77 }
+          : { total: 13, sale: 5, rent: 8 };
+    }
+    return { ok: true, status: 200, json: async () => result };
+  });
+  render(<Account />);
+  const first = within(
+    await screen.findByRole('region', { name: 'Мои объявления' }),
+  );
+  expect(first.getByRole('status').textContent).toContain('Загрузка');
+  expect(first.queryByRole('definition')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  await screen.findByLabelText('Пароль');
+  fireEvent.change(screen.getByLabelText('Email'), {
+    target: { value: 'qa@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'synthetic-long-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /^Войти$/ }));
+  const next = within(
+    await screen.findByRole('region', { name: 'Мои объявления' }),
+  );
+  await next.findByText('13');
+  await act(async () => {
+    release();
+  });
+  expect(next.getAllByRole('definition').map((dd) => dd.textContent)).toEqual([
+    '13',
+    '5',
+    '8',
+  ]);
+  expect(next.queryByText('777')).toBeNull();
+});
 
 for (const state of ['pending', 'rejected']) {
   test(`${state} accounts do not load or expose private collections`, async () => {
@@ -813,6 +929,9 @@ for (const state of ['pending', 'rejected']) {
             ? {
                 display_name: 'Applicant',
                 public_id: '17',
+                role: 'agency',
+                email_verified_at: 'now',
+                phone_verified_at: 'now',
                 registration_approval_state: state,
               }
             : { items: [], cursor: null },
@@ -825,6 +944,9 @@ for (const state of ['pending', 'rejected']) {
     ).toBeNull();
     expect(screen.queryByRole('link', { name: 'Мои объявления' })).toBeNull();
     expect(requests.some((url) => url.includes('/account/'))).toBe(false);
+    expect(requests.some((url) => url.endsWith('/listings/summary'))).toBe(
+      false,
+    );
     expect(screen.getByRole('button', { name: 'Выйти' })).toBeTruthy();
   });
 }

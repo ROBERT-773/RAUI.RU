@@ -1,0 +1,33 @@
+.summary {
+  max-width: 42rem;
+}
+
+.summary h2 {
+  font-size: 1.125rem;
+  margin: 0 0 0.75rem;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.metrics dt,
+.note {
+  font-size: 0.875rem;
+  color: #456071;
+}
+
+.metrics dd {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  margin: 0.75rem 0 0;
+}

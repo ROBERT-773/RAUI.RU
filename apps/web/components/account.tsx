@@ -17,6 +17,7 @@ import AgentPublicProfile from './agent-public-profile';
 import AccountProfile from './account-profile';
 import AccountSubscriptions from './account-subscriptions';
 import PhoneSignIn from './phone-sign-in';
+import ListingSummary from './listing-summary';
 interface AccountUser {
   id: string;
   role: string;
@@ -527,7 +528,12 @@ export default function Account({
             Подтвердить контакты для подачи
           </Button>
         ))}
-      {canList && <Link href="/account/listings">Мои объявления</Link>}
+      {canList &&
+        (canContinueListing ? (
+          <ListingSummary key={user.id} />
+        ) : (
+          <Link href="/account/listings">Мои объявления</Link>
+        ))}
       {user.role === 'admin' && (
         <Link href="/admin/feeds">Автопубликация из XML</Link>
       )}

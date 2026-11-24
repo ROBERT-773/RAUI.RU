@@ -520,6 +520,23 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/listings/summary') {
+        const count = { type: 'integer', minimum: 0 } as const;
+        operation.responses['200'] = {
+          description:
+            'All accessible listings across all statuses plus the verified seller’s unfinished personal forms. Rent includes long-term and short-term offers.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['total', 'sale', 'rent'],
+                properties: { total: count, sale: count, rent: count },
+                additionalProperties: false,
+              },
+            },
+          },
+        };
+      }
       if (
         operationId === 'get /v1/account/listing-drafts' ||
         operationId === 'put /v1/account/listing-drafts/{id}'
