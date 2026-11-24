@@ -240,9 +240,9 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     await creation.getByLabel('Цена, ₽ в месяц', { exact: true }).fill('50000');
     await creation.getByLabel('Залог, ₽', { exact: true }).fill('0');
     await creation.getByLabel('Комиссия, %', { exact: true }).fill('0');
-    const utilities = creation.getByLabel('Коммунальные платежи включены');
-    await utilities.check();
-    await utilities.uncheck();
+    await creation
+      .getByRole('combobox', { name: 'Коммунальные платежи', exact: true })
+      .selectOption({ label: 'Оплачиваются отдельно' });
     const saved = page.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/listings'),
     );
@@ -776,6 +776,49 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     await visitorContext.close();
   }
 });
+const apartmentRentals = {
+  long_rent: {
+    price: '50 000 ₽ / мес.',
+    fields: [
+      ['Залог, ₽', '25000'],
+      ['Комиссия, %', '35'],
+    ],
+    facts: [
+      ['Залог', '25 000 ₽'],
+      ['Комиссия', '35 %'],
+      ['Коммунальные платежи включены', 'Нет'],
+    ],
+  },
+  short_rent: {
+    price: '4 500 ₽ / сутки',
+    fields: [
+      ['Залог, ₽', '3000'],
+      ['Минимум ночей', '2'],
+      ['Максимум гостей', '4'],
+      ['Доступно с', '2030-06-28'],
+      ['Доступно до (дата выезда)', '2030-07-03'],
+    ],
+    facts: [
+      ['Залог', '3 000 ₽'],
+      ['Минимум ночей', '2'],
+      ['Максимум гостей', '4'],
+      ['Даты заезда и выезда', /28\s+июня.*3\s+июля\s+2030/u],
+    ],
+  },
+} as const;
+
+async function expectRentalFacts(
+  container: Locator,
+  facts: readonly (readonly [string, string | RegExp])[],
+) {
+  for (const [label, value] of facts) {
+    const row = container.locator('dl > div').filter({
+      has: container.page().getByText(label, { exact: true }),
+    });
+    await expect(row.locator('dd')).toHaveText(value);
+  }
+}
+
 const publicationCases = [
   ['land', 'sale', 'Площадь участка, м² *', '750', '3500000', 'Цена, ₽'],
   ['house', 'sale', 'Площадь дома, м² *', '120', '9500000', 'Цена, ₽'],
@@ -844,6 +887,46 @@ for (const [
     await next.click();
     const title = `Проверка публикации ${randomUUID()}`;
     await form.getByLabel('Заголовок', { exact: true }).fill(title);
+    const rental = dealType === 'sale' ? undefined : apartmentRentals[dealType];
+    if (rental) {
+      for (const [label, value] of rental.fields) {
+        await form.getByLabel(label, { exact: true }).fill(value);
+      }
+      const utilities = form.getByRole('combobox', {
+        name: 'Коммунальные платежи',
+        exact: true,
+      });
+      if (dealType === 'long_rent') {
+        await utilities.selectOption({ label: 'Оплачиваются отдельно' });
+      }
+      const stored = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname.startsWith(
+            '/api/v1/account/listing-drafts/',
+          ),
+      );
+      await form
+        .getByRole('button', { name: 'Сохранить в черновики', exact: true })
+        .click();
+      expect((await stored).ok()).toBe(true);
+      await page.reload();
+      await page
+        .getByRole('region', { name: 'Незавершённые объявления' })
+        .getByRole('button', { name: `Продолжить: ${title}`, exact: true })
+        .click();
+      for (const [label, value] of rental.fields) {
+        await expect(form.getByLabel(label, { exact: true })).toHaveValue(
+          value,
+        );
+      }
+      if (dealType === 'long_rent') {
+        await expect(utilities.locator('option:checked')).toHaveText(
+          'Оплачиваются отдельно',
+        );
+      }
+      await expect(form.getByLabel(priceLabel, { exact: true })).toBeEmpty();
+    }
     await form.getByLabel(priceLabel, { exact: true }).fill(price);
     const saving = page.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/listings'),
@@ -862,7 +945,13 @@ for (const [
       const draft = page.locator('article.panel').filter({
         has: page.getByRole('heading', { name: title, exact: true }),
       });
-      await prepareDraftPreview(page, draft, id);
+      const preview = await prepareDraftPreview(page, draft, id);
+      if (rental) {
+        await expect(
+          preview.getByText(rental.price, { exact: true }),
+        ).toBeVisible();
+        await expectRentalFacts(preview, rental.facts);
+      }
       await submitReviewedDraft(page, draft, id);
       expect((await visitor.request.get(path)).status()).toBe(404);
       await approveListing(await staff.newPage(), id, title);
@@ -870,6 +959,16 @@ for (const [
       await expect(
         visitor.getByRole('heading', { name: title, exact: true }),
       ).toBeVisible();
+      if (rental) {
+        await expect(visitor.locator('main > .price')).toHaveText(rental.price);
+        const terms = visitor.locator('section').filter({
+          has: visitor.getByRole('heading', {
+            name: 'Условия аренды',
+            exact: true,
+          }),
+        });
+        await expectRentalFacts(terms, rental.facts);
+      }
       const search =
         '/search?' +
         new URLSearchParams({
