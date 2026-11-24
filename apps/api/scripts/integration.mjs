@@ -23,6 +23,7 @@ for (const testFile of [
   'listing-contacts.integration.test.js',
   'phone-otp.integration.test.js',
   'contact-settings.integration.test.js',
+  'feedback.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',
   'professional.integration.test.js',

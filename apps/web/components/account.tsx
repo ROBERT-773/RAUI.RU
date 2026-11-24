@@ -18,6 +18,11 @@ import AccountProfile from './account-profile';
 import AccountSubscriptions from './account-subscriptions';
 import PhoneSignIn from './phone-sign-in';
 import ListingSummary from './listing-summary';
+import {
+  announceFeedbackIdentityChange,
+  clearFeedbackDraft,
+  resumeFeedbackAfterLogin,
+} from '../lib/feedback-draft';
 interface AccountUser {
   id: string;
   role: string;
@@ -68,11 +73,13 @@ interface Message {
 }
 export default function Account({
   continueListing = false,
+  continueFeedback = false,
   initialTab = 'favorite',
   initialContacts = false,
   smsAvailable = false,
 }: {
   continueListing?: boolean;
+  continueFeedback?: boolean;
   initialTab?: 'favorite' | 'messages' | 'notifications';
   initialContacts?: boolean;
   smsAvailable?: boolean;
@@ -111,6 +118,10 @@ export default function Account({
     setMessageCursor(null);
     return navigation;
   }
+  const feedbackUser = continueFeedback ? user?.id : undefined;
+  useEffect(() => {
+    if (feedbackUser) resumeFeedbackAfterLogin(feedbackUser);
+  }, [feedbackUser]);
   function clearPrivateState() {
     const epoch = ++identityEpoch.current;
     setTab(initialTab);
@@ -254,6 +265,8 @@ export default function Account({
   }
   function expireIdentity(epoch: number) {
     if (epoch !== identityEpoch.current) return;
+    clearFeedbackDraft();
+    announceFeedbackIdentityChange();
     clearPrivateState();
     setCsrf('');
     setUser(null);
@@ -287,6 +300,7 @@ export default function Account({
     }
   }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
+  if (feedbackUser) return <p role="status">Возвращаемся к предложению…</p>;
   if (!user && smsAvailable && smsSelected)
     return (
       <PhoneSignIn<AccountUser>
@@ -295,6 +309,7 @@ export default function Account({
           clearPrivateState();
           setCsrf(csrfToken);
           setUser(next);
+          announceFeedbackIdentityChange();
           if (verificationDelivery === 'unavailable')
             setNotice(
               'Аккаунт создан. Запросите подтверждение почты повторно в профиле.',
@@ -343,6 +358,7 @@ export default function Account({
               clearPrivateState();
               setCsrf(result.csrfToken);
               setUser(result.user);
+              announceFeedbackIdentityChange();
               if (deliveryUnavailable)
                 setNotice(
                   'Аккаунт создан. Не удалось подтвердить отправку письма. Запросите письмо повторно в профиле.',
@@ -472,6 +488,8 @@ export default function Account({
         try {
           await api('v1/auth/logout', 'POST');
           if (epoch !== identityEpoch.current) return;
+          clearFeedbackDraft();
+          announceFeedbackIdentityChange();
           clearPrivateState();
           setCsrf('');
           setUser(null);
@@ -538,7 +556,10 @@ export default function Account({
           <Link href="/account/listings">Мои объявления</Link>
         ))}
       {user.role === 'admin' && (
-        <Link href="/admin/feeds">Автопубликация из XML</Link>
+        <nav className="actions" aria-label="Разделы администратора">
+          <Link href="/admin/feeds">Автопубликация из XML</Link>
+          <Link href="/admin/feedback">Предложения о портале</Link>
+        </nav>
       )}
       {user.role === 'agent' && <AgentPublicProfile key={user.public_id} />}
       {user.role === 'agent' && (

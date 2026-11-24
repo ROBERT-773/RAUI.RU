@@ -216,6 +216,47 @@ test('CSRF recovery proxy rejects cross-origin browser reads before contacting A
   expect(fetch).not.toHaveBeenCalled();
 });
 
+test('feedback forwards authenticated submissions and admin reads only', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const { GET, POST } = await import('../app/api/[...path]/route');
+  const upstream = vi.fn(
+    async () =>
+      new Response('{}', { headers: { 'content-type': 'application/json' } }),
+  );
+  vi.stubGlobal('fetch', upstream);
+  const origin = 'https://staging.raui.ru';
+  for (const [method, path, status] of [
+    ['GET', 'admin/feedback?cursor=next-page', 200],
+    ['POST', 'account/feedback', 200],
+    ['GET', 'account/feedback', 404],
+    ['POST', 'admin/feedback', 404],
+    ['GET', 'admin/feedback/extra', 404],
+    ['POST', 'account/feedback/extra', 404],
+  ] as const) {
+    const request = new NextRequest(origin + '/api/v1/' + path, {
+      method,
+      headers: { origin, 'x-csrf-token': 'fixture-token' },
+    });
+    const handler = method === 'GET' ? GET : POST;
+    expect(
+      (
+        await handler(request, {
+          params: Promise.resolve({
+            path: ['v1', ...path.split('?')[0]!.split('/')],
+          }),
+        })
+      ).status,
+    ).toBe(status);
+  }
+  expect(upstream).toHaveBeenCalledTimes(2);
+  expect(upstream).toHaveBeenCalledWith(
+    'http://127.0.0.1:3001/v1/admin/feedback?cursor=next-page',
+    expect.anything(),
+  );
+});
+
 test('staff permissions proxy forwards only the bounded admin routes', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'development');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');

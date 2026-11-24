@@ -57,6 +57,7 @@ import {
   contactPhoneRequestResultSchema,
 } from '../modules/auth/contact-settings';
 import { listingContactSelectionSchema } from '../modules/listings/contact-settings';
+import { feedbackInput } from '../modules/product/feedback';
 import {
   staffTotpCodeInput,
   staffTotpEnrollmentInput,
@@ -159,6 +160,7 @@ const contactResponses: Record<string, z.ZodType> = {
   'get /v1/listings/{id}/public/contact': publicContact,
 };
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/account/feedback': feedbackInput,
   'patch /v1/account/contact-settings': contactSettingsPatchSchema,
   'post /v1/account/contact-phones/request': contactPhoneRequestSchema,
   'post /v1/account/contact-phones/verify': contactPhoneVerifySchema,
@@ -568,6 +570,63 @@ export function enrichOpenApi(document: OpenAPIObject) {
             'application/json': {
               schema: z.toJSONSchema(
                 contactResponses[operationId],
+              ) as SchemaObject,
+            },
+          },
+        };
+      }
+      if (operationId === 'post /v1/account/feedback') {
+        operation.description =
+          'An authenticated account submits a private suggestion. Leading and trailing whitespace is removed. Retries with the same requestId and trimmed message return the original id.';
+        operation.responses['201'] = {
+          description: 'Recorded suggestion or identical retry',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(object({ id: uuid })) as SchemaObject,
+            },
+          },
+        };
+        operation.responses['409'] = {
+          description:
+            'This account already used requestId with a different message (feedback_request_conflict).',
+        };
+      }
+      if (operationId === 'get /v1/admin/feedback') {
+        operation.description =
+          'Administrator only. Newest first, with UUID as the tie-breaker. Delegated moderation permissions do not grant access.';
+        operation.parameters = [
+          {
+            in: 'query',
+            name: 'cursor',
+            required: false,
+            description:
+              'Pass the opaque nextCursor returned by the previous page. It retains its position after deletion of that suggestion.',
+            schema: { type: 'string', minLength: 64, maxLength: 64 },
+          },
+          {
+            in: 'query',
+            name: 'limit',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
+          },
+        ];
+        operation.responses['200'] = {
+          description:
+            'Private suggestions with public account IDs. nextCursor is null on the last page.',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                object({
+                  items: z.array(
+                    object({
+                      id: uuid,
+                      message: z.string(),
+                      createdAt: z.iso.datetime(),
+                      authorId: z.string().regex(/^[1-9]\d*$/),
+                    }),
+                  ),
+                  nextCursor: z.string().length(64).nullable(),
+                }),
               ) as SchemaObject,
             },
           },

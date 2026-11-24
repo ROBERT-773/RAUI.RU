@@ -37,6 +37,7 @@ export default async function Page({
         initialTab={initialTab}
         smsAvailable={await smsAvailable()}
         continueListing={action === 'publish'}
+        continueFeedback={action === 'feedback'}
       />
     </main>
   );

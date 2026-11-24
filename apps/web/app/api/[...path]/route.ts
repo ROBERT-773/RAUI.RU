@@ -124,6 +124,12 @@ async function proxy(
         isUuid(path[4]) &&
         path[5] === 'trust' &&
         request.method === 'PATCH'));
+  const feedback =
+    ['account', 'admin'].includes(path[1] ?? '') && path[2] === 'feedback';
+  const feedbackRoute =
+    feedback &&
+    path.length === 3 &&
+    request.method === (path[1] === 'admin' ? 'GET' : 'POST');
   if (
     path[0] !== 'v1' ||
     (request.method === 'PUT' && !saveFormDraft && !listingContactsRoute) ||
@@ -133,7 +139,9 @@ async function proxy(
       request.method !== 'PUT' &&
       !(request.method === 'GET' && path.length === 3)) ||
     (personalFeeds && !ownFeedsRoute) ||
-    (!feedTrustRoute &&
+    (feedback && !feedbackRoute) ||
+    (!feedbackRoute &&
+      !feedTrustRoute &&
       !staffPermissionsRoute &&
       !registrationRoute &&
       !propertyRoute &&
