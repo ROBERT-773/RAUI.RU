@@ -104,13 +104,13 @@ test.each([
       expect(
         (
           within(creation).getByRole('button', {
-            name: 'Сохранить черновик',
+            name: 'Перейти к фотографиям',
           }) as HTMLButtonElement
         ).disabled,
       ).toBe(false),
     );
     fireEvent.click(
-      within(creation).getByRole('button', { name: 'Сохранить черновик' }),
+      within(creation).getByRole('button', { name: 'Перейти к фотографиям' }),
     );
     await vi.waitFor(() =>
       expect(api).toHaveBeenCalledWith(

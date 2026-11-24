@@ -1,8 +1,9 @@
 import Image from 'next/image';
-import { dealLabel, formatListingPrice } from '../lib/labels';
+import { attributeValue, dealLabel, formatListingPrice } from '../lib/labels';
 import { listingAttributeFields } from '../lib/listing-attribute-fields';
 import { rentalFacts } from '../lib/rental-facts';
 import type { ListingTerms } from './listing-terms';
+import styles from './saved-listing-preview.module.css';
 
 export default function SavedListingPreview({
   listing,
@@ -25,73 +26,36 @@ export default function SavedListingPreview({
   propertyFields: { code: string; name: string; required: boolean }[];
   media: { id: string; kind: string; state: string }[];
 }) {
-  const savedRentalFacts =
-    listing && ['long_rent', 'short_rent'].includes(listing.deal_type)
-      ? rentalFacts(listing.terms ?? {})
-      : [];
+  const savedRentalFacts = ['long_rent', 'short_rent'].includes(
+    listing.deal_type,
+  )
+    ? rentalFacts(listing.terms ?? {})
+    : [];
+  const readyMedia = media
+    .filter(({ state }) => state === 'ready')
+    .sort(
+      (left, right) =>
+        Number(right.kind === 'photo') - Number(left.kind === 'photo'),
+    );
   return (
-    <details>
-      <summary>Предпросмотр объявления</summary>
-      <section aria-label="Сохранённые данные объявления">
-        <h3>{listing.title || 'Черновик объявления'}</h3>
-        <p>{dealLabel(listing.deal_type)}</p>
-        {property?.address?.formatted && <p>{property.address.formatted}</p>}
-        {listing.price && (
-          <p>{formatListingPrice(listing.price, listing.deal_type)}</p>
-        )}
-        {savedRentalFacts.length > 0 && (
-          <dl aria-label="Условия аренды">
-            {savedRentalFacts.map(({ label, value }) => (
-              <div key={label}>
-                <dt>{label}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {listing.deal_type === 'sale' && listing.terms?.negotiable === true && (
-          <p>Возможен торг</p>
-        )}
-        <p style={{ whiteSpace: 'pre-wrap' }}>
-          {listing.description.trim() || 'Описание ещё не сохранено.'}
-        </p>
-        {property && (
-          <dl>
-            {listingAttributeFields(
-              property.category_code,
-              propertyFields,
-              property.attributes.commercial_property_type,
-            ).map(({ code, name }) => {
-              const value = property.attributes[code];
-              if (value == null || value === '') return null;
-              return (
-                <div key={code}>
-                  <dt>{name}</dt>
-                  <dd>
-                    {typeof value === 'boolean'
-                      ? value
-                        ? 'Да'
-                        : 'Нет'
-                      : String(value)}
-                  </dd>
-                </div>
-              );
-            })}
-          </dl>
-        )}
-        {media
-          .filter(({ state }) => state === 'ready')
-          .sort(
-            (left, right) =>
-              Number(right.kind === 'photo') - Number(left.kind === 'photo'),
-          )
-          .map((item) => (
+    <section
+      className={styles.preview}
+      aria-label="Сохранённые данные объявления"
+    >
+      {readyMedia.length > 0 && (
+        <div
+          className={styles.gallery}
+          role="region"
+          aria-label="Фотографии и планировка"
+          tabIndex={0}
+        >
+          {readyMedia.map((item) => (
             <Image
               key={item.id}
               unoptimized
               src={`/api/v1/media/${item.id}/small`}
-              width={160}
-              height={120}
+              width={800}
+              height={600}
               alt={
                 item.kind === 'floor_plan'
                   ? 'Планировка в предпросмотре'
@@ -99,7 +63,50 @@ export default function SavedListingPreview({
               }
             />
           ))}
-      </section>
-    </details>
+        </div>
+      )}
+      <h3 className={styles.title}>{listing.title || 'Черновик объявления'}</h3>
+      <p>{dealLabel(listing.deal_type)}</p>
+      {listing.price && (
+        <p className={styles.price}>
+          {formatListingPrice(listing.price, listing.deal_type)}
+        </p>
+      )}
+      {property?.address?.formatted && <p>{property.address.formatted}</p>}
+      {savedRentalFacts.length > 0 && (
+        <dl aria-label="Условия аренды">
+          {savedRentalFacts.map(({ label, value }) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {listing.deal_type === 'sale' && listing.terms?.negotiable === true && (
+        <p>Возможен торг</p>
+      )}
+      {property && (
+        <dl>
+          {listingAttributeFields(
+            property.category_code,
+            propertyFields,
+            property.attributes.commercial_property_type,
+          ).map(({ code, name }) => {
+            const value = property.attributes[code];
+            if (value == null || value === '') return null;
+            return (
+              <div key={code}>
+                <dt>{name}</dt>
+                <dd>{attributeValue(value)}</dd>
+              </div>
+            );
+          })}
+        </dl>
+      )}
+      <p className={styles.description}>
+        {listing.description.trim() || 'Описание ещё не сохранено.'}
+      </p>
+    </section>
   );
 }

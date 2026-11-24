@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import ListingPublicationActions from './listing-publication-actions';
 import ListingMediaGallery from './listing-media-gallery';
@@ -121,7 +121,28 @@ export default function OwnerListings({
   const [listing, setListing] = useState<Listing | null>(null),
     [media, setMedia] = useState<Media[]>([]),
     [reason, setReason] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const formId = useId();
+  const savedHeading = useRef<HTMLHeadingElement>(null);
+  const focusSavedList = useRef(false);
+  useEffect(() => {
+    if (!listing && focusSavedList.current) {
+      savedHeading.current?.focus();
+      focusSavedList.current = false;
+    }
+  }, [listing]);
+  const previewHeading = useRef<HTMLHeadingElement>(null);
+  const restoreEditorFocus = useRef(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (previewOpen) {
+      restoreEditorFocus.current = true;
+      previewHeading.current?.focus();
+    } else if (restoreEditorFocus.current) {
+      restoreEditorFocus.current = false;
+      editorHeading.current?.focus();
+    }
+  }, [previewOpen]);
   const createdDraftToFocus = useRef<string | null>(null);
   const [draftToReopen, setDraftToReopen] = useState<string | null>(null);
   const [property, setProperty] = useState<PropertyDetails | null>(null);
@@ -294,6 +315,7 @@ export default function OwnerListings({
   }, []);
   async function open(id: string) {
     const request = ++epoch.current;
+    setPreviewOpen(false);
     setLoading(true);
     setListing(null);
     setProperty(null);
@@ -427,6 +449,144 @@ export default function OwnerListings({
     )
       await refreshQuota();
     return updated;
+  }
+  async function reviewListing(action: 'preview' | 'submit') {
+    if (!listing || (action === 'submit' && !previewOpen)) return;
+    const request = epoch.current;
+    const { value, photos } = await refresh(listing.id);
+    const data = value.property_id
+      ? await propertyEditorData(value.property_id)
+      : null;
+    if (!mounted.current || request !== epoch.current) return;
+    assign(value);
+    setMedia(photos);
+    setProperty(data?.details ?? null);
+    setPropertyFields(data?.fields ?? []);
+    setCommercialType(data?.details.attributes.commercial_property_type);
+
+    if (value.status === 'moderation') {
+      setPreviewOpen(false);
+      setNotice(
+        'Объявление отправлено на модерацию. Оно появится после одобрения.',
+      );
+      return;
+    }
+    let invalid: string | undefined;
+    if (!['draft', 'paused', 'rejected', 'processing'].includes(value.status))
+      invalid = 'Статус объявления изменился. Проверьте его перед отправкой.';
+    else if (!mediaReadyForModeration(photos))
+      invalid =
+        'Список фотографий изменился. Проверьте фотографии перед отправкой.';
+    else if (value.description.trim().length < 15)
+      invalid =
+        'Описание изменилось. Сохраните описание длиной не менее 15 символов перед отправкой.';
+    else if (
+      data &&
+      missingRequiredFields(data.details.attributes, data.fields).length
+    )
+      invalid =
+        'Проверьте обязательные характеристики объекта перед отправкой.';
+    else invalid = offerValidationError(value.title, Number(value.price));
+    if (invalid) {
+      setPreviewOpen(false);
+      throw new Error(invalid);
+    }
+    if (action === 'preview') {
+      setPreviewOpen(true);
+      return;
+    }
+    const recoveredProcessing =
+      value.status === 'processing' &&
+      value.version === listing.version + 1 &&
+      transitionKeys.current.has(`${listing.id}:${listing.version}:processing`);
+    if (
+      value.id !== listing.id ||
+      (value.version !== listing.version && !recoveredProcessing) ||
+      data?.details.id !== property?.id ||
+      data?.details.version !== property?.version ||
+      photos.length !== media.length ||
+      photos.some(
+        (item, index) =>
+          item.id !== media[index]?.id || item.kind !== media[index]?.kind,
+      )
+    ) {
+      setPreviewOpen(false);
+      throw new Error(
+        'Объявление изменилось. Откройте предпросмотр ещё раз и проверьте обновлённые данные.',
+      );
+    }
+    let current = value;
+    if (current.status !== 'processing') {
+      current = await transition(current, 'processing');
+      if (!mounted.current) return;
+      assign(current);
+    }
+    if (!['processing', 'moderation'].includes(current.status)) {
+      setPreviewOpen(false);
+      throw new Error(
+        'Статус объявления изменился. Проверьте его перед отправкой.',
+      );
+    }
+    const submitted =
+      current.status === 'moderation'
+        ? current
+        : await transition(current, 'moderation');
+    if (!mounted.current) return;
+    assign(submitted);
+    setPreviewOpen(false);
+    if (submitted.status !== 'moderation')
+      throw new Error(
+        'Статус объявления изменился. Проверьте его перед отправкой.',
+      );
+    setNotice(
+      'Объявление отправлено на модерацию. Оно появится после одобрения.',
+    );
+  }
+  function closeSavedDraft(value: Listing) {
+    if (!mounted.current) return;
+    if (value.status !== 'draft')
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    setItems((current) => [
+      value,
+      ...current.filter((item) => item.id !== value.id),
+    ]);
+    setPropertyDirty(false);
+    setDraftToReopen(null);
+    setPreviewOpen(false);
+    focusSavedList.current = true;
+    setListing(null);
+    setNotice(
+      'Черновик сохранён. Продолжить заполнение можно в списке «Сохранённые объявления».',
+    );
+  }
+  async function keepDraft() {
+    if (!listing) return;
+    const current = await api<Listing>(`v1/listings/${listing.id}`);
+    if (!mounted.current) return;
+    if (current.status === 'draft') {
+      closeSavedDraft(current);
+    } else if (
+      current.version !== listing.version ||
+      current.status !== listing.status
+    ) {
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    } else if (current.status === 'paused') {
+      closeSavedDraft(
+        await api<Listing>(`v1/listings/${current.id}`, 'PATCH', {
+          version: current.version,
+        }),
+      );
+    } else if (['rejected', 'processing'].includes(current.status)) {
+      closeSavedDraft(await transition(current, 'draft'));
+    } else {
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    }
   }
   const editable =
     listing && ['draft', 'paused', 'rejected'].includes(listing.status);
@@ -566,7 +726,7 @@ export default function OwnerListings({
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {allowed && (
-        <>
+        <div hidden={previewOpen}>
           {owner && quota?.applies !== false && (
             <section className="panel" aria-label="Лимит публикации объектов">
               <h2>Лимит публикации объектов</h2>
@@ -658,6 +818,7 @@ export default function OwnerListings({
             </button>
           )}
           <SavedListingsList
+            headingRef={savedHeading}
             items={items.map((item) => ({
               id: item.id,
               title: item.title,
@@ -734,6 +895,7 @@ export default function OwnerListings({
               {editable && property && propertyFields.length > 0 && (
                 <form
                   key={property.version}
+                  id={formId + '-property'}
                   onChange={() => setPropertyDirty(true)}
                   onReset={() => {
                     setCommercialType(
@@ -743,6 +905,10 @@ export default function OwnerListings({
                   }}
                   onSubmit={(event) => {
                     event.preventDefault();
+                    const closeAfterSave =
+                      (
+                        event.nativeEvent as SubmitEvent
+                      ).submitter?.getAttribute('value') === 'save-draft';
                     const fields = new FormData(event.currentTarget);
                     const attributes = { ...property.attributes };
                     const visibleFields = listingAttributeFields(
@@ -833,7 +999,8 @@ export default function OwnerListings({
                       );
                       if (!mounted.current) return;
                       assign(current);
-                      setNotice('Характеристики сохранены.');
+                      if (closeAfterSave) closeSavedDraft(current);
+                      else setNotice('Характеристики сохранены.');
                     }, true);
                   }}
                 >
@@ -966,8 +1133,13 @@ export default function OwnerListings({
               </button>
               {editable && (
                 <form
+                  id={formId + '-offer'}
                   onSubmit={(event) => {
                     event.preventDefault();
+                    const closeAfterSave =
+                      (
+                        event.nativeEvent as SubmitEvent
+                      ).submitter?.getAttribute('value') === 'save-draft';
                     const listingTitle = title.trim();
                     const listingPrice = Number(price);
                     const offerError = offerValidationError(
@@ -991,7 +1163,9 @@ export default function OwnerListings({
                         },
                       );
                       assign(updated);
-                      if (mounted.current) setNotice('Изменения сохранены.');
+                      if (closeAfterSave) closeSavedDraft(updated);
+                      else if (mounted.current)
+                        setNotice('Изменения сохранены.');
                     }, true);
                   }}
                 >
@@ -1013,10 +1187,33 @@ export default function OwnerListings({
                   />
                 </form>
               )}
+              {editable && (
+                <button
+                  type={hasUnsavedChanges ? 'submit' : 'button'}
+                  form={
+                    hasUnsavedChanges
+                      ? formId + (propertyDirty ? '-property' : '-offer')
+                      : undefined
+                  }
+                  value="save-draft"
+                  disabled={
+                    busy ||
+                    creating ||
+                    loading ||
+                    uploadPending ||
+                    mediaRefreshNeeded
+                  }
+                  onClick={
+                    hasUnsavedChanges ? undefined : () => void run(keepDraft)
+                  }
+                >
+                  Сохранить и выйти
+                </button>
+              )}
               <ListingModerationActions
                 status={listing.status}
                 withdrawDisabled={busy || creating || loading}
-                submitDisabled={
+                previewDisabled={
                   busy ||
                   creating ||
                   loading ||
@@ -1054,77 +1251,8 @@ export default function OwnerListings({
                     setNotice('Объявление возвращено в черновик.');
                   })
                 }
-                onSubmit={() =>
-                  void run(async () => {
-                    const { value, photos } = await refresh(listing.id);
-                    if (!mounted.current) return;
-                    let current = value;
-                    assign(current);
-                    setMedia(photos);
-                    if (
-                      ['draft', 'paused', 'rejected', 'processing'].includes(
-                        current.status,
-                      )
-                    ) {
-                      if (!mediaReadyForModeration(photos))
-                        throw new Error(
-                          'Список фотографий изменился. Проверьте фотографии перед отправкой.',
-                        );
-                      if (current.description.trim().length < 15)
-                        throw new Error(
-                          'Описание изменилось. Сохраните описание длиной не менее 15 символов перед отправкой.',
-                        );
-                      const offerError = offerValidationError(
-                        current.title,
-                        Number(current.price),
-                      );
-                      if (offerError) throw new Error(offerError);
-                      if (current.property_id) {
-                        const { details, fields } = await propertyEditorData(
-                          current.property_id,
-                        );
-                        if (!mounted.current) return;
-                        setProperty(details);
-                        setPropertyFields(fields);
-                        setCommercialType(
-                          details.attributes.commercial_property_type,
-                        );
-                        if (
-                          missingRequiredFields(details.attributes, fields)
-                            .length
-                        )
-                          throw new Error(
-                            'Проверьте обязательные характеристики объекта перед отправкой.',
-                          );
-                      }
-                    }
-                    if (
-                      ['draft', 'paused', 'rejected'].includes(current.status)
-                    )
-                      current = await transition(current, 'processing');
-                    if (!mounted.current) return;
-                    assign(current);
-                    if (current.status !== 'moderation') {
-                      if (current.status !== 'processing')
-                        throw new Error(
-                          'Статус объявления изменился. Проверьте его перед отправкой.',
-                        );
-                      const submitted = await transition(current, 'moderation');
-                      if (!mounted.current) return;
-                      assign(submitted);
-                    }
-                    setNotice(
-                      'Объявление отправлено на модерацию. Оно появится после одобрения.',
-                    );
-                  })
-                }
+                onPreview={() => void run(() => reviewListing('preview'))}
               >
-                <SavedListingPreview
-                  listing={listing}
-                  property={property}
-                  propertyFields={propertyFields}
-                  media={media}
-                />
                 <ListingModerationHints
                   photosReady={ready}
                   readyPhotos={readyPhotos}
@@ -1138,7 +1266,48 @@ export default function OwnerListings({
               </ListingModerationActions>
             </article>
           )}
-        </>
+        </div>
+      )}
+      {allowed && previewOpen && listing && (
+        <article className="panel" aria-labelledby="listing-preview-title">
+          <h2 id="listing-preview-title" tabIndex={-1} ref={previewHeading}>
+            Предпросмотр объявления
+          </h2>
+          <SavedListingPreview
+            listing={listing}
+            property={property}
+            propertyFields={propertyFields}
+            media={media}
+          />
+          <p>
+            После отправки модератор проверит объявление. Оно появится в
+            каталоге после одобрения.
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPreviewOpen(false)}
+            >
+              Вернуться к редактированию
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(keepDraft)}
+            >
+              Сохранить в черновики
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => void run(() => reviewListing('submit'))}
+            >
+              Отправить на модерацию
+            </button>
+          </div>
+        </article>
       )}
     </section>
   );

@@ -3,18 +3,18 @@ import type { ReactNode } from 'react';
 type Props = {
   status: string;
   withdrawDisabled: boolean;
-  submitDisabled: boolean;
+  previewDisabled: boolean;
   onWithdraw: () => void;
-  onSubmit: () => void;
+  onPreview: () => void;
   children: ReactNode;
 };
 
 export default function ListingModerationActions({
   status,
   withdrawDisabled,
-  submitDisabled,
+  previewDisabled,
   onWithdraw,
-  onSubmit,
+  onPreview,
   children,
 }: Props) {
   return (
@@ -29,8 +29,8 @@ export default function ListingModerationActions({
       {['draft', 'paused', 'rejected', 'processing'].includes(status) && (
         <>
           {children}
-          <button type="button" disabled={submitDisabled} onClick={onSubmit}>
-            Отправить на модерацию
+          <button type="button" disabled={previewDisabled} onClick={onPreview}>
+            Перейти к предпросмотру
           </button>
         </>
       )}

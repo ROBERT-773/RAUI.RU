@@ -5,14 +5,14 @@ import ListingModerationActions from './listing-moderation-actions';
 afterEach(cleanup);
 
 test('shows only the actions available for the current status', () => {
-  const onSubmit = vi.fn();
+  const onPreview = vi.fn();
   const onWithdraw = vi.fn();
   const panel = (status: string, disabled = false) => (
     <ListingModerationActions
       status={status}
-      submitDisabled={disabled}
+      previewDisabled={disabled}
       withdrawDisabled={disabled}
-      onSubmit={onSubmit}
+      onPreview={onPreview}
       onWithdraw={onWithdraw}
     >
       Предпросмотр
@@ -20,17 +20,17 @@ test('shows only the actions available for the current status', () => {
   );
   const { rerender } = render(panel('processing', true));
   fireEvent.click(
-    screen.getByRole('button', { name: 'Отправить на модерацию' }),
+    screen.getByRole('button', { name: 'Перейти к предпросмотру' }),
   );
   fireEvent.click(screen.getByRole('button', { name: 'Вернуть в черновик' }));
-  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onPreview).not.toHaveBeenCalled();
   expect(onWithdraw).not.toHaveBeenCalled();
 
   rerender(panel('draft'));
   fireEvent.click(
-    screen.getByRole('button', { name: 'Отправить на модерацию' }),
+    screen.getByRole('button', { name: 'Перейти к предпросмотру' }),
   );
-  expect(onSubmit).toHaveBeenCalledOnce();
+  expect(onPreview).toHaveBeenCalledOnce();
   expect(screen.getAllByRole('button')).toHaveLength(1);
   expect(screen.getByText('Предпросмотр')).toBeTruthy();
 

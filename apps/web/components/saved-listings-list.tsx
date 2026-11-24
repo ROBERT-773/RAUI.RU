@@ -1,6 +1,8 @@
 import { listingStatusLabel } from './listing-editor-status';
+import type { Ref } from 'react';
 
 type Props = {
+  headingRef?: Ref<HTMLHeadingElement>;
   items: {
     id: string;
     title: string;
@@ -19,6 +21,7 @@ type Props = {
 };
 
 export default function SavedListingsList({
+  headingRef,
   items,
   loadFailed,
   checking,
@@ -32,7 +35,9 @@ export default function SavedListingsList({
 }: Props) {
   return (
     <>
-      <h2>Сохранённые объявления</h2>
+      <h2 ref={headingRef} tabIndex={-1}>
+        Сохранённые объявления
+      </h2>
       {loadFailed ? (
         <>
           <p role="status">Не удалось загрузить список объявлений.</p>

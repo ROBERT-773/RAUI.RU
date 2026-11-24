@@ -187,7 +187,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '38',
+          '39',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -749,6 +749,231 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
             )
           ).address.longitude,
           37.6,
+        );
+      },
+    );
+    await t.test(
+      'an incomplete manual form is private, versioned and consumed once by listing creation',
+      async () => {
+        const author = await account('form-author', 'agent');
+        const id = randomUUID(),
+          collection = '/account/listing-drafts',
+          path = collection + '/' + id;
+        const form = {
+          step: 1,
+          category: 'apartment',
+          deal: 'sale',
+          region: 'moscow',
+          organizationId: '',
+          locality: '',
+          address: 'Москва, ул.',
+          longitude: '-',
+          latitude: '',
+          coordinatesFromSuggestion: false,
+          attributes: { area: '1,' },
+          title: '',
+          price: '',
+          terms: {},
+        };
+        type Saved = { id: string; version: number; form: typeof form };
+        const list = (session: Session) =>
+          ok<Saved[]>(collection, 'GET', undefined, session);
+        const save = (
+          version: number,
+          data: typeof form = form,
+          session: Session = author,
+        ) => call(path, 'PUT', { version, form: data }, session);
+        assert.equal((await call(collection)).status, 401);
+        assert.equal(
+          (await call(collection, 'GET', undefined, buyer)).status,
+          403,
+        );
+        assert.equal((await save(0, form, buyer)).status, 403);
+        const first = await save(0);
+        assert.equal(first.status, 200);
+        assert.deepEqual(first.data, { id, version: 1, form });
+        assert.deepEqual((await save(0)).data, first.data);
+        assert.deepEqual(await list(author), [first.data]);
+        assert.deepEqual(await list(other), []);
+        assert.equal((await save(1, form, other)).status, 404);
+        assert.equal((await save(0, form, other)).status, 404);
+        assert.equal(
+          (await save(1, { ...form, title: 'x'.repeat(2001) })).status,
+          400,
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*)::int AS n FROM properties WHERE created_by=$1',
+              [author.user.id],
+            )
+          ).rows[0].n,
+          0,
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*)::int AS n FROM listings WHERE seller_id=$1',
+              [author.user.id],
+            )
+          ).rows[0].n,
+          0,
+        );
+        const edits = await Promise.all(
+          ['А', 'Б'].map((title) => save(1, { ...form, title })),
+        );
+        assert.deepEqual(edits.map(({ status }) => status).sort(), [200, 409]);
+        const latest = edits.find(({ status }) => status === 200)!
+          .data as Saved;
+        assert.equal(latest.version, 2);
+        assert.deepEqual((await save(1, latest.form)).data, latest);
+        assert.deepEqual((await save(2, latest.form)).data, latest);
+        const firstAddress = 'Проверка черновика, старая улица';
+        const finalAddress = 'Проверка черновика, новый адрес';
+        const firstAttempt = {
+          property: {
+            category: 'apartment',
+            address: { ...address, formatted: firstAddress },
+            attributes: { area: 55, kitchen_area: 10 },
+          },
+          dealType: 'sale',
+          title: 'Квартира у парка',
+          price: 1000000,
+          formDraft: { id, version: 2 },
+        };
+        assert.equal(
+          (
+            await call(
+              '/listings',
+              'POST',
+              { ...firstAttempt, formDraft: { id, version: 1 } },
+              author,
+              'old-form-completion',
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await call(
+              '/listings',
+              'POST',
+              firstAttempt,
+              other,
+              'wrong-form-owner',
+            )
+          ).status,
+          404,
+        );
+        assert.deepEqual(await list(author), [latest]);
+        // Fail the listing insert after the new address and property have been written.
+        await pool.query(
+          "ALTER TABLE listings ADD CONSTRAINT form_draft_late_failure CHECK (title <> 'Квартира у парка') NOT VALID",
+        );
+        try {
+          assert.ok(
+            (
+              await call(
+                '/listings',
+                'POST',
+                firstAttempt,
+                author,
+                'late-form-failure',
+              )
+            ).status >= 400,
+          );
+          assert.deepEqual(await list(author), [latest]);
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT count(*)::int AS n FROM properties WHERE created_by=$1',
+                [author.user.id],
+              )
+            ).rows[0].n,
+            0,
+          );
+          assert.equal(
+            (
+              await pool.query(
+                'SELECT count(*)::int AS n FROM addresses WHERE formatted=$1',
+                [firstAddress],
+              )
+            ).rows[0].n,
+            0,
+          );
+        } finally {
+          await pool.query(
+            'ALTER TABLE listings DROP CONSTRAINT form_draft_late_failure',
+          );
+        }
+        const revision = await save(2, {
+          ...latest.form,
+          price: '1250000',
+          address: finalAddress,
+          coordinatesFromSuggestion: true,
+        });
+        assert.equal(revision.status, 200);
+        assert.equal((revision.data as Saved).version, 3);
+        assert.equal(
+          (await list(author))[0]!.form.coordinatesFromSuggestion,
+          true,
+        );
+        const completeBody = {
+          ...firstAttempt,
+          property: {
+            ...firstAttempt.property,
+            address: { ...address, formatted: finalAddress },
+          },
+          price: 1250000,
+          formDraft: { id, version: 3 },
+        };
+        const keys = ['finish-form-intent-a', 'finish-form-intent-b'];
+        const done = await Promise.all(
+          keys.map((key) =>
+            call('/listings', 'POST', completeBody, author, key),
+          ),
+        );
+        assert.deepEqual(done.map(({ status }) => status).sort(), [201, 409]);
+        const winner = done.findIndex(({ status }) => status === 201);
+        const saved = done[winner]!.data as Entity;
+        assert.equal(saved.status, 'draft');
+        assert.deepEqual(
+          (
+            await pool.query(
+              'SELECT p.id,a.formatted FROM properties p JOIN addresses a ON a.id=p.address_id WHERE p.created_by=$1',
+              [author.user.id],
+            )
+          ).rows,
+          [{ id: saved.property_id, formatted: finalAddress }],
+        );
+        assert.deepEqual(
+          (await call('/listings', 'POST', completeBody, author, keys[winner]))
+            .data,
+          saved,
+        );
+        assert.equal(
+          (await call('/listings/' + saved.id + '/public')).status,
+          404,
+        );
+        assert.deepEqual(await list(author), []);
+        assert.equal((await save(2, latest.form)).status, 409);
+        assert.deepEqual(
+          (
+            await pool.query(
+              'SELECT form,listing_id FROM listing_form_drafts WHERE id=$1',
+              [id],
+            )
+          ).rows,
+          [{ form: null, listing_id: saved.id }],
+        );
+        assert.equal(
+          (
+            await pool.query(
+              'SELECT count(*)::int AS n FROM listings WHERE seller_id=$1',
+              [author.user.id],
+            )
+          ).rows[0].n,
+          1,
         );
       },
     );

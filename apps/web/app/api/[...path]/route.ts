@@ -45,6 +45,8 @@ async function proxy(
         path[3] === 'members' &&
         ['GET', 'PATCH'].includes(request.method)));
   const personalFeeds = path[1] === 'account' && path[2] === 'feeds';
+  const formDrafts = path[1] === 'account' && path[2] === 'listing-drafts';
+  const saveFormDraft = formDrafts && path.length === 4 && isUuid(path[3]);
   const organizationFeeds =
     path[1] === 'organizations' && isUuid(path[2]) && path[3] === 'feeds';
   const tail = path.slice(personalFeeds ? 3 : 4);
@@ -107,6 +109,10 @@ async function proxy(
         request.method === 'PATCH'));
   if (
     path[0] !== 'v1' ||
+    (request.method === 'PUT' && !saveFormDraft) ||
+    (formDrafts &&
+      request.method !== 'PUT' &&
+      !(request.method === 'GET' && path.length === 3)) ||
     (personalFeeds && !ownFeedsRoute) ||
     (!feedTrustRoute &&
       !staffPermissionsRoute &&
@@ -192,5 +198,6 @@ async function proxy(
 }
 export const GET = proxy,
   POST = proxy,
+  PUT = proxy,
   PATCH = proxy,
   DELETE = proxy;
