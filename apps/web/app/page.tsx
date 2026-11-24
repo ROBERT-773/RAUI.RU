@@ -5,6 +5,7 @@ import Image from 'next/image';
 import type { Metadata } from 'next';
 import { Card } from '../components/card';
 import { HomeGeography } from '../components/home-geography';
+import BetaInvitation from '../components/beta-invitation';
 import {
   publicProfessionals,
   publicRegionCounts,
@@ -38,13 +39,16 @@ async function saveHomeRegion(form: FormData) {
   });
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: { searchParams?: Promise<{ feedback?: string | string[] }> } = {}) {
   const [listings, regions, regionCounts] = await Promise.all([
     recentListings(),
     publicRegions(),
     publicRegionCounts(),
   ]);
-  const preferred = (await cookies()).get(regionCookie)?.value;
+  const preferences = await cookies();
+  const preferred = preferences.get(regionCookie)?.value;
   const current = regions.find((region) => region.code === preferred);
   const regionCode = current?.code ?? 'moscow';
   const professionals = await publicProfessionals(regionCode);
@@ -159,6 +163,10 @@ export default async function Home() {
           </div>
         )}
       </section>
+      <BetaInvitation
+        initialDismissed={preferences.get('raui_beta_closed')?.value === '1'}
+        initialOpen={(await searchParams)?.feedback === '1'}
+      />
       {listings && listings.items.length > 0 && (
         <section
           className="home-preview"

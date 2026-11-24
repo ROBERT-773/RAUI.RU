@@ -1,0 +1,106 @@
+.invitation,
+.compact {
+  width: min(calc(100% - 2rem), 73rem);
+  margin: 0 auto 1.5rem;
+}
+.invitation {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.8rem 1.5rem;
+  padding: 1rem 3rem 1rem 1.2rem;
+  border: 1px solid #d0e0e7;
+  border-left: 4px solid #07537b;
+  border-radius: 0.8rem;
+  background: #f1f7fa;
+}
+.copy {
+  flex: 1 1 26rem;
+  min-width: 0;
+}
+.copy h2 {
+  font-size: 1.15rem;
+  margin: 0;
+}
+.copy p {
+  margin: 0.35rem 0;
+}
+.copy summary {
+  cursor: pointer;
+  color: #07537b;
+  text-decoration: underline;
+  padding: 0.35rem 0;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+.actions a,
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.actions a {
+  font-weight: 650;
+  color: #07537b;
+}
+.close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font-size: 1.5rem;
+}
+.compact {
+  display: flex;
+  justify-content: flex-end;
+}
+.dialog {
+  position: fixed;
+  width: min(28rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 2.4rem 1.3rem 1.3rem;
+  border: 1px solid #c6d2df;
+  border-radius: 1rem;
+  color: #17384b;
+  background: white;
+  overflow: auto;
+}
+.dialog::backdrop {
+  background: rgb(12 36 51 / 48%);
+}
+.dialog form {
+  display: grid;
+  gap: 0.75rem;
+}
+.dialog form label {
+  font-size: 1.15rem;
+}
+.dialog form textarea {
+  resize: vertical;
+}
+.dialog form button {
+  justify-self: start;
+}
+.dialog p {
+  margin: 0.25rem 0;
+}
+@media (max-width: 600px) {
+  .invitation {
+    align-items: flex-start;
+  }
+  .actions {
+    width: 100%;
+  }
+  .compact .actions {
+    justify-content: flex-end;
+  }
+}
