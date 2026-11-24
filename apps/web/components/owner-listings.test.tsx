@@ -9,7 +9,21 @@ import {
   within,
 } from '@testing-library/react';
 import OwnerListings from './owner-listings';
-import { api, ApiError } from '../lib/client';
+import {
+  api,
+  ApiError,
+  ListingContactSelectionChangedError,
+} from '../lib/client';
+import { getListingContactSettings } from '../lib/contact-settings';
+vi.mock('../lib/contact-settings', async (original) => ({
+  ...(await original<typeof import('../lib/contact-settings')>()),
+  getListingContactSettings: vi.fn(async () => ({
+    mode: 'messages',
+    phones: [],
+    selectedPhoneIds: [],
+    canEdit: true,
+  })),
+}));
 vi.mock('../lib/client', async (original) => ({
   ...(await original<typeof import('../lib/client')>()),
   api: vi.fn(),
@@ -79,6 +93,149 @@ test('published listing opens with a warning when history is unavailable', async
   expect((await screen.findByRole('alert')).textContent).toContain(
     'История объявления недоступна',
   );
+});
+
+test('the seller explicitly selects contact numbers, removes a number and reviews only the saved selection', async () => {
+  setup();
+  const phones = [
+    { id: 'primary', phone: '+79990000001' },
+    { id: 'second', phone: '+79990000002' },
+    { id: 'third', phone: '+79990000003' },
+  ];
+  let ids: string[] = [];
+  let mode: 'calls' | 'messages' = 'calls';
+  const current = () => ({
+    mode,
+    phones,
+    selectedPhoneIds: ids,
+    canEdit: true,
+  });
+  vi.mocked(getListingContactSettings).mockImplementation(async () =>
+    current(),
+  );
+  const original = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path.endsWith('/contact-settings') && method === 'PUT') {
+      expect(body).toMatchObject({ expectedPhoneIds: ids });
+      ids = (body as { phoneIds: string[] }).phoneIds;
+      return current();
+    }
+    return original(path, method, body, options);
+  });
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  const section = within(
+    await screen.findByRole('region', { name: 'Контакты объявления' }),
+  );
+  const box = (suffix: string) =>
+    section.getByRole<HTMLInputElement>('checkbox', {
+      name: new RegExp(suffix + '$'),
+    });
+  expect(box('0001').checked).toBe(false);
+  const profileLink = section.getByRole('link', {
+    name: 'Настройки связи в профиле',
+  });
+  expect(profileLink.getAttribute('href')).toBe(
+    '/account?section=contacts#contact-settings',
+  );
+  expect(profileLink.getAttribute('target')).toBe('_blank');
+  fireEvent.click(box('0002'));
+  await waitFor(() => expect(box('0002').checked).toBe(true));
+  fireEvent.click(box('0001'));
+  await waitFor(() => expect(box('0003').disabled).toBe(true));
+  expect(ids).toEqual(['second', 'primary']);
+  fireEvent.click(box('0001'));
+  await waitFor(() => expect(box('0003').disabled).toBe(false));
+  expect(ids).toEqual(['second']);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  const preview = within(
+    await screen.findByRole('region', {
+      name: 'Сохранённые данные объявления',
+    }),
+  );
+  expect(preview.getByText('Телефон 1: +79990000002')).toBeTruthy();
+  expect(preview.queryByText(/79990000001/)).toBeNull();
+  expect(preview.queryByText('Сообщение на портале')).toBeNull();
+  mode = 'messages';
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Отправить на модерацию' }),
+  );
+  await screen.findByText(/Откройте предпросмотр ещё раз/);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  const changed = within(
+    await screen.findByRole('region', {
+      name: 'Сохранённые данные объявления',
+    }),
+  );
+  expect(changed.getByText('Сообщение на портале')).toBeTruthy();
+  expect(changed.queryByText(/79990000002/)).toBeNull();
+});
+
+test('a stale contact selection reloads the other tab’s saved choice and asks the seller to confirm it', async () => {
+  setup();
+  const initial = {
+    mode: 'both' as const,
+    phones: [
+      { id: 'first', phone: '+79990000001' },
+      { id: 'second', phone: '+79990000002' },
+    ],
+    selectedPhoneIds: ['first'],
+    canEdit: true,
+  };
+  vi.mocked(getListingContactSettings)
+    .mockResolvedValueOnce(initial)
+    .mockResolvedValue({ ...initial, selectedPhoneIds: ['second'] });
+  const original = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path.endsWith('/contact-settings') && method === 'PUT')
+      throw new ListingContactSelectionChangedError();
+    return original(path, method, body, options);
+  });
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  const section = within(
+    await screen.findByRole('region', { name: 'Контакты объявления' }),
+  );
+  fireEvent.click(section.getByRole('checkbox', { name: /0002$/ }));
+  await screen.findByText(
+    'Контакты изменились в другой вкладке. Проверьте номера и подтвердите выбор ещё раз.',
+  );
+  expect(
+    section.getByRole<HTMLInputElement>('checkbox', { name: /0002$/ }).checked,
+  ).toBe(true);
+  expect(
+    section.getByRole<HTMLInputElement>('checkbox', { name: /0001$/ }).checked,
+  ).toBe(false);
+  expect(
+    vi.mocked(api).mock.calls.filter(([p]) => p.endsWith('/contact-settings')),
+  ).toEqual([
+    [
+      `v1/listings/${listing.id}/contact-settings`,
+      'PUT',
+      { phoneIds: ['first', 'second'], expectedPhoneIds: ['first'] },
+    ],
+  ]);
+});
+
+test('organization editors cannot change another seller’s contacts', async () => {
+  setup('draft', false, 5, 'agency');
+  vi.mocked(getListingContactSettings).mockResolvedValue({
+    mode: 'calls',
+    phones: [],
+    selectedPhoneIds: [],
+    canEdit: false,
+  });
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  const contacts = within(
+    await screen.findByRole('region', { name: 'Способы связи' }),
+  );
+  expect(contacts.getByText('Публичный номер пока недоступен.')).toBeTruthy();
+  expect(contacts.queryByRole('checkbox')).toBeNull();
 });
 test.each([
   { role: 'owner', representation: null },

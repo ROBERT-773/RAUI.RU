@@ -31,7 +31,7 @@ export interface Listing {
   terms?: Record<string, unknown>;
 }
 // One authoritative predicate for public data and neutral visibility snapshots.
-const publicEligibility = `l.status='published' AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('owner','agent','agency','developer','admin') AND (l.organization_id IS NULL OR EXISTS(SELECT 1 FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=l.organization_id AND o.active AND m.user_id=l.seller_id AND m.active))`;
+export const publicEligibility = `l.status='published' AND u.active AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('owner','agent','agency','developer','admin') AND (l.organization_id IS NULL OR EXISTS(SELECT 1 FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE o.id=l.organization_id AND o.active AND m.user_id=l.seller_id AND m.active))`;
 export async function readListingVisibility(
   sql: Sql,
   listingId: string,

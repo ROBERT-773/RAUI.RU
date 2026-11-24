@@ -49,6 +49,15 @@ import {
 import { addressSchema } from '../modules/geo/geo';
 import { staffPermissions, uuid } from './security';
 import {
+  contactModeSchema,
+  contactSettingsPatchSchema,
+  contactPhoneRequestSchema,
+  contactPhoneVerifySchema,
+  contactSettingsSchema,
+  contactPhoneRequestResultSchema,
+} from '../modules/auth/contact-settings';
+import { listingContactSelectionSchema } from '../modules/listings/contact-settings';
+import {
   staffTotpCodeInput,
   staffTotpEnrollmentInput,
 } from '../modules/auth/staff-totp-controller';
@@ -129,7 +138,31 @@ for (const prefix of [
     z.array(linkItem);
 }
 const name = z.string().min(1).max(200);
+const publicContact = object({
+  messagesAllowed: z.boolean(),
+  phones: z.array(z.string()).max(2),
+});
+const listingContactSettings = object({
+  mode: contactModeSchema,
+  canEdit: z.boolean(),
+  phones: z.array(object({ id: uuid, phone: z.string() })).max(3),
+  selectedPhoneIds: z.array(uuid).max(2),
+});
+const contactResponses: Record<string, z.ZodType> = {
+  'get /v1/account/contact-settings': contactSettingsSchema,
+  'patch /v1/account/contact-settings': contactSettingsSchema,
+  'post /v1/account/contact-phones/request': contactPhoneRequestResultSchema,
+  'post /v1/account/contact-phones/verify': contactSettingsSchema,
+  'delete /v1/account/contact-phones/{id}': contactSettingsSchema,
+  'get /v1/listings/{id}/contact-settings': listingContactSettings,
+  'put /v1/listings/{id}/contact-settings': listingContactSettings,
+  'get /v1/listings/{id}/public/contact': publicContact,
+};
 const bodyContracts: Record<string, z.ZodType> = {
+  'patch /v1/account/contact-settings': contactSettingsPatchSchema,
+  'post /v1/account/contact-phones/request': contactPhoneRequestSchema,
+  'post /v1/account/contact-phones/verify': contactPhoneVerifySchema,
+  'put /v1/listings/{id}/contact-settings': listingContactSelectionSchema,
   'post /v1/auth/staff-totp/enroll': staffTotpEnrollmentInput,
   'post /v1/auth/staff-totp/activate': staffTotpCodeInput,
   'post /v1/auth/staff-totp/confirm': staffTotpCodeInput,
@@ -356,6 +389,7 @@ get /health/ready
 get /v1/categories
 get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
+get /v1/listings/{id}/public/contact
 get /v1/media/{id}/{variant}
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
@@ -520,6 +554,46 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (contactResponses[operationId]) {
+        operation.responses[method === 'post' ? '201' : '200'] = {
+          description: path.endsWith('/public/contact')
+            ? 'Current message permission and explicitly selected verified phones in display order. A guest can read contacts only for a public listing.'
+            : 'Current contact settings for the authorized account or listing editor.',
+          headers: {
+            'Cache-Control': {
+              schema: { type: 'string', example: 'private, no-store' },
+            },
+          },
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                contactResponses[operationId],
+              ) as SchemaObject,
+            },
+          },
+        };
+      }
+      if (
+        operationId === 'patch /v1/account/contact-settings' ||
+        operationId === 'delete /v1/account/contact-phones/{id}'
+      ) {
+        operation.responses['409'] = {
+          description:
+            'The change would leave a published or submitted listing without its last phone in calls-only mode. The owner can select a replacement before retrying.',
+        };
+      }
+      if (operationId === 'put /v1/listings/{id}/contact-settings') {
+        operation.responses['409'] = {
+          description:
+            'Another edit changed the selection since expectedPhoneIds. Reload the current selection and confirm the intended numbers.',
+        };
+      }
+      if (operationId === 'post /v1/account/inquiries/{id}') {
+        operation.responses['403'] = {
+          description:
+            'Forbidden, invalid CSRF, or LISTING_MESSAGES_DISABLED when the seller accepts only calls on the listing.',
+        };
+      }
       if (operationId === 'get /v1/listings/summary') {
         const count = { type: 'integer', minimum: 0 } as const;
         operation.responses['200'] = {
@@ -631,6 +705,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
               schema: {
                 type: 'object',
                 properties: {
+                  contact: z.toJSONSchema(publicContact) as SchemaObject,
                   professionals: {
                     type: 'array',
                     maxItems: 2,
@@ -1449,6 +1524,21 @@ export function enrichOpenApi(document: OpenAPIObject) {
             },
           },
         };
+      }
+      if (
+        method === 'post' &&
+        [
+          '/v1/auth/verification/phone',
+          '/v1/auth/verification/phone/confirm',
+          '/v1/auth/verification/phone/otp',
+          '/v1/auth/verification/phone/otp/confirm',
+        ].includes(path)
+      ) {
+        const conflict = operation.responses['409'];
+        if (conflict && 'description' in conflict) {
+          conflict.description +=
+            '. contact_phone_required means replacing the primary number would remove the last number for a calls-only listing. Choose a replacement on that listing or enable messages before retrying.';
+        }
       }
       if (operationId === 'get /v1/search/sitemap/partitions') {
         operation.responses['200'] = {

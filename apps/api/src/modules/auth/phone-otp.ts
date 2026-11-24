@@ -19,6 +19,7 @@ import { loadConfig, phoneOtpCapability } from '../../config';
 import { Audit } from '../audit/audit';
 import { Database, Sql } from '../database/database';
 import { PhoneOtpDelivery, PhoneOtpDispatch } from './phone-otp-delivery';
+import { guardLoginPhoneChange } from './contact-guards';
 export interface PhoneOtpRequestResult {
   challengeId: string;
   expiresAt: string;
@@ -180,6 +181,7 @@ export class PhoneOtpService {
           );
         return prior.response;
       }
+      await guardLoginPhoneChange(sql, actor.id, input.phone);
       await reservePhoneOtpSend(sql, actor.id, input.phone);
       await invalidatePhoneChallenges(sql, actor.id);
       code = randomInt(0, 1_000_000).toString().padStart(6, '0');
@@ -307,6 +309,7 @@ export class PhoneOtpService {
         );
         return 'invalid';
       }
+      await guardLoginPhoneChange(sql, actor.id, row.destination);
       await sql.query('SAVEPOINT phone_otp_contact');
       try {
         await sql.query(

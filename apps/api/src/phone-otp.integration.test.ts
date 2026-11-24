@@ -81,7 +81,7 @@ test('numeric phone OTP preserves committed security boundaries over real HTTP a
   assert.deepEqual(
     (
       await pool.query(
-        "SELECT to_jsonb(u)-'phone_sign_in_enrolled_at' data FROM users u WHERE id=$1",
+        "SELECT to_jsonb(u)-'phone_sign_in_enrolled_at'-'contact_mode' data FROM users u WHERE id=$1",
         [preservedUser],
       )
     ).rows[0].data,

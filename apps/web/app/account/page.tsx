@@ -23,15 +23,17 @@ export default async function Page({
   searchParams: Promise<{
     action?: string | string[];
     tab?: string | string[];
+    section?: string | string[];
   }>;
 }) {
-  const { action, tab } = await searchParams;
+  const { action, tab, section } = await searchParams;
   const initialTab =
     tab === 'messages' || tab === 'notifications' ? tab : 'favorite';
   return (
     <main id="content">
       <Account
-        key={initialTab}
+        key={section === 'contacts' ? initialTab + '-contacts' : initialTab}
+        initialContacts={section === 'contacts'}
         initialTab={initialTab}
         smsAvailable={await smsAvailable()}
         continueListing={action === 'publish'}

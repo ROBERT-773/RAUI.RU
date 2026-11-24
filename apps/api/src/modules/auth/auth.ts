@@ -36,6 +36,11 @@ import {
 } from '../../common/security';
 import { isProduction, loadConfig } from '../../config';
 import { StaffTotpController } from './staff-totp-controller';
+import { guardLoginPhoneChange } from './contact-guards';
+import {
+  ContactSettingsController,
+  ContactSettingsService,
+} from './contact-settings';
 import {
   PhoneSignInService,
   phoneSignInAvailable,
@@ -147,6 +152,7 @@ export class AuthService {
           user.id,
         ]);
       if (purpose === 'phone') {
+        await guardLoginPhoneChange(sql, user.id, destination);
         await reservePhoneOtpSend(sql, user.id, destination);
         await invalidatePhoneChallenges(sql, user.id);
       }
@@ -472,6 +478,11 @@ export class AuthService {
         );
         if (!current.rowCount)
           throw new BadRequestException('Invalid or expired verification');
+        await guardLoginPhoneChange(
+          sql,
+          challenge.user_id,
+          challenge.destination,
+        );
         await invalidatePhoneChallenges(sql, challenge.user_id);
         await sql.query(
           'UPDATE users SET phone=$2,phone_verified_at=now(),updated_at=now() WHERE id=$1',
@@ -713,9 +724,10 @@ export class AuthController {
   }
 }
 @Module({
-  controllers: [AuthController, StaffTotpController],
+  controllers: [AuthController, StaffTotpController, ContactSettingsController],
   providers: [
     AuthService,
+    ContactSettingsService,
     PhoneOtpService,
     PhoneSignInService,
     { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },

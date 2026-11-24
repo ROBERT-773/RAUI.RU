@@ -191,7 +191,12 @@ export default async function Page({
         <h2>Описание</h2>
         <p style={{ whiteSpace: 'pre-wrap' }}>{data.description}</p>
       </section>
-      <DetailActions id={id} />
+      <DetailActions
+        key={id}
+        id={id}
+        messagesAllowed={data.contact?.messagesAllowed ?? true}
+        callsAllowed={Boolean(data.contact?.phones.length)}
+      />
       {!!data.professionals?.length && (
         <section aria-labelledby="listing-professionals">
           <h2 id="listing-professionals">Кто разместил объявление</h2>

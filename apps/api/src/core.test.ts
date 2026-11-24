@@ -1080,7 +1080,9 @@ test('publication validates stored title, description and price before checking 
     description: 'A valid test description',
     price: '5000000',
   } as Parameters<Listings['validate']>[1];
-  const sql = {} as Parameters<Listings['validate']>[0];
+  const sql = {
+    query: async () => ({ rows: [{ missing: false }] }),
+  } as unknown as Parameters<Listings['validate']>[0];
   const actor = {} as Actor;
   await assert.rejects(
     () => service.validate(sql, { ...listing, description: '   ' }, actor),

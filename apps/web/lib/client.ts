@@ -13,6 +13,25 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+export class ContactPhoneRequiredError extends ApiError {
+  constructor(
+    readonly listings: { id: string; title: string }[],
+    readonly total: number,
+  ) {
+    super(
+      'Чтобы по объявлению можно было позвонить, выберите подтверждённый номер.',
+      409,
+    );
+  }
+}
+export class ListingContactSelectionChangedError extends ApiError {
+  constructor() {
+    super(
+      'Контакты изменились в другой вкладке. Проверьте номера и подтвердите выбор ещё раз.',
+      409,
+    );
+  }
+}
 export const feedHostApprovalHint =
   'Домен выгрузки ещё не разрешён. Попросите администратора RAUI разрешить загрузку с этого домена.';
 const publicMutations = new Set([
@@ -76,8 +95,67 @@ export async function api<T>(
     cache: 'no-store',
   });
   if (!response.ok) {
-    if ([400, 409, 429, 503].includes(response.status)) {
+    if ([400, 403, 409, 429, 503].includes(response.status)) {
       const failure: unknown = await response.json().catch(() => null);
+      if (
+        failure &&
+        typeof failure === 'object' &&
+        'code' in failure &&
+        typeof failure.code === 'string' &&
+        (/^v1\/(?:account\/(?:contact-|inquiries\/)|listings\/[^/]+\/(?:contact-settings|transitions))/.test(
+          path,
+        ) ||
+          (failure.code === 'contact_phone_required' &&
+            /^v1\/auth\/verification\/phone(?:\/|$)/.test(path)))
+      ) {
+        if (
+          failure.code === 'contact_phone_required' &&
+          response.status === 409
+        ) {
+          const listings =
+            'listings' in failure && Array.isArray(failure.listings)
+              ? failure.listings.filter(
+                  (row): row is { id: string; title: string } =>
+                    row &&
+                    typeof row.id === 'string' &&
+                    /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+                      row.id,
+                    ) &&
+                    typeof row.title === 'string',
+                )
+              : [];
+          throw new ContactPhoneRequiredError(
+            listings,
+            'total' in failure && typeof failure.total === 'number'
+              ? failure.total
+              : listings.length,
+          );
+        }
+        if (
+          failure.code === 'LISTING_CONTACT_SELECTION_CHANGED' &&
+          response.status === 409
+        )
+          throw new ListingContactSelectionChangedError();
+        const messages: Record<string, string> = {
+          contact_phone_invalid_code:
+            'Код недействителен или срок его действия истёк.',
+          contact_phone_limit:
+            'Можно добавить не более двух дополнительных номеров.',
+          contact_phone_exists: 'Этот номер уже добавлен в профиль.',
+          contact_phone_primary:
+            'Основной номер меняется в разделе подтверждения телефона.',
+          LISTING_MESSAGES_DISABLED: 'Автор принимает только звонки.',
+          INVALID_LISTING_CONTACT_PHONES:
+            'Выберите до двух разных подтверждённых номеров из своего профиля.',
+          LISTING_CONTACT_PHONE_REQUIRED:
+            'Для звонков выберите хотя бы один подтверждённый номер.',
+          phone_otp_unavailable:
+            'Сейчас отправка SMS недоступна. Попробуйте позже.',
+          phone_otp_rate_limited: 'Слишком много запросов. Попробуйте позже.',
+        };
+        if (Object.hasOwn(messages, failure.code))
+          throw new ApiError(messages[failure.code]!, response.status);
+      }
       if (
         response.status === 400 &&
         /^v1\/(?:account|organizations\/[^/]+)\/feeds\/link$/.test(path)

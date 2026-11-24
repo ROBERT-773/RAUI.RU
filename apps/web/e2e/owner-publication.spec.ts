@@ -147,6 +147,54 @@ async function submitReviewedDraft(
   ).toBe(404);
 }
 
+async function checkPublishedContactModes(
+  owner: Page,
+  guest: Page,
+  listingId: string,
+  phone: string,
+) {
+  const profile = await owner.context().newPage();
+  try {
+    await profile.goto('/account');
+    await profile
+      .getByRole('button', { name: 'Профиль и подтверждение контактов' })
+      .click();
+    const setting = profile.getByLabel('Способ связи для всех объявлений');
+    const card = '/listings/' + listingId;
+    const reveal = guest.getByRole('button', { name: 'Показать телефон' });
+    const message = guest.getByLabel('Сообщение продавцу');
+    for (const mode of ['both', 'calls', 'messages'] as const) {
+      const saving = profile.waitForResponse((response) =>
+        endpoint(response, 'PATCH', '/api/v1/account/contact-settings'),
+      );
+      await setting.selectOption(mode);
+      expect((await saving).status()).toBe(200);
+      const response = await guest.goto(card);
+      expect(response?.status()).toBe(200);
+      expect(await response!.text()).not.toContain(phone);
+      if (mode === 'calls') await expect(message).toHaveCount(0);
+      else await expect(message).toBeVisible();
+      if (mode === 'messages') {
+        await expect(reveal).toHaveCount(0);
+        const contact = await guest.request.get(
+          '/api/v1' + card + '/public/contact',
+        );
+        expect(await contact.json()).toEqual({
+          messagesAllowed: true,
+          phones: [],
+        });
+      } else {
+        await reveal.click();
+        await expect(
+          guest.getByRole('link', { name: /Телефон 1/ }),
+        ).toHaveAttribute('href', 'tel:' + phone);
+      }
+    }
+  } finally {
+    await profile.close();
+  }
+}
+
 async function approveListing(staff: Page, listingId: string, title: string) {
   await login(staff, 'admin@e2e.test', 'Мой аккаунт');
   await staff.goto('/admin/moderation');
@@ -291,6 +339,22 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     // A reload proves the draft was persisted rather than held only in component state.
     await page.reload();
     await page.getByRole('button', { name: title, exact: true }).click();
+    const contactSettings = draft.getByRole('region', {
+      name: 'Контакты объявления',
+    });
+    const number = contactSettings.getByRole('checkbox');
+    await expect(number).not.toBeChecked();
+    const phone = (await number.locator('..').innerText()).trim();
+    expect(phone).toMatch(/^\+7\d{10}$/);
+    const selecting = page.waitForResponse((response) =>
+      endpoint(
+        response,
+        'PUT',
+        '/api/v1/listings/' + listingId + '/contact-settings',
+      ),
+    );
+    await number.check();
+    expect((await selecting).status()).toBe(200);
     await prepareDraftPreview(page, draft, listingId);
     await submitReviewedDraft(page, draft, listingId);
     expect((await visitor.request.get(`/listings/${listingId}`)).status()).toBe(
@@ -300,6 +364,7 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     // Public visibility is checked through an independent visitor with no seller session.
     const publicResponse = await visitor.goto(`/listings/${listingId}`);
     expect(publicResponse?.status()).toBe(200);
+    await checkPublishedContactModes(page, visitor, listingId, phone);
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
     ).toBeVisible();

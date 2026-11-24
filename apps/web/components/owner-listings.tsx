@@ -1,5 +1,12 @@
 'use client';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import Link from 'next/link';
 import ListingPublicationActions from './listing-publication-actions';
 import ListingMediaGallery from './listing-media-gallery';
@@ -9,8 +16,18 @@ import ListingUploadControls from './listing-upload-controls';
 import ListingUploadProgress, {
   type UploadProgress,
 } from './listing-upload-progress';
-import { api, ApiError } from '../lib/client';
+import {
+  api,
+  ApiError,
+  ListingContactSelectionChangedError,
+} from '../lib/client';
 import SavedListingPreview from './saved-listing-preview';
+import ListingContacts from './listing-contacts';
+import {
+  getListingContactSettings,
+  visiblePhones,
+  type ListingContactSettings,
+} from '../lib/contact-settings';
 import ListingEditorStatus from './listing-editor-status';
 import SavedListingsList from './saved-listings-list';
 import {
@@ -122,6 +139,16 @@ export default function OwnerListings({
     [media, setMedia] = useState<Media[]>([]),
     [reason, setReason] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [contacts, setContacts] = useState<ListingContactSettings | null>(null);
+  const openFromProfile = useEffectEvent((id: string) => {
+    void open(id);
+  });
+  useEffect(() => {
+    if (!allowed) return;
+    const id = new URLSearchParams(window.location.search).get('listing');
+    if (id && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))
+      openFromProfile(id);
+  }, [allowed]);
   const formId = useId();
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const focusSavedList = useRef(false);
@@ -318,6 +345,7 @@ export default function OwnerListings({
     setPreviewOpen(false);
     setLoading(true);
     setListing(null);
+    setContacts(null);
     setProperty(null);
     setPropertyDirty(false);
     setPropertyFields([]);
@@ -329,14 +357,16 @@ export default function OwnerListings({
     upload.current = [];
     setUploadProgress(null);
     try {
-      const [value, photos, history] = await Promise.all([
+      const [value, photos, history, contactSettings] = await Promise.all([
         api<Listing>(`v1/listings/${id}`),
         api<Media[]>(`v1/media/listing/${id}`),
         api<History[]>(`v1/listings/${id}/history`).catch(() => null),
+        getListingContactSettings(id).catch(() => null),
       ]);
       if (request !== epoch.current || !mounted.current) return;
       setDraftToReopen((current) => (current === id ? null : current));
       assign(value);
+      setContacts(contactSettings);
       if (createdDraftToFocus.current === id)
         setItems((current) => retainCreatedDraft(current, value));
       setMedia(photos);
@@ -453,11 +483,15 @@ export default function OwnerListings({
   async function reviewListing(action: 'preview' | 'submit') {
     if (!listing || (action === 'submit' && !previewOpen)) return;
     const request = epoch.current;
-    const { value, photos } = await refresh(listing.id);
+    const [{ value, photos }, currentContacts] = await Promise.all([
+      refresh(listing.id),
+      getListingContactSettings(listing.id),
+    ]);
     const data = value.property_id
       ? await propertyEditorData(value.property_id)
       : null;
     if (!mounted.current || request !== epoch.current) return;
+    setContacts(currentContacts);
     assign(value);
     setMedia(photos);
     setProperty(data?.details ?? null);
@@ -495,12 +529,26 @@ export default function OwnerListings({
       setPreviewOpen(true);
       return;
     }
+    if (
+      currentContacts.canEdit &&
+      currentContacts.mode !== 'messages' &&
+      !visiblePhones(currentContacts).length
+    ) {
+      setPreviewOpen(false);
+      throw new Error(
+        'Выберите подтверждённый телефон в контактах объявления или включите только сообщения в профиле.',
+      );
+    }
     const recoveredProcessing =
       value.status === 'processing' &&
       value.version === listing.version + 1 &&
       transitionKeys.current.has(`${listing.id}:${listing.version}:processing`);
     if (
       value.id !== listing.id ||
+      !contacts ||
+      contacts.mode !== currentContacts.mode ||
+      JSON.stringify(visiblePhones(contacts).map((p) => p.phone)) !==
+        JSON.stringify(visiblePhones(currentContacts).map((p) => p.phone)) ||
       (value.version !== listing.version && !recoveredProcessing) ||
       data?.details.id !== property?.id ||
       data?.details.version !== property?.version ||
@@ -1210,6 +1258,57 @@ export default function OwnerListings({
                   Сохранить и выйти
                 </button>
               )}
+              <ListingContacts
+                settings={contacts}
+                disabled={busy || creating || hasUnsavedChanges}
+                onRetry={() =>
+                  void run(async () => {
+                    const request = epoch.current;
+                    const value = await getListingContactSettings(listing.id);
+                    if (mounted.current && request === epoch.current)
+                      setContacts(value);
+                  })
+                }
+                onSelect={(ids) =>
+                  void run(async () => {
+                    if (!contacts || contacts.canEdit === false) return;
+                    const request = epoch.current;
+                    let result: ListingContactSettings;
+                    try {
+                      result = await api<ListingContactSettings>(
+                        `v1/listings/${listing.id}/contact-settings`,
+                        'PUT',
+                        {
+                          phoneIds: ids,
+                          expectedPhoneIds: contacts.selectedPhoneIds,
+                        },
+                      );
+                    } catch (failure) {
+                      if (!mounted.current || request !== epoch.current) return;
+                      if (
+                        failure instanceof ListingContactSelectionChangedError
+                      ) {
+                        const actual = await getListingContactSettings(
+                          listing.id,
+                        ).catch(() => null);
+                        if (!mounted.current || request !== epoch.current)
+                          return;
+                        setContacts(actual);
+                      }
+                      throw failure;
+                    }
+                    if (!mounted.current || request !== epoch.current) return;
+                    setContacts(result);
+                    const updated = await api<Listing>(
+                      `v1/listings/${listing.id}`,
+                    );
+                    if (mounted.current && request === epoch.current) {
+                      assign(updated);
+                      setNotice('Контакты объявления сохранены.');
+                    }
+                  })
+                }
+              />
               <ListingModerationActions
                 status={listing.status}
                 withdrawDisabled={busy || creating || loading}
@@ -1274,6 +1373,7 @@ export default function OwnerListings({
             Предпросмотр объявления
           </h2>
           <SavedListingPreview
+            contacts={contacts}
             listing={listing}
             property={property}
             propertyFields={propertyFields}
