@@ -609,6 +609,67 @@ test('Feed DNS deadline and mixed private/public DNS answers fail closed', async
   assert.equal(addresses[0]!.address, '8.8.8.8');
 });
 
+test('XML uses the declared wire encoding and preserves Cyrillic in Cian addresses and descriptions', () => {
+  const body = Buffer.concat([
+    Buffer.from('<Feed><Feed_Version>2</Feed_Version><Object><Address>'),
+    Buffer.from('CCEEF1EAE2E02C20F3EBE8F6E020A8EBEAE8EDE02C2031', 'hex'),
+    Buffer.from('</Address><Description>'),
+    Buffer.from('CFE5F2F0EEE22C20EFEEE4FAE5E7E42033', 'hex'),
+    Buffer.from('</Description></Object></Feed>'),
+  ]);
+  const declaration = (encoding: string) =>
+    Buffer.from(`<?xml version="1.0" encoding="${encoding}"?>`);
+  const read = (bytes: Buffer, contentType = 'application/xml') =>
+    parseFeed({ bytes, contentType }, 'xml', {})[0];
+  for (const source of [
+    read(Buffer.concat([declaration('windows-1251'), body])),
+    read(body, 'text/xml; charset="WINDOWS-1251"'),
+    read(
+      Buffer.concat([declaration('cp1251'), body]),
+      'application/xml; charset=windows-1251',
+    ),
+    read(
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(
+          new TextDecoder('windows-1251', { fatal: true }).decode(body),
+        ),
+      ]),
+    ),
+  ])
+    assert.partialDeepStrictEqual(source, {
+      description: 'Петров, подъезд 3',
+      address: { formatted: 'Москва, улица Ёлкина, 1', locality: 'Москва' },
+    });
+
+  const badEncoding = (error: unknown) =>
+    error instanceof BadRequestException &&
+    (error.getResponse() as { code?: string }).code === 'feed_encoding_invalid';
+  for (const [bytes, header] of [
+    [body, 'application/xml'],
+    [
+      Buffer.concat([declaration('windows-1251'), body]),
+      'application/xml; charset=utf-8',
+    ],
+    [Buffer.concat([declaration('KOI8-R'), body]), 'text/xml'],
+    [body, 'application/xml; charset=iso-8859-1'],
+    [
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        declaration('windows-1251'),
+        body,
+      ]),
+      'application/xml',
+    ],
+    [Buffer.from(yandexXml), 'text/xml; charset=windows-1251'],
+  ] as const)
+    assert.throws(() => read(bytes, header), badEncoding);
+  assert.throws(
+    () =>
+      parseFeed(declaration('windows-1251').toString() + yandexXml, 'xml', {}),
+    badEncoding,
+  );
+});
 test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects redirects', async (t) => {
   const previous = process.env.FEED_ALLOWED_HOSTS;
   process.env.FEED_ALLOWED_HOSTS = 'feeds.example';
@@ -624,6 +685,8 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
     return [{ address: dnsCalls === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 }];
   });
   let captured: https.RequestOptions | undefined;
+  let mime = 'application/json',
+    source = Buffer.from('[]');
   t.mock.method(https, 'request', ((
     url: URL,
     options: https.RequestOptions,
@@ -651,11 +714,11 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
             assert.equal(address, '8.8.8.8');
             const res = Object.assign(new EventEmitter(), {
               statusCode,
-              headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': mime },
             });
             callback(res);
             if (statusCode === 200) {
-              res.emit('data', Buffer.from('[]'));
+              res.emit('data', source);
               res.emit('end');
             }
           },
@@ -682,6 +745,16 @@ test('Feed transport pins validated IPv4 with Node24-compatible TLS and rejects 
     /Feed response rejected/,
   );
   assert.equal(requests, 2);
+  statusCode = 200;
+  dnsCalls = 0;
+  mime = 'Application/XML; charset=windows-1251';
+  source = Buffer.concat([
+    Buffer.from('<feed><item>'),
+    Buffer.from('a8ebeae8ed', 'hex'),
+    Buffer.from('</item></feed>'),
+  ]);
+  const received = await fetcher.fetch('https://feeds.example/listings', 'xml');
+  assert.deepEqual(parseFeed(received, 'xml', {}), ['Ёлкин']);
 });
 
 test('Verification challenge delivery refuses redirects and sanitizes transport failures', async (t) => {

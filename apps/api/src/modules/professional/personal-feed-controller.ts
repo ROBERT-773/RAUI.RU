@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Inject,
   Param,
   Post,
   Query,
@@ -10,7 +11,6 @@ import {
 import { Actor, CurrentActor } from '../../common/security';
 import { ProfessionalImports } from './imports';
 import type { ProfessionalFeeds } from './feeds';
-import { Inject } from '@nestjs/common';
 
 // Inject by alias to keep controller and module free of circular runtime imports.
 export const personalFeedService = Symbol('PersonalFeedService');

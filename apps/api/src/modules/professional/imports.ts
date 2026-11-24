@@ -408,7 +408,7 @@ export class ProfessionalImports {
       const payload =
         job.payload ??
         parseFeed(
-          await this.fetcher.fetch(feed.transport.url!),
+          await this.fetcher.fetch(feed.transport.url!, feed.format),
           feed.format,
           feed.mapping,
           feed.transport.provider,

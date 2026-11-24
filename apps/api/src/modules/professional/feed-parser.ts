@@ -7,6 +7,81 @@ import { xmlFeedMaxBytes, xmlFeedMaxItems } from './feed-limits';
 import { FeedLinkError } from './feed-link-error';
 
 export type FeedProfile = 'yandex' | 'cian' | 'avito' | 'domclick' | 'generic';
+export interface XmlFeedDownload {
+  bytes: Buffer;
+  contentType: string;
+}
+type XmlInput = string | XmlFeedDownload;
+const xmlEncodingError = () =>
+  new FeedLinkError(
+    'feed_encoding_invalid',
+    'Кодировка XML не поддерживается или расходится с объявленной кодировкой.',
+  );
+function declaredEncoding(prolog: string) {
+  return /^\uFEFF?<\?xml(?=\s)[^?]*?\sencoding\s*=\s*(["'])([^"']*)\1/i.exec(
+    prolog,
+  )?.[2];
+}
+function xmlEncoding(label: string) {
+  switch (label.trim().toLowerCase()) {
+    case 'utf8':
+    case 'utf-8':
+      return 'utf-8';
+    case 'cp1251':
+    case 'windows-1251':
+    case 'x-cp1251':
+      return 'windows-1251';
+    default:
+      throw xmlEncodingError();
+  }
+}
+function decodeXml(input: XmlInput) {
+  const size =
+    typeof input === 'string' ? Buffer.byteLength(input) : input.bytes.length;
+  if (size > xmlFeedMaxBytes)
+    throw new BadRequestException('Превышен размер фида.');
+  if (typeof input === 'string')
+    return {
+      text: input,
+      encoding: xmlEncoding(declaredEncoding(input) ?? 'utf-8'),
+    };
+  const { bytes, contentType } = input;
+  const bom = bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]));
+  const start = bom ? 3 : 0;
+  const end = bytes.indexOf('?>', start);
+  const declaration =
+    bytes.toString('latin1', start, start + 5) === '<?xml' && end >= 0
+      ? declaredEncoding(bytes.toString('latin1', start, end + 2))
+      : undefined;
+  const encodings = new Set<string>();
+  if (bom) encodings.add('utf-8');
+  if (declaration !== undefined) encodings.add(xmlEncoding(declaration));
+  // Quoted MIME parameters may contain a semicolon. Check each charset before choosing the decoder.
+  for (const part of (
+    contentType.match(/(?:[^;"]|"(?:\\.|[^"\\])*")+/g) ?? []
+  ).slice(1)) {
+    if (!/^\s*charset\s*(?:=|$)/i.test(part)) continue;
+    const param = /^\s*charset\s*=\s*(?:"([^"]+)"|([^\s";]+))\s*$/i.exec(part);
+    if (!param) throw xmlEncodingError();
+    encodings.add(xmlEncoding(param[1] ?? param[2]!));
+  }
+  if (
+    encodings.size > 1 ||
+    bytes.includes(0) ||
+    (bytes[0] === 0xff && bytes[1] === 0xfe) ||
+    (bytes[0] === 0xfe && bytes[1] === 0xff)
+  )
+    throw xmlEncodingError();
+  const encoding = encodings.values().next().value ?? 'utf-8';
+  try {
+    return {
+      text: new TextDecoder(encoding, { fatal: true }).decode(bytes),
+      encoding,
+    };
+  } catch {
+    throw xmlEncodingError();
+  }
+}
 type XmlRecord = Record<string, unknown>;
 type Provider = Exclude<FeedProfile, 'generic'>;
 function record(value: unknown): XmlRecord {
@@ -45,12 +120,9 @@ const xmlListingPaths = new Set([
   'feed.item',
   'complexes.complex.buildings.building.flats.flat',
 ]);
-function parseXml(text: string) {
-  if (
-    Buffer.byteLength(text) > xmlFeedMaxBytes ||
-    /<!DOCTYPE|<!ENTITY/i.test(text) ||
-    XMLValidator.validate(text) !== true
-  )
+function parseXml(input: XmlInput) {
+  const { text, encoding } = decodeXml(input);
+  if (/<!DOCTYPE|<!ENTITY/i.test(text) || XMLValidator.validate(text) !== true)
     throw new BadRequestException('Некорректный XML или превышен лимит файла.');
   let count = 0;
   const body = new XMLParser({
@@ -103,6 +175,7 @@ function parseXml(text: string) {
   else if (name === 'complexes' && Object.hasOwn(root, 'complex'))
     profile = 'domclick';
   else throw new BadRequestException('Формат XML не поддерживается.');
+  if (profile === 'yandex' && encoding !== 'utf-8') throw xmlEncodingError();
   return { root, profile };
 }
 function assertProfile(detected: FeedProfile, hint?: Provider) {
@@ -463,7 +536,7 @@ function domclickRows(root: XmlRecord, mapped: boolean) {
   return rows;
 }
 function readXmlRows(
-  text: string,
+  text: XmlInput,
   mapping: Record<string, string>,
   hint?: Provider,
 ) {
@@ -491,18 +564,17 @@ function readXmlRows(
   );
 }
 export function parseFeed(
-  text: string,
+  text: XmlInput,
   format: string,
   mapping: Record<string, string>,
   profileHint?: Provider,
 ): unknown[] {
-  const limit = format === 'xml' ? xmlFeedMaxBytes : 2_000_000;
-  if (Buffer.byteLength(text) > limit)
-    throw new BadRequestException('Превышен размер фида.');
   let items: unknown[];
   try {
     if (format === 'xml') items = readXmlRows(text, mapping, profileHint);
     else {
+      if (typeof text !== 'string' || Buffer.byteLength(text) > 2_000_000)
+        throw new BadRequestException('Превышен размер фида.');
       let rows: unknown;
       if (format === 'json') rows = JSON.parse(text);
       else if (format === 'csv')

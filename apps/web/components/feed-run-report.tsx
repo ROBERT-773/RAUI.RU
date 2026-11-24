@@ -22,6 +22,10 @@ type Rejected = {
 const failureHints = new Map([
   ['feed_host_not_approved', feedHostApprovalHint],
   [
+    'feed_encoding_invalid',
+    'Проверьте кодировку файла и charset в ответе сервера. Для Яндекса сохраните XML в UTF-8. Для ЦИАН подходят UTF-8 и Windows-1251.',
+  ],
+  [
     'feed_provider_mismatch_generic',
     'Для этого поля нужна XML-выгрузка в формате выбранной площадки.',
   ],

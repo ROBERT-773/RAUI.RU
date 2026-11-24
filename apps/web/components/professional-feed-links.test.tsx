@@ -150,24 +150,31 @@ test('changing organizations clears link drafts and ignores a late report from t
   expect(screen.queryByText(/Прошли проверку/)).toBeNull();
 });
 
-test('a file in the wrong slot names the matching field and keeps the link marked as saved', async () => {
-  vi.mocked(api).mockImplementation(async (path) =>
-    path.endsWith('/links')
-      ? [{ ...feed, lastRunId: 'wrong-slot' }]
-      : {
-          id: 'wrong-slot',
-          status: 'failed',
-          stats: {},
-          error: 'feed_provider_mismatch_avito',
-        },
-  );
-  render(<ProfessionalFeedLinks organizationId="org-1" />);
-  const row = await openSection();
-  expect((await row.findByRole('alert')).textContent).toContain(
-    'Вставьте ссылку в поле «Авито».',
-  );
-  expect(row.getByText(/Ссылка сохранена/)).toBeTruthy();
-});
+test.each([
+  ['feed_provider_mismatch_avito', 'Вставьте ссылку в поле «Авито».'],
+  [
+    'feed_encoding_invalid',
+    'Для Яндекса сохраните XML в UTF-8. Для ЦИАН подходят UTF-8 и Windows-1251.',
+  ],
+])(
+  'a rejected XML file shows an actionable correction for %s and keeps its link',
+  async (error, hint) => {
+    vi.mocked(api).mockImplementation(async (path) =>
+      path.endsWith('/links')
+        ? [{ ...feed, lastRunId: 'wrong-slot' }]
+        : {
+            id: 'wrong-slot',
+            status: 'failed',
+            stats: {},
+            error,
+          },
+    );
+    render(<ProfessionalFeedLinks organizationId="org-1" />);
+    const row = await openSection();
+    expect((await row.findByRole('alert')).textContent).toContain(hint);
+    expect(row.getByText(/Ссылка сохранена/)).toBeTruthy();
+  },
+);
 
 test('retries an uncertain submission with the same key and renders a failed worker result without exposing a feed URL', async () => {
   let submissions = 0;
