@@ -593,12 +593,34 @@ test('agency creates its first organization and publishes a listing after modera
     await visitorContext.close();
   }
 });
+async function dashboardCounts(page: Page) {
+  const summary = page.getByRole('region', {
+    name: 'Мои объявления',
+    exact: true,
+  });
+  const rows = summary.getByRole('definition');
+  await expect(rows).toHaveCount(3);
+  await expect(summary.getByRole('term')).toHaveText([
+    'Всего',
+    'Продажа',
+    'Аренда',
+  ]);
+  async function countAt(index: number) {
+    const value = await rows.nth(index).innerText();
+    expect(value).toMatch(/^\d[\d\s]*$/);
+    return Number(value.replace(/\s/g, ''));
+  }
+  return Promise.all([countAt(0), countAt(1), countAt(2)] as const);
+}
+
 test('independent agent reopens an apartment sale draft, revises its preview and publishes it for guests', async ({
   page,
   browser,
 }, info) => {
   test.setTimeout(90000);
   await login(page, `agent-${info.project.name}@e2e.test`, 'Кабинет риелтора');
+  const [total, sale, rent] = await dashboardCounts(page);
+  const withNewDraft = [total + 1, sale + 1, rent];
   await page.getByRole('link', { name: 'Мои объявления', exact: true }).click();
   const form = page.locator('#new-listing');
   let partialId: string | undefined;
@@ -624,6 +646,7 @@ test('independent agent reopens an apartment sale draft, revises its preview and
         `agent-${info.project.name}@e2e.test`,
         'Кабинет риелтора',
       );
+      expect(await dashboardCounts(otherPage)).toEqual(withNewDraft);
       await otherPage
         .getByRole('link', { name: 'Мои объявления', exact: true })
         .click();
@@ -661,6 +684,13 @@ test('independent agent reopens an apartment sale draft, revises its preview and
   expect(
     ((await unfinished.json()) as { id: string }[]).map(({ id }) => id),
   ).not.toContain(partialId);
+  const dashboard = await page.context().newPage();
+  try {
+    await dashboard.goto('/account');
+    expect(await dashboardCounts(dashboard)).toEqual(withNewDraft);
+  } finally {
+    await dashboard.close();
+  }
   const draft = (await saved.json()) as {
     id: string;
     organization_id: string | null;

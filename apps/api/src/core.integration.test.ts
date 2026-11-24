@@ -175,6 +175,29 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       key,
     );
   }
+  const summary = (session: Session) =>
+    ok<{ total: number; sale: number; rent: number }>(
+      '/listings/summary',
+      'GET',
+      undefined,
+      session,
+    );
+  const incompleteForm = {
+    step: 1,
+    category: 'apartment',
+    deal: 'sale',
+    region: 'moscow',
+    organizationId: '',
+    locality: '',
+    address: 'Москва, ул.',
+    longitude: '-',
+    latitude: '',
+    coordinatesFromSuggestion: false,
+    attributes: { area: '1,' },
+    title: '',
+    price: '',
+    terms: {},
+  };
   let owner: Session, other: Session, admin: Session, buyer: Session;
   let listing: Entity, physical: Entity;
   try {
@@ -759,22 +782,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         const id = randomUUID(),
           collection = '/account/listing-drafts',
           path = collection + '/' + id;
-        const form = {
-          step: 1,
-          category: 'apartment',
-          deal: 'sale',
-          region: 'moscow',
-          organizationId: '',
-          locality: '',
-          address: 'Москва, ул.',
-          longitude: '-',
-          latitude: '',
-          coordinatesFromSuggestion: false,
-          attributes: { area: '1,' },
-          title: '',
-          price: '',
-          terms: {},
-        };
+        const form = { ...incompleteForm, deal: 'short_rent' };
         type Saved = { id: string; version: number; form: typeof form };
         const list = (session: Session) =>
           ok<Saved[]>(collection, 'GET', undefined, session);
@@ -784,6 +792,8 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           session: Session = author,
         ) => call(path, 'PUT', { version, form: data }, session);
         assert.equal((await call(collection)).status, 401);
+        assert.equal((await call('/listings/summary')).status, 401);
+        assert.deepEqual(await summary(author), { total: 0, sale: 0, rent: 0 });
         assert.equal(
           (await call(collection, 'GET', undefined, buyer)).status,
           403,
@@ -793,6 +803,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(first.status, 200);
         assert.deepEqual(first.data, { id, version: 1, form });
         assert.deepEqual((await save(0)).data, first.data);
+        assert.deepEqual(await summary(author), { total: 1, sale: 0, rent: 1 });
         assert.deepEqual(await list(author), [first.data]);
         assert.deepEqual(await list(other), []);
         assert.equal((await save(1, form, other)).status, 404);
@@ -908,11 +919,13 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         }
         const revision = await save(2, {
           ...latest.form,
+          deal: 'sale',
           price: '1250000',
           address: finalAddress,
           coordinatesFromSuggestion: true,
         });
         assert.equal(revision.status, 200);
+        assert.deepEqual(await summary(author), { total: 1, sale: 1, rent: 0 });
         assert.equal((revision.data as Saved).version, 3);
         assert.equal(
           (await list(author))[0]!.form.coordinatesFromSuggestion,
@@ -956,6 +969,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           404,
         );
         assert.deepEqual(await list(author), []);
+        assert.deepEqual(await summary(author), { total: 1, sale: 1, rent: 0 });
         assert.equal((await save(2, latest.form)).status, 409);
         assert.deepEqual(
           (
@@ -975,6 +989,97 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
           ).rows[0].n,
           1,
         );
+      },
+    );
+    await t.test(
+      'listing counters include every status and page within current personal and agency access',
+      async () => {
+        const manager = await account('counter-manager', 'agency');
+        const agent = await account('counter-agent', 'agent');
+        const agency = await ok<{ id: string }>(
+          '/organizations',
+          'POST',
+          { name: 'Агентство для проверки счётчиков', kind: 'agency' },
+          manager,
+          'counter-agency',
+        );
+        const membership = (active: boolean) =>
+          ok(
+            `/organizations/${agency.id}/members`,
+            'PATCH',
+            {
+              userId: agent.user.id,
+              role: 'member',
+              active,
+            },
+            manager,
+          );
+        async function offer(
+          actor: Session,
+          key: string,
+          dealType: string,
+          organizationId?: string,
+        ) {
+          const p = await property(actor, key + '-property', organizationId);
+          return ok<Entity>(
+            '/listings',
+            'POST',
+            { propertyId: p.id, dealType },
+            actor,
+            key,
+          );
+        }
+        await offer(agent, 'counter-personal', 'sale');
+        for (let i = 0; i < 20; i++) {
+          const deal = i < 8 ? 'sale' : i < 15 ? 'long_rent' : 'short_rent';
+          const row = await offer(manager, 'counter-org-' + i, deal, agency.id);
+          if (i < 2) {
+            await pool.query('UPDATE listings SET status=$1 WHERE id=$2', [
+              i === 0 ? 'archived' : 'moderation',
+              row.id,
+            ]);
+          }
+        }
+        assert.deepEqual(await summary(agent), { total: 1, sale: 1, rent: 0 });
+        await membership(true);
+        await offer(agent, 'counter-org-member', 'short_rent', agency.id);
+        await ok(
+          '/account/listing-drafts/' + randomUUID(),
+          'PUT',
+          {
+            version: 0,
+            form: {
+              ...incompleteForm,
+              organizationId: agency.id,
+              deal: 'long_rent',
+            },
+          },
+          agent,
+        );
+        const firstPage = await ok<Entity[]>(
+          '/listings',
+          'GET',
+          undefined,
+          agent,
+        );
+        assert.equal(firstPage.length, 20);
+        assert.deepEqual(await summary(manager), {
+          total: 21,
+          sale: 8,
+          rent: 13,
+        });
+        assert.deepEqual(await summary(agent), {
+          total: 23,
+          sale: 9,
+          rent: 14,
+        });
+        await membership(false);
+        assert.deepEqual(await summary(agent), { total: 2, sale: 1, rent: 1 });
+        assert.deepEqual(await summary(manager), {
+          total: 21,
+          sale: 8,
+          rent: 13,
+        });
       },
     );
     await t.test(
@@ -1954,6 +2059,34 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       };
       assert.ok(schema.paths['/v1/auth/register']);
       assert.ok(schema.paths['/v1/properties']);
+      const summaryContract = schema.paths['/v1/listings/summary'] as {
+        get: {
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    required: string[];
+                    properties: Record<
+                      string,
+                      { type: string; minimum: number }
+                    >;
+                    additionalProperties: boolean;
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+      const counts =
+        summaryContract.get.responses['200'].content['application/json'].schema;
+      assert.deepEqual(counts.required.sort(), ['rent', 'sale', 'total']);
+      assert.equal(counts.additionalProperties, false);
+      for (const key of counts.required) {
+        assert.equal(counts.properties[key]?.type, 'integer');
+        assert.equal(counts.properties[key]?.minimum, 0);
+      }
       assert.ok(schema.paths['/v1/auth/verification/phone/capabilities']);
       assert.ok(schema.paths['/v1/auth/verification/phone/otp']);
       assert.ok(schema.paths['/v1/auth/verification/phone/otp/confirm']);

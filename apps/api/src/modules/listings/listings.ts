@@ -118,6 +118,14 @@ export const createListingSchema = z.union([
     .strict(),
 ]);
 
+const cabinetListings = `
+  SELECT l.* FROM listings l WHERE l.organization_id IS NULL AND l.seller_id=$1
+  UNION ALL
+  SELECT l.* FROM memberships m
+  JOIN organizations o ON o.id=m.organization_id
+  JOIN listings l ON l.organization_id=o.id
+  WHERE m.user_id=$1 AND m.active AND o.active`;
+
 @Injectable()
 export class Listings {
   constructor(
@@ -275,9 +283,30 @@ export class Listings {
       query,
     );
     return this.db.rows(
-      `SELECT l.* FROM listings l WHERE (l.organization_id IS NULL AND l.seller_id=$1 OR l.organization_id IN (SELECT m.organization_id FROM memberships m JOIN organizations o ON o.id=m.organization_id WHERE m.user_id=$1 AND m.active AND o.active)) AND ($2::uuid IS NULL OR l.id>$2) ORDER BY l.id LIMIT $3`,
+      `SELECT * FROM (${cabinetListings}) AS l
+       WHERE $2::uuid IS NULL OR l.id>$2 ORDER BY l.id LIMIT $3`,
       [actor.id, input.after ?? null, input.limit],
     );
+  }
+  async summary(actor: Actor) {
+    seller(actor);
+    const [counts] = await this.db.rows<{
+      total: number;
+      sale: number;
+      rent: number;
+    }>(
+      `SELECT count(*)::int AS total,
+              (count(*) FILTER (WHERE deal='sale'))::int AS sale,
+              (count(*) FILTER (WHERE deal IN ('long_rent','short_rent')))::int AS rent
+       FROM (
+         SELECT l.deal_type::text AS deal FROM (${cabinetListings}) AS l
+         UNION ALL
+         SELECT form->>'deal' FROM listing_form_drafts
+         WHERE owner_id=$1 AND listing_id IS NULL
+       ) AS offers`,
+      [actor.id],
+    );
+    return counts!;
   }
   async patch(actor: Actor, id: string, body: unknown) {
     seller(actor);
@@ -488,6 +517,9 @@ export class ListingController {
   }
   @Get() mine(@CurrentActor() actor: Actor, @Query() query: unknown) {
     return this.listings.mine(actor, query);
+  }
+  @Get('summary') summary(@CurrentActor() actor: Actor) {
+    return this.listings.summary(actor);
   }
   @Public() @Get(':id/public') public(@Param('id') id: string) {
     return this.listings.published(id);
