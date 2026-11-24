@@ -418,7 +418,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
           assert.equal(manual.status, 201);
           await imports.once();
           assert.deepEqual(await (await call(base + '/links')).json(), [
-            { ...response!.feed, lastRunId: retried!.preview.runId },
+            { ...response!.feed, lastRunId: mismatch!.preview.runId },
           ]);
         } finally {
           delete fetcher.xml;
