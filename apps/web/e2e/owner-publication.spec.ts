@@ -643,7 +643,7 @@ test('independent agent reopens an apartment sale draft, revises its preview and
       'Светлая квартира с отдельной кухней и окнами во двор.';
     await editor.getByLabel('Цена, ₽', { exact: true }).fill('10650000');
     await editor
-      .getByLabel('Описание', { exact: true })
+      .getByRole('textbox', { name: 'Описание', exact: true })
       .fill(revisedDescription);
     await expect(
       editor.getByRole('button', {
