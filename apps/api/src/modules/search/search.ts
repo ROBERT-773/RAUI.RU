@@ -461,7 +461,7 @@ export class Search {
           paidPlacement: PaidPlacementSignal | null;
           variants: Record<string, unknown>;
         }>(
-          `SELECT candidate.listing_id,m.id,m.variants,${paidPlacementProjection} AS "paidPlacement" FROM unnest($1::uuid[]) AS candidate(listing_id) LEFT JOIN LATERAL (SELECT id,variants FROM media WHERE listing_id=candidate.listing_id AND state='ready' AND variants ? 'small' ORDER BY (kind='photo') DESC,created_at,id LIMIT 1) m ON true`,
+          `SELECT candidate.listing_id,m.id,m.variants,${paidPlacementProjection} AS "paidPlacement" FROM unnest($1::uuid[]) AS candidate(listing_id) LEFT JOIN LATERAL (SELECT id,variants FROM media WHERE listing_id=candidate.listing_id AND state='ready' AND variants ? 'small' ORDER BY (kind='photo') DESC,feed_photo_position NULLS LAST,created_at,id LIMIT 1) m ON true`,
           [rows.map((r) => r.id)],
         )
       : [];

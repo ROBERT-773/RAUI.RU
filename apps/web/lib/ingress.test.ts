@@ -415,6 +415,60 @@ test('organization feed proxy admits the one-link import entry point only', asyn
   ).toBe(404);
 });
 
+test('feed trust proxy exposes source pagination and versioned decisions with the existing origin protection', async () => {
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('WEB_ORIGIN', 'https://staging.raui.ru');
+  const fetcher = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+    async () => new Response('{}'),
+  );
+  vi.stubGlobal('fetch', fetcher);
+  const { GET, PATCH } = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const base = ['v1', 'admin', 'integrations', 'feeds'];
+  const path = [...base, id, 'trust'];
+  const origin = 'https://staging.raui.ru';
+  const url = origin + '/api/' + path.join('/');
+  expect(
+    (
+      await GET(
+        new NextRequest(origin + '/api/' + base.join('/') + '?after=' + id),
+        { params: Promise.resolve({ path: base }) },
+      )
+    ).status,
+  ).toBe(200);
+  expect(String(fetcher.mock.calls[0]![0])).toContain('?after=' + id);
+  expect(
+    (
+      await PATCH(
+        new NextRequest(url, {
+          method: 'PATCH',
+          headers: { origin },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await PATCH(
+        new NextRequest(url, {
+          method: 'PATCH',
+          headers: { origin: 'https://other.example' },
+          body: '{}',
+        }),
+        { params: Promise.resolve({ path }) },
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (await GET(new NextRequest(url), { params: Promise.resolve({ path }) }))
+      .status,
+  ).toBe(404);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
 test('registration approval proxy admits only queue, detail and idempotent decision', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'development');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');

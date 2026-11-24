@@ -96,10 +96,20 @@ async function proxy(
         isUuid(path[3]) &&
         path[4] === 'decision' &&
         request.method === 'POST'));
+  const feedTrustRoute =
+    path[1] === 'admin' &&
+    path[2] === 'integrations' &&
+    path[3] === 'feeds' &&
+    ((path.length === 4 && request.method === 'GET') ||
+      (path.length === 6 &&
+        isUuid(path[4]) &&
+        path[5] === 'trust' &&
+        request.method === 'PATCH'));
   if (
     path[0] !== 'v1' ||
     (personalFeeds && !ownFeedsRoute) ||
-    (!staffPermissionsRoute &&
+    (!feedTrustRoute &&
+      !staffPermissionsRoute &&
       !registrationRoute &&
       !propertyRoute &&
       !ownOrganizationsRoute &&

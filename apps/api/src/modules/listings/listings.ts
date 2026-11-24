@@ -277,7 +277,12 @@ export class Listings {
       return updated!;
     });
   }
-  async validate(sql: Sql, listing: Listing, actor: Actor) {
+  async validate(
+    sql: Sql,
+    listing: Listing,
+    actor: Actor,
+    minimumPhotos: 1 | 5 = 5,
+  ) {
     if (listing.description.trim().length < 15)
       throw new BadRequestException(
         'Description must contain at least 15 characters',
@@ -294,7 +299,7 @@ export class Listings {
       Number(listing.price) <= 0
     )
       throw new BadRequestException('Title and price required for publication');
-    await this.media.ready(sql, listing.id);
+    await this.media.ready(sql, listing.id, minimumPhotos);
   }
   async transition(actor: Actor, id: string, body: unknown, key: unknown) {
     seller(actor);

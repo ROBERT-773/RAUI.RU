@@ -1,5 +1,9 @@
 import 'reflect-metadata';
+import { Buffer } from 'node:buffer';
 import { setTimeout as delay } from 'node:timers/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import sharp from 'sharp';
 import { Test } from '@nestjs/testing';
 import { DatabaseModule } from '../dist/modules/database/database.js';
 import {
@@ -7,6 +11,7 @@ import {
   ProfessionalImportsModule,
 } from '../dist/modules/professional/imports.js';
 import { FeedFetcher } from '../dist/modules/professional/feed-fetch.js';
+import { FeedPhotoFetcher } from '../dist/modules/professional/feed-photos-fetch.js';
 
 const db = new URL(process.env.DATABASE_URL ?? '');
 if (
@@ -21,13 +26,15 @@ if (
     'XML browser fixture requires an isolated local test database',
   );
 }
-function flat(id, price) {
+const domain = 'https://xml-fixture.example.test';
+function flat(id, price, example = 'preview', picture = 'photo.png') {
   return `<Object><Category>newBuildingFlatSale</Category><ExternalId>${id}</ExternalId>
   <Title>Квартира в новостройке</Title><Description>Тестовая квартира</Description>
-  <Address>Москва, Тестовая улица, 1</Address><City>Москва</City>
+  <Address>Москва, Тестовая улица, 1, кв. ${example}</Address><City>Москва</City>
   <Coordinates><Lat>55.7</Lat><Lng>37.6</Lng></Coordinates>
   <FloorNumber>4</FloorNumber><Building><FloorsCount>9</FloorsCount></Building>
   <FlatRoomsCount>2</FlatRoomsCount><TotalArea>55.3</TotalArea><KitchenArea>10</KitchenArea>
+  <Photos><PhotoSchema><FullUrl>${domain}/${picture}</FullUrl><IsDefault>true</IsDefault></PhotoSchema></Photos>
   <BargainTerms><Price>${price}</Price><Currency>rur</Currency></BargainTerms></Object>`;
 }
 const cian =
@@ -66,15 +73,53 @@ const fixtures = new Map(
     xml,
   ]),
 );
+const bytes = await sharp({
+  create: { width: 640, height: 480, channels: 3, background: '#355a82' },
+})
+  .png()
+  .toBuffer();
 const context = await Test.createTestingModule({
   imports: [DatabaseModule, ProfessionalImportsModule],
 })
   .overrideProvider(FeedFetcher)
   .useValue({
     async fetch(url) {
+      const key =
+        /^https:\/\/xml-fixture\.example\.test\/trusted-([a-f0-9-]{36})\.xml$/.exec(
+          url,
+        )?.[1];
+      if (key && process.env.E2E_TRUSTED_FEEDS === 'true') {
+        const damagedPhoto = existsSync(
+          join(process.env.LOCAL_PRIVATE_DIR, key + '.invalid-photo'),
+        );
+        const updated = existsSync(
+          join(process.env.LOCAL_PRIVATE_DIR, key + '.price-updated'),
+        );
+        return (
+          '<Feed><Feed_Version>2</Feed_Version>' +
+          flat(
+            'available-flat',
+            damagedPhoto ? '9900000' : updated ? '9750000' : '9500000',
+            key.slice(0, 8),
+            damagedPhoto ? 'damaged.png' : 'photo.png',
+          ) +
+          flat('invalid-price', 'n/a') +
+          '</Feed>'
+        );
+      }
       const xml = fixtures.get(url);
       if (!xml) throw new Error('Unknown XML fixture');
       return xml;
+    },
+  })
+  .overrideProvider(FeedPhotoFetcher)
+  .useValue({
+    async fetch(url) {
+      if (url === domain + '/damaged.png')
+        return { bytes: Buffer.from('Invalid test image'), mime: 'image/png' };
+      if (url !== domain + '/photo.png')
+        throw new Error('Unknown XML photo fixture');
+      return { bytes, mime: 'image/png' };
     },
   })
   .compile();

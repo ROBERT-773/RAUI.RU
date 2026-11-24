@@ -1,6 +1,6 @@
 import { hash } from '../../common/security';
 import { Injectable, Module } from '@nestjs/common';
-import sharp from 'sharp';
+import { storeImageVariants } from './image-variants';
 import { Database } from '../database/database';
 import { Audit } from '../audit/audit';
 import { ObjectStorage, StorageModule } from './storage';
@@ -58,29 +58,7 @@ export class MediaWorker {
         [job.media_id],
       );
       const bytes = await this.storage.get(media!.original_key);
-      const variants: MediaRow['variants'] = {};
-      for (const [name, width, format] of [
-        ['thumb', 240, 'webp'],
-        ['small', 800, 'webp'],
-        ['large', 1600, 'webp'],
-        ['avif', 1600, 'avif'],
-      ] as const) {
-        const { data, info } = await sharp(bytes, {
-          limitInputPixels: 40_000_000,
-        })
-          .rotate()
-          .resize({ width, withoutEnlargement: true })
-          .toFormat(format, { quality: format === 'avif' ? 55 : 80 })
-          .toBuffer({ resolveWithObject: true });
-        const key = `processed/${media!.id}/${name}.${format}`;
-        await this.storage.put(key, data, `image/${format}`);
-        variants[name] = {
-          key,
-          width: info.width,
-          height: info.height,
-          mime: `image/${format}`,
-        };
-      }
+      const variants = await storeImageVariants(this.storage, media!.id, bytes);
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
           "UPDATE media_jobs SET state='done',lease_until=NULL WHERE id=$1 AND state='running' AND attempts=$2 RETURNING id",

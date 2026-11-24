@@ -48,6 +48,13 @@ async function submitDraft(page: Page, draft: Locator, listingId: string) {
     await expect(
       draft.getByText(`Загружено фотографий: ${number} из 21.`),
     ).toBeVisible();
+    if (number < 5)
+      await expect(
+        draft.getByRole('button', {
+          name: 'Отправить на модерацию',
+          exact: true,
+        }),
+      ).toBeDisabled();
   }
   await expect
     .poll(
@@ -89,6 +96,11 @@ async function submitDraft(page: Page, draft: Locator, listingId: string) {
   await expect(
     draft.getByText('Статус: На модерации', { exact: true }),
   ).toBeVisible();
+  expect(
+    (
+      await page.request.get('/api/v1/listings/' + listingId + '/public')
+    ).status(),
+  ).toBe(404);
 }
 
 async function approveListing(staff: Page, listingId: string, title: string) {

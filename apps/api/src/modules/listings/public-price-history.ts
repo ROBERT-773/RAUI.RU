@@ -48,7 +48,8 @@ export async function readLastPublicPriceSnapshot(
 ): Promise<PublicPriceSnapshot | null> {
   const { rows } = await sql.query<{ after_data: unknown }>(
     `SELECT after_data FROM listing_history WHERE listing_id=$1
-     AND event='moderation.decided' AND after_data ? 'publicPriceSnapshot'
+     AND event IN ('moderation.decided','professional.feed.published','professional.feed.publication_updated')
+     AND after_data ? 'publicPriceSnapshot'
      ORDER BY id DESC LIMIT 1`,
     [listingId],
   );

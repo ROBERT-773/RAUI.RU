@@ -528,6 +528,9 @@ export default function Account({
           </Button>
         ))}
       {canList && <Link href="/account/listings">Мои объявления</Link>}
+      {user.role === 'admin' && (
+        <Link href="/admin/feeds">Автопубликация из XML</Link>
+      )}
       {user.role === 'agent' && <AgentPublicProfile key={user.public_id} />}
       {user.role === 'agent' && (
         <ProfessionalFeedLinks

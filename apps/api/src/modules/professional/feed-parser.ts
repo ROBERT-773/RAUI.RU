@@ -114,6 +114,30 @@ function number(row: unknown, path: string) {
 function repeated(value: unknown): unknown[] {
   return Array.isArray(value) ? value : value === undefined ? [] : [value];
 }
+function imageLink(
+  image: unknown,
+  kind: 'photo' | 'floor_plan',
+  path = '#text',
+) {
+  const url = typeof image === 'string' ? image : str(image, path);
+  // Keep a malformed entry in the row so it is reported before replacing an existing gallery.
+  return { url: url ?? '', kind };
+}
+function cianGallery(row: unknown) {
+  const images = repeated(field(row, 'Photos.PhotoSchema'));
+  const defaultPhoto = (image: unknown) =>
+    ['true', '1'].includes(str(image, 'IsDefault')?.toLowerCase() ?? '');
+  const photos = [
+    ...images.filter(defaultPhoto),
+    ...images.filter((image) => !defaultPhoto(image)),
+  ].map((image) => imageLink(image, 'photo', 'FullUrl'));
+  const layout = field(row, 'LayoutPhoto');
+  if (layout === undefined) return photos;
+  const entry = imageLink(layout, 'floor_plan', 'FullUrl');
+  return ['false', '0'].includes(str(layout, 'IsDefault')?.toLowerCase() ?? '')
+    ? [...photos, entry]
+    : [entry, ...photos];
+}
 const xmlListingPaths = new Set([
   'realty-feed.offer',
   'Ads.Ad',
@@ -127,7 +151,11 @@ function parseXml(input: XmlInput) {
   let count = 0;
   const body = new XMLParser({
     ignoreAttributes: false,
-    processEntities: false,
+    processEntities: {
+      maxEntityCount: 0,
+      tagFilter: (name) =>
+        ['image', 'plan', 'fullurl'].includes(name.toLowerCase()),
+    },
     maxNestedTags: 20,
     parseTagValue: false,
     ignoreDeclaration: true,
@@ -370,6 +398,17 @@ function normalizedYandex(row: unknown) {
     description: str(row, 'description') ?? '',
     attributes: attrs,
     address: yandexAddress(row),
+    photos: repeated(field(row, 'image')).map((image) =>
+      imageLink(
+        image,
+        str(image, '@_tag')
+          ?.toLowerCase()
+          .split(/[\s-]+/)
+          .includes('plan')
+          ? 'floor_plan'
+          : 'photo',
+      ),
+    ),
   };
 }
 function normalizedAvito(row: unknown) {
@@ -407,6 +446,9 @@ function normalizedAvito(row: unknown) {
     description: str(row, 'Description') ?? '',
     attributes: attrs,
     address: address(row, 'Address', 'Latitude', 'Longitude', 'City'),
+    photos: repeated(field(row, 'Images.Image')).map((image) =>
+      imageLink(image, 'photo', '@_url'),
+    ),
   };
 }
 const cianCategories = new Map(
@@ -477,6 +519,7 @@ function normalizedCian(row: unknown) {
     description: str(row, 'Description') ?? '',
     attributes: attrs,
     address: address(row, 'Address', 'Coordinates.Lat', 'Coordinates.Lng'),
+    photos: cianGallery(row),
   };
 }
 function domclickRows(root: XmlRecord, mapped: boolean) {
@@ -530,6 +573,15 @@ function domclickRows(root: XmlRecord, mapped: boolean) {
           price: number(flat, 'price'),
           attributes: attrs,
           address: location,
+          photos: [
+            ...repeated(field(complex, 'images.image')).map((image) =>
+              imageLink(image, 'photo'),
+            ),
+            ...[
+              ...repeated(field(flat, 'plans.plan')),
+              ...repeated(field(flat, 'plan')),
+            ].map((image) => imageLink(image, 'floor_plan')),
+          ],
         });
       }
     }

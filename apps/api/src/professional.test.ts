@@ -206,6 +206,10 @@ test('Missing import items fail validation before authorization or persistence',
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
   );
   await assert.rejects(
     imports.apply({} as never, 'invalid', 'invalid', {}, 'test-key'),
