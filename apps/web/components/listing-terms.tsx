@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 export type ListingTerms = Record<string, string | number | boolean>;
 
 export default function ListingTermsFields({
@@ -9,6 +11,15 @@ export default function ListingTermsFields({
   terms: ListingTerms;
   onChange: (terms: ListingTerms) => void;
 }) {
+  const dateErrorId = useId();
+  const dateError =
+    typeof terms.availableFrom === 'string' &&
+    typeof terms.availableUntil === 'string' &&
+    terms.availableFrom !== '' &&
+    terms.availableUntil !== '' &&
+    terms.availableUntil <= terms.availableFrom
+      ? 'Выберите дату выезда позже даты заезда.'
+      : '';
   const set = (key: string, value: string | number | boolean) => {
     const next = { ...terms };
     if (value === '') delete next[key];
@@ -63,15 +74,23 @@ export default function ListingTermsFields({
               }
             />
           </label>
-          <label className="listing-option">
-            <input
-              type="checkbox"
-              checked={terms.utilitiesIncluded === true}
-              onChange={(event) =>
-                set('utilitiesIncluded', event.target.checked)
+          <label>
+            Коммунальные платежи
+            <select
+              value={
+                typeof terms.utilitiesIncluded === 'boolean'
+                  ? String(terms.utilitiesIncluded)
+                  : ''
               }
-            />
-            Коммунальные платежи включены
+              onChange={(event) => {
+                const value = event.target.value;
+                set('utilitiesIncluded', value === '' ? '' : value === 'true');
+              }}
+            >
+              <option value="">Не указано</option>
+              <option value="true">Включены</option>
+              <option value="false">Оплачиваются отдельно</option>
+            </select>
           </label>
         </>
       ) : (
@@ -121,10 +140,16 @@ export default function ListingTermsFields({
             <input
               type="date"
               required={Boolean(terms.availableFrom)}
+              aria-invalid={dateError ? true : undefined}
+              aria-describedby={dateError ? dateErrorId : undefined}
+              ref={(input) => {
+                input?.setCustomValidity(dateError);
+              }}
               value={String(terms.availableUntil ?? '')}
               onChange={(event) => set('availableUntil', event.target.value)}
             />
           </label>
+          {dateError && <p id={dateErrorId}>{dateError}</p>}
         </>
       )}
     </>

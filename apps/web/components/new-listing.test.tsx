@@ -901,7 +901,12 @@ test('long rental offers use rent-specific terms when saving a draft', async () 
   fireEvent.change(screen.getByLabelText('Залог, ₽'), {
     target: { value: '10000' },
   });
-  fireEvent.click(screen.getByLabelText('Коммунальные платежи включены'));
+  fireEvent.change(
+    screen.getByRole('combobox', { name: 'Коммунальные платежи' }),
+    {
+      target: { value: 'false' },
+    },
+  );
   fireEvent.click(
     screen.getByRole('button', { name: 'Перейти к фотографиям' }),
   );
@@ -911,11 +916,45 @@ test('long rental offers use rent-specific terms when saving a draft', async () 
     'POST',
     expect.objectContaining({
       dealType: 'long_rent',
-      terms: { deposit: 10000, utilitiesIncluded: true },
+      terms: { deposit: 10000, utilitiesIncluded: false },
     }),
     expect.any(Object),
   );
 });
+test('an invalid checkout stays editable and a corrected stay can proceed to photos', async () => {
+  setup();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  await fill('short_rent');
+  const arrival = screen.getByLabelText('Доступно с');
+  const departure = screen.getByLabelText(
+    'Доступно до (дата выезда)',
+  ) as HTMLInputElement;
+  const next = screen.getByRole('button', { name: 'Перейти к фотографиям' });
+  fireEvent.change(arrival, { target: { value: '2030-05-02' } });
+  for (const day of ['2030-05-01', '2030-05-02']) {
+    fireEvent.change(departure, { target: { value: day } });
+    expect(departure.checkValidity()).toBe(false);
+    fireEvent.click(next);
+    expect(api).not.toHaveBeenCalledWith(
+      'v1/properties',
+      'POST',
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(api).not.toHaveBeenCalledWith(
+      'v1/listings',
+      'POST',
+      expect.anything(),
+      expect.anything(),
+    );
+  }
+  fireEvent.change(arrival, { target: { value: '2030-05-01' } });
+  expect(departure.checkValidity()).toBe(true);
+  fireEvent.click(next);
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+});
+
 test('short rental drafts save guest capacity and the minimum stay', async () => {
   setup();
   const created = vi.fn();
