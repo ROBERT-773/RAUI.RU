@@ -353,8 +353,9 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
         '/api/v1/listings/' + listingId + '/contact-settings',
       ),
     );
-    await number.check();
+    await number.click();
     expect((await selecting).status()).toBe(200);
+    await expect(number).toBeChecked();
     await prepareDraftPreview(page, draft, listingId);
     await submitReviewedDraft(page, draft, listingId);
     expect((await visitor.request.get(`/listings/${listingId}`)).status()).toBe(
