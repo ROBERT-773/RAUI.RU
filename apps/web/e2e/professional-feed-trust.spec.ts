@@ -162,7 +162,9 @@ test('an administrator approves a checked XML source with TOTP, its owner sees a
       await expect(
         visitor.getByRole('heading', { name: listing.title, exact: true }),
       ).toBeVisible();
-      const visiblePhoto = visitor.locator('img.detail-photo').first();
+      const visiblePhoto = visitor
+        .getByRole('region', { name: 'Фотографии', exact: true })
+        .getByRole('img', { name: 'Фото недвижимости', exact: true });
       await visiblePhoto.scrollIntoViewIfNeeded();
       await expect
         .poll(() =>
