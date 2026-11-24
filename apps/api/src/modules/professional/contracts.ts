@@ -4,6 +4,25 @@ import { addressSchema } from '../geo/geo';
 import { fields } from '../listings/listings';
 import { codeSchema } from '../catalog/catalog';
 export const feedProvider = z.enum(['yandex', 'avito', 'cian', 'domclick']);
+export const feedPhotosSchema = z
+  .array(
+    z
+      .object({
+        url: z
+          .string()
+          .trim()
+          .max(4096)
+          .url()
+          .refine((value) => value.toLowerCase().startsWith('https://')),
+        kind: z.enum(['photo', 'floor_plan']),
+      })
+      .strict(),
+  )
+  .max(42)
+  .refine(
+    (items) => items.filter((item) => item.kind === 'photo').length <= 21,
+  );
+export type FeedPhotoInput = z.infer<typeof feedPhotosSchema>[number];
 export const importItem = z
   .object({
     externalReference: z.string().trim().min(1).max(200),
@@ -19,6 +38,7 @@ export const importItem = z
       )
       .default({}),
     address: addressSchema,
+    photos: feedPhotosSchema.optional(),
   })
   .strict();
 export const importInput = z

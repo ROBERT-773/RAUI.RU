@@ -11,7 +11,14 @@ export const feedProviders = {
 type Report = {
   id: string;
   status: 'running' | 'succeeded' | 'quarantined' | 'failed';
-  stats: { total?: number; valid?: number; quarantined?: number };
+  stats: {
+    total?: number;
+    valid?: number;
+    quarantined?: number;
+    created?: number;
+    updated?: number;
+    unchanged?: number;
+  };
   error: string | null;
 };
 type Rejected = {
@@ -20,6 +27,10 @@ type Rejected = {
   errors: { message: string }[];
 };
 const failureHints = new Map([
+  [
+    'snapshot_unavailable',
+    'Сохранённая версия выгрузки недоступна. Запустите новую проверку ссылки.',
+  ],
   ['feed_host_not_approved', feedHostApprovalHint],
   [
     'feed_encoding_invalid',
@@ -125,7 +136,13 @@ function RejectedRows({ path, total }: { path: string; total: number }) {
   );
 }
 
-export default function FeedRunReport({ path }: { path: string }) {
+export default function FeedRunReport({
+  path,
+  kind = 'preview',
+}: {
+  path: string;
+  kind?: 'apply' | 'preview';
+}) {
   const [report, setReport] = useState<Report>();
   const [retry, setRetry] = useState(0);
   const [error, setError] = useState(false);
@@ -165,21 +182,41 @@ export default function FeedRunReport({ path }: { path: string }) {
       </p>
     );
   if (!report || report.status === 'running')
-    return <p role="status">Проверка в очереди или выполняется…</p>;
-  if (report.status === 'failed')
     return (
-      <p role="alert">
-        {failureHints.get(report.error ?? '') ??
-          'Проверка не завершилась. Проверьте доступ к XML-файлу и его формат.'}
+      <p role="status">
+        {kind === 'apply'
+          ? 'Импорт в очереди или выполняется…'
+          : 'Проверка в очереди или выполняется…'}
       </p>
     );
-  const { total, valid, quarantined } = report.stats;
+  const { total, valid, quarantined, created, updated, unchanged } =
+    report.stats;
+  const failed = report.status === 'failed';
+  let counts: string | undefined;
+  if (kind === 'apply') {
+    if (
+      [total, created, updated, unchanged, quarantined].every(
+        (number) => typeof number === 'number',
+      )
+    )
+      counts = `${failed ? 'Обработано до остановки' : 'Получено'} — ${total}. Добавлено — ${created}. Обновлено — ${updated}. Без изменений — ${unchanged}. С ошибками — ${quarantined}.`;
+    else if (!failed)
+      counts =
+        'Импорт завершён. Подробные счётчики для этого запуска недоступны.';
+  } else if (!failed) {
+    counts = `Проверено объектов — ${total}. Прошли проверку — ${valid}. С ошибками — ${quarantined}.`;
+  }
   return (
     <>
-      <p role="status">
-        Проверено объектов — {total}. Прошли проверку — {valid}. С ошибками —{' '}
-        {quarantined}.
-      </p>
+      {failed && (
+        <p role="alert">
+          {failureHints.get(report.error ?? '') ??
+            (kind === 'apply'
+              ? 'Импорт не завершился. Проверьте доступ к источнику.'
+              : 'Проверка не завершилась. Проверьте доступ к XML-файлу и его формат.')}
+        </p>
+      )}
+      {counts && <p role="status">{counts}</p>}
       {Boolean(quarantined) && (
         <>
           <button

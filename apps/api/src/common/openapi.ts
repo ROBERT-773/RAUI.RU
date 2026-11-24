@@ -55,6 +55,8 @@ const linkSummary = object({
   provider: feedProvider,
   host: z.string(),
   active: z.boolean(),
+  trusted: z.boolean(),
+  lastApplyRunId: uuid.nullable(),
 });
 const linkRun = object({
   id: uuid,
@@ -64,12 +66,15 @@ const linkRun = object({
     total: z.number().optional(),
     valid: z.number().optional(),
     quarantined: z.number().optional(),
+    created: z.number().optional(),
+    updated: z.number().optional(),
+    unchanged: z.number().optional(),
   }),
   error: z
     .string()
     .nullable()
     .describe(
-      'Safe failure code. feed_provider_mismatch_<provider> identifies the detected format (generic for unmapped XML); feed_host_not_approved requires administrator approval.',
+      'Safe failure code. feed_provider_mismatch_<provider> identifies the detected format (generic for unmapped XML); feed_host_not_approved requires administrator approval. snapshot_unavailable means a partial run from an older worker must be replaced by a new check.',
     ),
 });
 const linkItem = object({
@@ -78,6 +83,7 @@ const linkItem = object({
   property_id: uuid.nullable(),
   listing_id: uuid.nullable(),
   status: z.string(),
+  publication_result: z.enum(['created', 'updated', 'unchanged']).nullable(),
   errors: z.array(
     z.object({
       code: z.string(),
@@ -87,6 +93,22 @@ const linkItem = object({
   ),
 });
 const feedReads: Record<string, z.ZodType> = {};
+const adminFeedRow = object({
+  id: uuid,
+  name: z.string(),
+  organization_id: uuid.nullable(),
+  ownerName: z.string(),
+  active: z.boolean(),
+  version,
+  next_run_at: z.string().nullable(),
+  provider: feedProvider.nullable(),
+  host: z.string().nullable(),
+  trustEligible: z.boolean(),
+  trusted: z.boolean(),
+});
+const adminFeeds = '/v1/admin/integrations/feeds';
+feedReads['get ' + adminFeeds] = z.array(adminFeedRow);
+feedReads['patch ' + adminFeeds + '/{id}/trust'] = adminFeedRow;
 for (const prefix of [
   '/v1/organizations/{organizationId}/feeds',
   '/v1/account/feeds',
@@ -120,6 +142,10 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/organizations/{organizationId}/feeds/{feedId}/apply': importInput,
   'patch /v1/organizations/{organizationId}/feeds/{feedId}': feedConfig,
   'patch /v1/admin/integrations/feeds/{id}': feedConfig,
+  'patch /v1/admin/integrations/feeds/{id}/trust': object({
+    version,
+    trusted: z.boolean(),
+  }),
   'post /v1/partner/feeds/{id}/apply': importInput,
   'post /v1/organizations/{organizationId}/professional/portfolios': object({
     name: z.string().trim().min(2).max(120),
@@ -497,6 +523,22 @@ export function enrichOpenApi(document: OpenAPIObject) {
         },
       };
       if (feedReads[operationId]) {
+        if (path === adminFeeds)
+          operation.parameters = [
+            ...(operation.parameters ?? []),
+            {
+              in: 'query',
+              name: 'after',
+              description:
+                'Exclusive source ID; each page contains at most 100 rows.',
+              schema: { type: 'string', format: 'uuid' },
+            },
+          ];
+        if (path === adminFeeds + '/{id}/trust')
+          operation.responses['409'] = {
+            description:
+              'Stale source version or source is ineligible for approval. Reload the source list before another decision.',
+          };
         if (method === 'post' && path.endsWith('/link'))
           operation.responses['400'] = {
             description:
@@ -506,7 +548,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description:
             method === 'post'
               ? 'Saved link and queued preview'
-              : 'Import preview',
+              : path.startsWith(adminFeeds)
+                ? 'Administrative feed trust status'
+                : 'XML source or import report',
           content: {
             'application/json': {
               schema: z.toJSONSchema(feedReads[operationId]!) as SchemaObject,

@@ -126,6 +126,109 @@ test('reopens an existing personal source, checks it without its URL, and scopes
   expect(row.queryByText(/Прошли проверку/)).toBeNull();
 });
 
+test('refreshes the latest application report without submitting the replacement URL being edited', async () => {
+  let requests = 0;
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path.endsWith('/links'))
+      return [
+        {
+          ...feed,
+          trusted: ++requests > 1,
+          lastRunId: null,
+          lastApplyRunId: requests > 1 ? 'applied' : 'old',
+        },
+      ];
+    return {
+      id: 'run',
+      status: 'succeeded',
+      stats: { total: 1, created: 0, updated: 1, unchanged: 0, quarantined: 0 },
+      error: null,
+    };
+  });
+  render(<ProfessionalFeedLinks />);
+  const row = await openSection(true);
+  fireEvent.change(row.getByLabelText('ЦИАН'), {
+    target: { value: 'https://replacement.example/next.xml' },
+  });
+  fireEvent.click(row.getByRole('button', { name: 'Обновить отчёты' }));
+  await row.findByText(/Автопубликация разрешена/);
+  expect(
+    row.getByDisplayValue('https://replacement.example/next.xml'),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(api).toHaveBeenCalledWith('v1/account/feeds/feed-1/runs/applied'),
+  );
+  expect(vi.mocked(api).mock.calls.some((call) => call[1] === 'POST')).toBe(
+    false,
+  );
+});
+
+test('shows the approval and latest application counts separately from the XML preview', async () => {
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path.endsWith('/links'))
+      return [
+        {
+          ...feed,
+          trusted: true,
+          lastRunId: run.id,
+          lastApplyRunId: 'applied',
+        },
+      ];
+    if (path.endsWith('/applied'))
+      return {
+        id: 'applied',
+        status: 'quarantined',
+        stats: {
+          total: 12,
+          created: 2,
+          updated: 3,
+          unchanged: 6,
+          quarantined: 1,
+        },
+        error: null,
+      };
+    return run;
+  });
+  render(<ProfessionalFeedLinks organizationId="org-1" />);
+  const row = await openSection();
+  expect(await row.findByText(/Автопубликация разрешена/)).toBeTruthy();
+  const apply = within(
+    await row.findByRole('group', { name: 'Последний импорт' }),
+  );
+  expect(await apply.findByRole('status')).toBeTruthy();
+  await apply.findByText(
+    /Получено — 12. Добавлено — 2. Обновлено — 3. Без изменений — 6. С ошибками — 1/,
+  );
+  expect(await row.findByText(/Проверено объектов — 11/)).toBeTruthy();
+});
+
+test('a stopped import shows committed changes and keeps per-item errors accessible', async () => {
+  vi.mocked(api).mockImplementation(async (path) => {
+    if (path.endsWith('/links'))
+      return [
+        { ...feed, trusted: false, lastRunId: null, lastApplyRunId: 'stopped' },
+      ];
+    if (path.includes('/items?'))
+      return [
+        {
+          external_reference: 'missing-photo',
+          errors: [{ message: 'Проверьте фотографии.' }],
+        },
+      ];
+    return {
+      status: 'failed',
+      error: 'access_revoked',
+      stats: { total: 3, created: 1, updated: 0, unchanged: 1, quarantined: 1 },
+    };
+  });
+  render(<ProfessionalFeedLinks />);
+  const row = await openSection(true);
+  await row.findByText(/Обработано до остановки — 3. Добавлено — 1/);
+  expect(row.getByRole('alert').textContent).toMatch(/отозван/);
+  fireEvent.click(row.getByRole('button', { name: 'Посмотреть ошибки' }));
+  await row.findByText('missing-photo');
+});
+
 test('changing organizations clears link drafts and ignores a late report from the previous organization', async () => {
   let finish: (value: unknown) => void = () => {};
   vi.mocked(api).mockImplementation(async (path) => {

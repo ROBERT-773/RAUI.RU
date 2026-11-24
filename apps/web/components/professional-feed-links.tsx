@@ -10,7 +10,9 @@ type Source = {
   provider: Provider;
   host: string;
   active: boolean;
+  trusted: boolean;
   lastRunId: string | null;
+  lastApplyRunId: string | null;
 };
 type Submitted = {
   feed: Omit<Source, 'lastRunId'>;
@@ -31,9 +33,29 @@ function SourceRow({
   const [source, setSource] = useState(saved);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const request = useRef<{ url: string; key: string } | null>(null);
   const submitting = useRef(false);
+  async function refreshReports() {
+    if (submitting.current) return;
+    submitting.current = true;
+    setRefreshing(true);
+    setError('');
+    try {
+      const links = await api<Source[]>(base + '/links');
+      setSource(links.find((row) => row.provider === provider));
+    } catch (failure) {
+      if (failure instanceof ApiError && [401, 403].includes(failure.status)) {
+        setSource(undefined);
+        setUrl('');
+        setError('Доступ к источнику закрыт.');
+      } else setError('Не удалось обновить отчёты. Попробуйте ещё раз.');
+    } finally {
+      submitting.current = false;
+      setRefreshing(false);
+    }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (submitting.current) return;
@@ -89,6 +111,10 @@ function SourceRow({
           <small>
             {source.active ? 'Ссылка сохранена' : 'Источник отключён'} ·{' '}
             {source.host}
+            {source.active &&
+              (source.trusted
+                ? ' · Автопубликация разрешена'
+                : ' · Без автопубликации')}
           </small>
         )}
         <div className="feed-controls">
@@ -107,12 +133,15 @@ function SourceRow({
               setUrl(event.target.value);
               setError('');
             }}
-            disabled={busy || source?.active === false}
+            disabled={busy || refreshing || source?.active === false}
             required={!source}
           />
           <button
             disabled={
-              busy || source?.active === false || (!url.trim() && !source)
+              busy ||
+              refreshing ||
+              source?.active === false ||
+              (!url.trim() && !source)
             }
           >
             {busy
@@ -124,11 +153,33 @@ function SourceRow({
         </div>
         {error && <p role="alert">{error}</p>}
       </form>
+      {source && (
+        <button
+          type="button"
+          disabled={busy || refreshing}
+          onClick={() => void refreshReports()}
+        >
+          {refreshing ? 'Обновляем отчёты…' : 'Обновить отчёты'}
+        </button>
+      )}
       {source?.lastRunId && (
-        <FeedRunReport
-          key={source.lastRunId}
-          path={base + '/' + source.id + '/runs/' + source.lastRunId}
-        />
+        <div role="group" aria-label="Последняя проверка">
+          <strong>Последняя проверка</strong>
+          <FeedRunReport
+            key={source.lastRunId}
+            path={base + '/' + source.id + '/runs/' + source.lastRunId}
+          />
+        </div>
+      )}
+      {source?.lastApplyRunId && (
+        <div role="group" aria-label="Последний импорт">
+          <strong>Последний импорт</strong>
+          <FeedRunReport
+            key={source.lastApplyRunId}
+            kind="apply"
+            path={base + '/' + source.id + '/runs/' + source.lastApplyRunId}
+          />
+        </div>
       )}
     </section>
   );

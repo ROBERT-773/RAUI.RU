@@ -163,7 +163,7 @@ export class Media {
   async list(actor: Actor, listingId: string) {
     await this.access.get(actor, listingId);
     return this.db.rows(
-      'SELECT id,kind,state,variants,created_at FROM media WHERE listing_id=$1 ORDER BY created_at LIMIT 100',
+      'SELECT id,kind,state,variants,created_at FROM media WHERE listing_id=$1 ORDER BY feed_photo_position NULLS LAST,created_at,id LIMIT 100',
       [listingId],
     );
   }
@@ -227,7 +227,7 @@ export class Media {
   }
   async publicAssets(sql: Sql, listingId: string) {
     const rows = await this.db.rows<MediaRow & { kind: string }>(
-      "SELECT id,kind,variants FROM media WHERE listing_id=$1 AND state='ready' ORDER BY (kind='photo') DESC, created_at, id LIMIT 100",
+      "SELECT id,kind,variants FROM media WHERE listing_id=$1 AND state='ready' ORDER BY (kind='photo') DESC, feed_photo_position NULLS LAST,created_at,id LIMIT 100",
       [listingId],
       sql,
     );
@@ -247,19 +247,19 @@ export class Media {
       ),
     }));
   }
-  async ready(sql: Sql, listingId: string) {
+  async ready(sql: Sql, listingId: string, minimumPhotos: 1 | 5 = 5) {
     const [row] = await this.db.rows<{ ready: string; pending: string }>(
       "SELECT count(*) FILTER(WHERE state='ready' AND kind='photo') AS ready,count(*) FILTER(WHERE state<>'ready') AS pending FROM media WHERE listing_id=$1",
       [listingId],
       sql,
     );
     if (
-      Number(row!.ready) < 5 ||
+      Number(row!.ready) < minimumPhotos ||
       Number(row!.ready) > 21 ||
       Number(row!.pending) > 0
     )
       throw new ConflictException(
-        '5 to 21 ready photos and no pending/failed media required',
+        `${minimumPhotos} to 21 ready photos and no pending/failed media required`,
       );
   }
   async content(

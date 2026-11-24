@@ -221,7 +221,7 @@ export class ProfessionalFeeds {
           id = feed!.id;
         } else if (existing?.url !== url.href) {
           await sql.query(
-            'UPDATE professional_feed_definitions SET transport=$2,version=version+1,updated_at=now() WHERE id=$1',
+            'UPDATE professional_feed_definitions SET transport=$2,publication_approved_at=NULL,publication_approved_by=NULL,last_apply_run_id=NULL,version=version+1,updated_at=now() WHERE id=$1',
             [id, transport],
           );
         }
@@ -243,8 +243,16 @@ export class ProfessionalFeeds {
           id,
           hash(url.href),
         );
+        const [state] = await this.db.rows<{
+          trusted: boolean;
+          lastApplyRunId: string | null;
+        }>(
+          `SELECT publication_approved_at IS NOT NULL AS trusted,last_apply_run_id AS "lastApplyRunId" FROM professional_feed_definitions WHERE id=$1`,
+          [id],
+          sql,
+        );
         return {
-          feed: { id, provider, host: url.hostname, active: true },
+          feed: { id, provider, host: url.hostname, active: true, ...state! },
           preview,
         };
       },
@@ -277,8 +285,11 @@ export class ProfessionalFeeds {
         url: string;
         active: boolean;
         lastRunId: string | null;
+        trusted: boolean;
+        lastApplyRunId: string | null;
       }>(
         `SELECT f.id,f.transport->>'provider' AS provider,f.transport->>'url' AS url,f.active,
+                f.publication_approved_at IS NOT NULL AS trusted,f.last_apply_run_id AS "lastApplyRunId",
                 (SELECT r.id FROM professional_import_runs r WHERE r.feed_id=f.id AND r.mode='dry_run'
                  AND EXISTS (SELECT 1 FROM audit_events a
                    WHERE a.entity_type='professional_import_run' AND a.entity_id=r.id::text

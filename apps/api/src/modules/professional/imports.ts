@@ -13,6 +13,7 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -49,15 +50,31 @@ import { parseFeed } from './feed-parser';
 import { FeedLinkError } from './feed-link-error';
 import { Geocoder, GeoModule } from '../geo/geo';
 import { FeedGeocoding } from './feed-geocoding';
+import { TrustedFeedSources } from './trusted-feed-sources';
+import { FeedPhotos, type PreparedFeedPhoto } from './feed-photos';
+import { FeedPhotoFetcher } from './feed-photos-fetch';
+import { StorageModule } from '../media/storage';
+import {
+  PublicationQuotaModule,
+  PublicationQuotas,
+} from '../listings/publication-quota';
+import {
+  ListingPublicationModule,
+  ListingPublications,
+} from '../listings/publication-service';
 interface Feed {
   id: string;
   organization_id: string | null;
   created_by: string;
+  version: number;
+  publication_approved_at: Date | null;
+  last_apply_run_id: string | null;
   active: boolean;
   schedule_cron: string | null;
   format: string;
   transport: {
     kind: string;
+    linkSlot?: boolean;
     url?: string;
     provider?: 'yandex' | 'avito' | 'cian' | 'domclick';
   };
@@ -73,13 +90,24 @@ interface Job {
   lease_token: string;
   attempts: number;
   source_hash?: string | null;
+  source_version?: number | null;
 }
 interface RecordRow {
+  external_reference: string;
   listing_id: string;
   property_id: string;
   source_id: string;
   fingerprint: string | null;
 }
+const approvedRun = (job: Job) =>
+  job.mode === 'apply' && job.source_version != null;
+const itemCounts = `SELECT count(*)::int AS total,
+  count(*) FILTER(WHERE status IN ('upserted','valid'))::int AS valid,
+  count(*) FILTER(WHERE status IN ('invalid','quarantined'))::int AS quarantined,
+  count(*) FILTER(WHERE publication_result='created')::int AS created,
+  count(*) FILTER(WHERE publication_result='updated')::int AS updated,
+  count(*) FILTER(WHERE publication_result='unchanged')::int AS unchanged
+  FROM professional_import_items WHERE run_id=$1`;
 const pages = z
   .object({
     after: uuid.optional(),
@@ -88,6 +116,7 @@ const pages = z
   .strict();
 @Injectable()
 export class ProfessionalImports {
+  private nextCleanup = 0;
   constructor(
     private readonly db: Database,
     private readonly organizations: Organizations,
@@ -97,6 +126,10 @@ export class ProfessionalImports {
     private readonly properties: Properties,
     private readonly fetcher: FeedFetcher,
     private readonly geocoder: Geocoder,
+    private readonly trustedSources: TrustedFeedSources,
+    private readonly photos: FeedPhotos,
+    private readonly publication: ListingPublications,
+    private readonly quotas: PublicationQuotas,
   ) {}
   async permission(
     actor: Actor,
@@ -153,6 +186,8 @@ export class ProfessionalImports {
           sql,
         );
         if (!feed.active) throw new ConflictException('Feed disabled');
+        if (mode === 'apply' && feed.publication_approved_at)
+          throw new ConflictException('Approved sources apply their saved URL');
         const [run] = await this.db.rows<{ id: string }>(
           'INSERT INTO professional_import_runs(feed_id,organization_id,requested_by,mode,status,stats) VALUES($1,$2,$3,$4,\'running\',\'{"stage":"queued"}\') RETURNING id',
           [feed.id, feed.organization_id, actor.id, mode],
@@ -183,8 +218,8 @@ export class ProfessionalImports {
     sourceHash: string,
   ) {
     const [run] = await this.db.rows<{ id: string }>(
-      `INSERT INTO professional_import_runs(feed_id,organization_id,requested_by,mode,status,stats,created_at)
-       VALUES($1,$2,$3,'dry_run','running',$4,clock_timestamp()) RETURNING id`,
+      `INSERT INTO professional_import_runs(feed_id,organization_id,requested_by,mode,status,stats,source_version,created_at)
+       SELECT id,$2,$3,'dry_run','running',$4,version,clock_timestamp() FROM professional_feed_definitions WHERE id=$1 RETURNING id`,
       [
         feedId,
         organizationId,
@@ -218,7 +253,10 @@ export class ProfessionalImports {
     return this.db.transaction(async (sql) => {
       await this.permission(actor, org, id, true, sql, admin);
       const [feed] = await this.db.rows(
-        'UPDATE professional_feed_definitions SET active=$2,version=version+1,updated_at=now() WHERE id=$1 AND version=$3 RETURNING id,active,version',
+        `UPDATE professional_feed_definitions SET active=$2,version=version+1,updated_at=now(),
+           publication_approved_at=CASE WHEN $2 THEN publication_approved_at END,
+           publication_approved_by=CASE WHEN $2 THEN publication_approved_by END
+         WHERE id=$1 AND version=$3 RETURNING id,active,version`,
         [id, input.active, input.version],
         sql,
       );
@@ -269,7 +307,7 @@ export class ProfessionalImports {
     return this.db.rows(
       `SELECT i.external_reference, CASE WHEN i.errors @> '[{"code":"duplicate"}]'
               THEN left(btrim(i.payload->>'externalReference'),200) END AS duplicate_reference,
-              i.property_id,i.listing_id,i.status,i.errors FROM professional_import_items i
+              i.property_id,i.listing_id,i.status,i.publication_result,i.errors FROM professional_import_items i
        JOIN professional_import_runs r ON r.id=i.run_id WHERE i.run_id=$1 AND r.feed_id=$2 AND
        ($3::text IS NULL OR i.external_reference>$3) AND (NOT $5::boolean OR i.status IN ('invalid','quarantined'))
        ORDER BY i.external_reference LIMIT $4`,
@@ -302,12 +340,27 @@ export class ProfessionalImports {
     seller(actor);
     return this.db.transaction(async (sql) => {
       await this.permission(actor, org, id, true, sql, admin);
+      // Serialize retries with scheduling and approval changes so a later delivery always wins.
+      await sql.query(
+        'SELECT id FROM professional_feed_definitions WHERE id=$1 FOR UPDATE',
+        [id],
+      );
       const [row] = await this.db.rows(
-        "UPDATE professional_import_jobs j SET state='pending',attempts=0,available_at=now(),last_error=NULL FROM professional_import_runs r WHERE r.id=j.run_id AND j.run_id=$1 AND r.feed_id=$2 AND j.state='dead' RETURNING j.run_id",
+        `UPDATE professional_import_jobs j SET state='pending',attempts=0,available_at=now(),last_error=NULL
+         FROM professional_import_runs r JOIN professional_feed_definitions f ON f.id=r.feed_id
+         WHERE r.id=j.run_id AND j.run_id=$1 AND r.feed_id=$2 AND j.state='dead'
+         AND (j.payload IS NOT NULL OR NOT EXISTS (
+           SELECT 1 FROM professional_import_items i WHERE i.run_id=j.run_id))
+         AND (r.mode<>'apply' OR r.source_version IS NULL OR
+              (f.active AND f.publication_approved_at IS NOT NULL AND f.version=r.source_version AND f.last_apply_run_id=r.id))
+         RETURNING j.run_id`,
         [parse(uuid, runId), id],
         sql,
       );
-      if (!row) throw new ConflictException('Dead import required');
+      if (!row)
+        throw new ConflictException(
+          'Retry requires a failed import with a current source',
+        );
       await sql.query(
         "UPDATE professional_import_runs SET status='running',error=NULL,finished_at=NULL WHERE id=$1",
         [runId],
@@ -326,11 +379,16 @@ export class ProfessionalImports {
   async schedule() {
     return this.db.transaction(async (sql) => {
       const feeds = await this.db.rows<Feed>(
-        `SELECT f.* FROM professional_feed_definitions f WHERE f.active AND f.schedule_cron IS NOT NULL AND f.transport->>'kind'='https' AND f.next_run_at<=now() AND NOT EXISTS(SELECT 1 FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id WHERE r.feed_id=f.id AND j.state IN ('pending','running')) ORDER BY f.next_run_at LIMIT 10 FOR UPDATE SKIP LOCKED`,
+        `SELECT f.* FROM professional_feed_definitions f WHERE f.active AND (f.schedule_cron IS NOT NULL OR f.publication_approved_at IS NOT NULL)
+          AND f.transport->>'kind'='https' AND f.next_run_at<=now() AND NOT EXISTS(SELECT 1 FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id WHERE r.feed_id=f.id AND j.state IN ('pending','running')) ORDER BY f.next_run_at LIMIT 10 FOR UPDATE SKIP LOCKED`,
         [],
         sql,
       );
       for (const feed of feeds) {
+        if (feed.publication_approved_at) {
+          await this.trustedSources.enqueue(sql, feed);
+          continue;
+        }
         try {
           cadence(feed.schedule_cron!);
         } catch {
@@ -373,10 +431,25 @@ export class ProfessionalImports {
     });
   }
   async once() {
+    if (Date.now() >= this.nextCleanup) {
+      this.nextCleanup = Date.now() + 60_000;
+      await this.photos.cleanup();
+      // Dead deliveries retain their private snapshot only while it can be resumed.
+      await this.db.pool.query(`WITH obsolete AS (
+        SELECT j.run_id FROM professional_import_jobs j
+        JOIN professional_import_runs r ON r.id=j.run_id
+        JOIN professional_feed_definitions f ON f.id=r.feed_id
+        WHERE j.state='dead' AND j.payload IS NOT NULL AND r.source_version IS NOT NULL
+          AND (r.stats->>'sourceHash' IS DISTINCT FROM encode(sha256(convert_to(f.transport->>'url','UTF8')),'hex')
+          OR (r.mode='apply' AND (NOT f.active OR f.publication_approved_at IS NULL
+              OR f.version<>r.source_version OR f.last_apply_run_id IS DISTINCT FROM r.id)))
+        ORDER BY j.run_id LIMIT 48 FOR UPDATE OF j SKIP LOCKED)
+        UPDATE professional_import_jobs j SET payload=NULL FROM obsolete WHERE j.run_id=obsolete.run_id`);
+    }
     await this.schedule();
     const job = await this.db.transaction(async (sql) => {
       const [j] = await this.db.rows<Job>(
-        "SELECT j.*,r.feed_id,r.organization_id,r.requested_by,r.mode,r.stats->>'sourceHash' AS source_hash FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id JOIN professional_feed_definitions f ON f.id=r.feed_id WHERE j.state IN ('pending','running') AND j.available_at<=now() AND (j.lease_until IS NULL OR j.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM professional_import_jobs prior JOIN professional_import_runs pr ON pr.id=prior.run_id WHERE pr.feed_id=r.feed_id AND prior.state IN ('pending','running') AND (pr.created_at,pr.id)<(r.created_at,r.id)) ORDER BY j.available_at,j.run_id LIMIT 1 FOR UPDATE OF j,f SKIP LOCKED",
+        "SELECT j.*,r.feed_id,r.organization_id,r.requested_by,r.mode,r.source_version,r.stats->>'sourceHash' AS source_hash FROM professional_import_jobs j JOIN professional_import_runs r ON r.id=j.run_id JOIN professional_feed_definitions f ON f.id=r.feed_id WHERE j.state IN ('pending','running') AND j.available_at<=now() AND (j.lease_until IS NULL OR j.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM professional_import_jobs prior JOIN professional_import_runs pr ON pr.id=prior.run_id WHERE pr.feed_id=r.feed_id AND prior.state IN ('pending','running') AND (pr.created_at,pr.id)<(r.created_at,r.id)) ORDER BY j.available_at,j.run_id LIMIT 1 FOR UPDATE OF j,f SKIP LOCKED",
         [],
         sql,
       );
@@ -402,9 +475,28 @@ export class ProfessionalImports {
         job.feed_id,
         true,
       );
-      if (!feed.active) throw new ConflictException();
+      if (
+        !feed.active ||
+        (approvedRun(job) &&
+          (!feed.publication_approved_at ||
+            feed.version !== job.source_version ||
+            feed.last_apply_run_id !== job.run_id))
+      )
+        throw new ForbiddenException();
       if (job.source_hash && hash(feed.transport.url ?? '') !== job.source_hash)
         throw new ConflictException('Feed URL changed');
+      const [progress] = await this.db.rows<{ completed: string[] }>(
+        `UPDATE professional_import_jobs j SET lease_until=now()+interval '60 seconds'
+         WHERE j.run_id=$1 AND j.lease_token=$2 AND j.lease_until>now()
+         RETURNING ARRAY(SELECT i.external_reference FROM professional_import_items i WHERE i.run_id=j.run_id) AS completed`,
+        [job.run_id, job.lease_token],
+      );
+      if (!progress) return true;
+      const processed = new Set(progress.completed);
+      // A partial delivery from an older worker may have lost its snapshot.
+      // A fresh download would mix two revisions in the same report.
+      if (job.payload === null && processed.size)
+        throw new ConflictException('Import snapshot unavailable');
       const payload =
         job.payload ??
         parseFeed(
@@ -413,11 +505,13 @@ export class ProfessionalImports {
           feed.mapping,
           feed.transport.provider,
         );
-      if (!job.payload)
-        await this.db.pool.query(
+      if (job.payload === null) {
+        const saved = await this.db.pool.query(
           'UPDATE professional_import_jobs SET payload=$3 WHERE run_id=$1 AND lease_token=$2 AND lease_until>now()',
           [job.run_id, job.lease_token, JSON.stringify(payload)],
         );
+        if (!saved.rowCount) return true;
+      }
       const seen = new Set<string>();
       const geo = new FeedGeocoding(this.geocoder);
       for (let i = 0; i < payload.length; i++) {
@@ -430,45 +524,64 @@ export class ProfessionalImports {
         const reference = rawReference.success
           ? rawReference.data
           : `invalid:${i}`;
-        const duplicate = seen.has(reference);
-        seen.add(reference);
+        const identity =
+          feed.transport.provider === 'cian'
+            ? reference.toLowerCase()
+            : reference;
+        const duplicate = seen.has(identity);
+        seen.add(identity);
         const logKey = duplicate
           ? `duplicate:${i}:${hash(reference)}`
           : reference;
+        if (processed.has(logKey)) continue;
         const resolved =
           feed.format === 'xml' && feed.transport.kind === 'https' && !duplicate
             ? await geo.resolve(raw)
             : { row: raw };
-        await this.process(
-          job,
-          actor,
-          feed,
-          resolved.row,
-          logKey,
-          duplicate,
-          resolved.message,
-        );
+        if (approvedRun(job)) {
+          await this.processApproved(
+            job,
+            actor,
+            feed,
+            resolved.row,
+            logKey,
+            duplicate,
+            resolved.message,
+          );
+        } else
+          await this.process(
+            job,
+            actor,
+            feed,
+            resolved.row,
+            logKey,
+            duplicate,
+            resolved.message,
+          );
       }
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
-          "UPDATE professional_import_jobs SET state='done',lease_token=NULL,lease_until=NULL,last_error=NULL WHERE run_id=$1 AND lease_token=$2 AND lease_until>now() RETURNING run_id",
-          [job.run_id, job.lease_token],
+          "UPDATE professional_import_jobs SET state='done',lease_token=NULL,lease_until=NULL,last_error=NULL,payload=CASE WHEN $3 THEN NULL ELSE payload END WHERE run_id=$1 AND lease_token=$2 AND lease_until>now() RETURNING run_id",
+          [job.run_id, job.lease_token, Boolean(job.source_hash)],
         );
         if (!result.rowCount) return;
-        const [counts] = await this.db.rows<{
+        const [summary] = await this.db.rows<{
           total: number;
           valid: number;
           quarantined: number;
-        }>(
-          "SELECT count(*)::int AS total,count(*) FILTER(WHERE status IN ('upserted','valid'))::int AS valid,count(*) FILTER(WHERE status IN ('invalid','quarantined'))::int AS quarantined FROM professional_import_items WHERE run_id=$1",
-          [job.run_id],
-          sql,
-        );
+          created: number;
+          updated: number;
+          unchanged: number;
+        }>(itemCounts, [job.run_id], sql);
+        const { total, valid, quarantined } = summary!;
+        const counts = approvedRun(job)
+          ? summary!
+          : { total, valid, quarantined };
         await sql.query(
           'UPDATE professional_import_runs SET status=$2,stats=$3,error=NULL,finished_at=now() WHERE id=$1',
           [
             job.run_id,
-            counts!.quarantined ? 'quarantined' : 'succeeded',
+            quarantined ? 'quarantined' : 'succeeded',
             JSON.stringify(counts),
           ],
         );
@@ -487,31 +600,46 @@ export class ProfessionalImports {
       const changed =
         failure instanceof ConflictException &&
         failure.message === 'Feed URL changed';
+      const missingSnapshot =
+        failure instanceof ConflictException &&
+        failure.message === 'Import snapshot unavailable';
       const invalid = failure instanceof BadRequestException;
-      const permanent = Boolean(
-        job.source_hash &&
-        (changed || invalid || failure instanceof ForbiddenException),
-      );
-      const code = !job.source_hash
-        ? 'import_failed'
-        : changed
-          ? 'source_changed'
-          : failure instanceof FeedLinkError
-            ? failure.code
-            : invalid
-              ? 'invalid_feed'
-              : failure instanceof ForbiddenException
-                ? 'access_revoked'
-                : 'source_unavailable';
+      const permanent =
+        missingSnapshot ||
+        Boolean(
+          job.source_hash &&
+          (changed || invalid || failure instanceof ForbiddenException),
+        );
+      const code = missingSnapshot
+        ? 'snapshot_unavailable'
+        : !job.source_hash
+          ? 'import_failed'
+          : changed
+            ? 'source_changed'
+            : failure instanceof FeedLinkError
+              ? failure.code
+              : invalid
+                ? 'invalid_feed'
+                : failure instanceof ForbiddenException
+                  ? 'access_revoked'
+                  : 'source_unavailable';
       await this.db.transaction(async (sql) => {
         const result = await sql.query(
           `UPDATE professional_import_jobs SET state=CASE WHEN $3::boolean OR attempts>=5 THEN 'dead' ELSE 'pending' END,
            lease_token=NULL,lease_until=NULL,last_error=$4,
+           payload=CASE WHEN $3::boolean THEN NULL ELSE payload END,
            available_at=now()+interval '1 second'*LEAST(3600,30*power(2,attempts))
-           WHERE run_id=$1 AND lease_token=$2 RETURNING state`,
+           WHERE run_id=$1 AND lease_token=$2 AND lease_until>now() RETURNING state`,
           [job.run_id, job.lease_token, permanent, code],
         );
         if (result.rows[0]?.state === 'dead') {
+          if (approvedRun(job)) {
+            const [counts] = await this.db.rows(itemCounts, [job.run_id], sql);
+            await sql.query(
+              'UPDATE professional_import_runs SET stats=stats||$2::jsonb WHERE id=$1',
+              [job.run_id, JSON.stringify(counts)],
+            );
+          }
           await sql.query(
             "UPDATE professional_import_runs SET status='failed',error=$2,finished_at=now() WHERE id=$1",
             [job.run_id, code],
@@ -528,6 +656,54 @@ export class ProfessionalImports {
     }
     return true;
   }
+  private async processApproved(
+    job: Job,
+    actor: Actor,
+    feed: Feed,
+    raw: unknown,
+    key: string,
+    duplicate: boolean,
+    coordinateError?: string,
+  ) {
+    const item = importItem.safeParse(raw);
+    let images: PreparedFeedPhoto[] = [];
+    let issue: string | undefined;
+    if (item.success && !duplicate && !coordinateError) {
+      try {
+        images = await this.photos.prepare(item.data.photos ?? [], async () => {
+          const { rowCount: held } = await this.db.pool.query(
+            `UPDATE professional_import_jobs j SET lease_until=now()+interval '60 seconds' FROM professional_feed_definitions f
+             WHERE j.run_id=$1 AND j.lease_token=$2 AND j.lease_until>now() AND f.id=$3 AND f.version=$4 AND f.publication_approved_at IS NOT NULL`,
+            [job.run_id, job.lease_token, feed.id, job.source_version],
+          );
+          if (!held) throw new ForbiddenException();
+        });
+      } catch (e) {
+        if (!(
+          e instanceof BadRequestException ||
+          e instanceof ServiceUnavailableException
+        ))
+          throw e;
+        issue =
+          'Не удалось принять изображения. Проверьте ссылки, формат и доступ к фотографиям.';
+      }
+    }
+    try {
+      await this.process(
+        job,
+        actor,
+        feed,
+        raw,
+        key,
+        duplicate,
+        coordinateError,
+        images,
+        issue,
+      );
+    } finally {
+      await this.photos.release(images);
+    }
+  }
   async process(
     job: Job,
     actor: Actor,
@@ -536,6 +712,8 @@ export class ProfessionalImports {
     logKey: string,
     duplicate: boolean,
     coordinateError?: string,
+    prepared: PreparedFeedPhoto[] = [],
+    photoIssue?: string,
   ) {
     await this.db.transaction(async (sql) => {
       const [held] = await this.db.rows(
@@ -549,12 +727,28 @@ export class ProfessionalImports {
         [job.run_id],
       );
       await this.permission(actor, feed.organization_id, feed.id, true, sql);
-      const [enabled] = await this.db.rows(
-        'SELECT id FROM professional_feed_definitions WHERE id=$1 AND active FOR SHARE',
-        [feed.id],
+      const [enabled] = await this.db.rows<{
+        publication_approved_at: Date | null;
+      }>(
+        `SELECT f.publication_approved_at FROM professional_feed_definitions f WHERE f.id=$1 AND f.active AND (
+          $2::integer IS NULL OR (f.version=$2 AND f.publication_approved_at IS NOT NULL AND f.last_apply_run_id=$3
+          AND EXISTS(SELECT 1 FROM users u WHERE u.id=$4 AND u.active AND u.registration_approval_state='approved'
+            AND u.email_verified_at IS NOT NULL AND u.phone_verified_at IS NOT NULL AND u.role IN ('agent','agency','developer')))) FOR SHARE OF f`,
+        [
+          feed.id,
+          approvedRun(job) ? job.source_version : null,
+          job.run_id,
+          actor.id,
+        ],
         sql,
       );
       if (!enabled) throw new ForbiddenException();
+      if (
+        job.mode === 'apply' &&
+        !approvedRun(job) &&
+        enabled.publication_approved_at
+      )
+        throw new ForbiddenException();
       const [done] = await this.db.rows(
         'SELECT external_reference FROM professional_import_items WHERE run_id=$1 AND external_reference=$2',
         [job.run_id, logKey],
@@ -565,11 +759,14 @@ export class ProfessionalImports {
       let listingId: string | null = null,
         propertyId: string | null = null;
       let status: string;
+      let publicationResult: 'created' | 'updated' | 'unchanged' | null = null;
       let errors: unknown[] = [];
       try {
         if (duplicate)
           throw new BadRequestException('Duplicate external reference');
         const item = parse(importItem, raw);
+        const publishing = approvedRun(job);
+        if (photoIssue) throw new BadRequestException(photoIssue);
         validateAttributes(
           await this.catalog.definitions(item.categoryCode, sql),
           item.attributes,
@@ -578,15 +775,46 @@ export class ProfessionalImports {
         );
         await sql.query(
           'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
-          [`${feed.id}:${item.externalReference}`],
+          [
+            `${feed.id}:${feed.transport.provider === 'cian' ? item.externalReference.toLowerCase() : item.externalReference}`,
+          ],
         );
-        const [record] = await this.db.rows<RecordRow>(
-          'SELECT * FROM professional_feed_records WHERE feed_id=$1 AND external_reference=$2',
+        const records = await this.db.rows<RecordRow>(
+          `SELECT * FROM professional_feed_records WHERE feed_id=$1 AND
+           ${feed.transport.provider === 'cian' ? 'lower(external_reference)=lower($2)' : 'external_reference=$2'} LIMIT 2`,
           [feed.id, item.externalReference],
           sql,
         );
-        const fingerprint = normalizedFingerprint(item);
-        if (record?.fingerprint === fingerprint) {
+        if (records.length > 1)
+          throw new ConflictException('Ambiguous source identifier');
+        const record = records[0];
+        if (publishing) {
+          const oldSeller = record
+            ? await this.db.rows<{ seller_id: string }>(
+                'SELECT seller_id FROM listings WHERE id=$1',
+                [record.listing_id],
+                sql,
+              )
+            : [];
+          await this.quotas.lockSeller(
+            sql,
+            oldSeller[0]?.seller_id ?? actor.id,
+          );
+        }
+        const fingerprint = normalizedFingerprint(
+          publishing
+            ? {
+                ...item,
+                externalReference:
+                  record?.external_reference ?? item.externalReference,
+                photos: prepared.map((p) => ({
+                  kind: p.kind,
+                  sha256: p.sha256,
+                })),
+              }
+            : item,
+        );
+        if (!publishing && record?.fingerprint === fingerprint) {
           listingId = record.listing_id;
           propertyId = record.property_id;
           status = job.mode === 'dry_run' ? 'valid' : 'upserted';
@@ -615,7 +843,12 @@ export class ProfessionalImports {
                 existing.seller_id !== feed.created_by)
             )
               throw new ForbiddenException('Source mismatch');
-            if (!['draft', 'paused', 'rejected'].includes(existing.status))
+            const publiclyManaged =
+              publishing || (job.mode === 'dry_run' && feed.transport.linkSlot);
+            if (
+              !['draft', 'paused', 'rejected'].includes(existing.status) &&
+              !(publiclyManaged && existing.status === 'published')
+            )
               throw new ConflictException(
                 'Pause listing before importing changes',
               );
@@ -637,30 +870,32 @@ export class ProfessionalImports {
             if (record) {
               listingId = record.listing_id;
               propertyId = record.property_id;
-              const [before] = await this.db.rows(
-                'SELECT * FROM listings WHERE id=$1',
-                [listingId],
-                sql,
-              );
-              const [after] = await this.db.rows(
-                "UPDATE listings SET title=$2,price=$3,description=$4,deal_type=$5,status='draft',version=version+1,updated_at=now() WHERE id=$1 RETURNING *",
-                [
+              if (!publishing) {
+                const [before] = await this.db.rows(
+                  'SELECT * FROM listings WHERE id=$1',
+                  [listingId],
+                  sql,
+                );
+                const [after] = await this.db.rows(
+                  "UPDATE listings SET title=$2,price=$3,description=$4,deal_type=$5,status='draft',version=version+1,updated_at=now() WHERE id=$1 RETURNING *",
+                  [
+                    listingId,
+                    item.title,
+                    item.price,
+                    item.description,
+                    item.dealType,
+                  ],
+                  sql,
+                );
+                await this.audit.history(
+                  sql,
+                  actor.id,
                   listingId,
-                  item.title,
-                  item.price,
-                  item.description,
-                  item.dealType,
-                ],
-                sql,
-              );
-              await this.audit.history(
-                sql,
-                actor.id,
-                listingId,
-                'professional.feed.updated',
-                before!,
-                after!,
-              );
+                  'professional.feed.updated',
+                  before!,
+                  after!,
+                );
+              }
             } else {
               propertyId = (
                 await this.properties.createWithSql(
@@ -724,9 +959,35 @@ export class ProfessionalImports {
                 ],
               );
             }
+            if (publishing) {
+              const mediaChanged = await this.photos.replace(
+                sql,
+                listingId,
+                prepared,
+              );
+              const result = await this.publication.publishFromFeed(sql, {
+                listingId,
+                feedId: feed.id,
+                actorId: actor.id,
+                runId: job.run_id,
+                mediaChanged,
+                offer: {
+                  title: item.title,
+                  description: item.description,
+                  price: item.price,
+                  dealType: item.dealType,
+                },
+              });
+              publicationResult = result === 'published' ? 'created' : result;
+            }
             await sql.query(
               'UPDATE professional_feed_records SET fingerprint=$3,last_run_id=$4 WHERE feed_id=$1 AND external_reference=$2',
-              [feed.id, item.externalReference, fingerprint, job.run_id],
+              [
+                feed.id,
+                record?.external_reference ?? item.externalReference,
+                fingerprint,
+                job.run_id,
+              ],
             );
             status = 'upserted';
           }
@@ -748,6 +1009,20 @@ export class ProfessionalImports {
             {
               code: 'duplicate',
               message: 'Идентификатор повторяется в этой выгрузке.',
+            },
+          ];
+        else if (
+          photoIssue ||
+          e.message ===
+            '1 to 21 ready photos and no pending/failed media required'
+        )
+          errors = [
+            {
+              code: 'media',
+              field: 'photos',
+              message:
+                photoIssue ??
+                'Для публикации нужна хотя бы одна обработанная фотография объекта. Проверьте фотографии в выгрузке.',
             },
           ];
         else if (!parsed.success) {
@@ -800,9 +1075,14 @@ export class ProfessionalImports {
             {
               code: 'conflict',
               message:
-                e.message === 'Pause listing before importing changes'
-                  ? 'Приостановите объявление перед обновлением.'
-                  : 'Характеристики объекта изменились. Проверьте адрес и параметры.',
+                e.message === 'Ambiguous source identifier'
+                  ? 'В источнике уже есть несколько объявлений с этим идентификатором. Обратитесь к администратору.'
+                  : e.message === 'Pause listing before importing changes'
+                    ? 'Приостановите объявление перед обновлением.'
+                    : e.message ===
+                        'Use versioned Property workflow for physical changes'
+                      ? 'Характеристики объекта изменились. Проверьте адрес и параметры.'
+                      : 'Проверьте статус объявления и условия публикации.',
             },
           ];
         else if (e instanceof ForbiddenException)
@@ -831,25 +1111,23 @@ export class ProfessionalImports {
       }
       await sql.query('RELEASE SAVEPOINT feed_row');
       await sql.query(
-        'INSERT INTO professional_import_items(run_id,external_reference,property_id,listing_id,status,payload,errors) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        'INSERT INTO professional_import_items(run_id,external_reference,property_id,listing_id,status,payload,errors,publication_result) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
         [
           job.run_id,
           logKey,
           propertyId,
           listingId,
           status,
-          JSON.stringify(raw),
+          JSON.stringify(
+            raw && typeof raw === 'object' && 'photos' in raw
+              ? { ...raw, photos: undefined }
+              : raw,
+          ),
           JSON.stringify(errors),
+          publicationResult,
         ],
       );
     });
-  }
-  async adminFeeds(actor: Actor) {
-    verified(actor);
-    if (actor.role !== 'admin') throw new ForbiddenException();
-    return this.db.rows(
-      'SELECT id,organization_id,name,active,version,next_run_at FROM professional_feed_definitions ORDER BY id LIMIT 100',
-    );
   }
   async adminOrganization(actor: Actor, id: string) {
     verified(actor);
@@ -919,9 +1197,19 @@ export class ProfessionalImportsController {
 @Controller('v1/admin/integrations/feeds')
 @AdminOnly()
 export class ProfessionalAdminController {
-  constructor(private readonly imports: ProfessionalImports) {}
-  @Get() list(@CurrentActor() a: Actor) {
-    return this.imports.adminFeeds(a);
+  constructor(
+    private readonly imports: ProfessionalImports,
+    private readonly sources: TrustedFeedSources,
+  ) {}
+  @Get() list(@CurrentActor() a: Actor, @Query('after') after?: string) {
+    return this.sources.list(a, after);
+  }
+  @Patch(':id/trust') trust(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.sources.set(actor, id, body);
   }
   @Patch(':id') async configure(
     @CurrentActor() a: Actor,
@@ -970,10 +1258,16 @@ export class ProfessionalAdminController {
     PropertiesModule,
     AuditModule,
     GeoModule,
+    StorageModule,
+    PublicationQuotaModule,
+    ListingPublicationModule,
   ],
   controllers: [ProfessionalImportsController, ProfessionalAdminController],
   providers: [
     ProfessionalImports,
+    TrustedFeedSources,
+    FeedPhotos,
+    FeedPhotoFetcher,
     Idempotency,
     { provide: FeedFetcher, useClass: HttpsFeedFetcher },
   ],

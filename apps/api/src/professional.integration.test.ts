@@ -185,7 +185,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
               'SELECT count(*) FROM schema_migrations',
             )
           )[0]!.count,
-          '37',
+          '38',
         );
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);
@@ -288,6 +288,8 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
             provider: 'cian',
             host: 'feeds.example',
             active: true,
+            trusted: false,
+            lastApplyRunId: null,
           });
           assert.ok(!JSON.stringify(response).includes('fixture-only'));
           assert.ok(

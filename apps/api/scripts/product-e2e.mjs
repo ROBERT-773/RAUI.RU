@@ -44,6 +44,7 @@ async function run() {
   const staffTotpOnly = process.argv.includes('--staff-totp-only');
   const smsOnly = process.argv.includes('--sms-only');
   const feedsOnly = process.argv.includes('--feeds-only');
+  const trustedFeeds = staffTotpOnly || feedsOnly;
   if (
     [publicationOnly, onboardingOnly, staffTotpOnly, smsOnly, feedsOnly].filter(
       Boolean,
@@ -55,13 +56,19 @@ async function run() {
     : onboardingOnly
       ? ['e2e/registration-onboarding.spec.ts']
       : staffTotpOnly
-        ? ['e2e/staff-two-factor.spec.ts']
+        ? [
+            'e2e/staff-two-factor.spec.ts',
+            'e2e/professional-feed-trust.spec.ts',
+          ]
         : smsOnly
           ? ['e2e/phone-sign-in.spec.ts']
           : feedsOnly
-            ? ['e2e/professional-feeds.spec.ts']
+            ? [
+                'e2e/professional-feeds.spec.ts',
+                'e2e/professional-feed-trust.spec.ts',
+              ]
             : [];
-  const runFeeds = feedsOnly || !focusedSpecs.length;
+  const runFeeds = trustedFeeds || !focusedSpecs.length;
   if (
     precreated !== undefined &&
     (!/^raui_test_[a-f0-9]{16}$/.test(precreated) ||
@@ -96,8 +103,9 @@ async function run() {
     SITE_URL: 'http://127.0.0.1:3100',
     E2E_BASE_URL: 'http://127.0.0.1:3100',
     E2E_STAFF_TOTP: staffTotpOnly ? 'true' : 'false',
-    STAFF_TOTP_REQUIRED: staffTotpOnly ? 'true' : 'false',
-    STAFF_TOTP_ENCRYPTION_KEY: staffTotpOnly
+    E2E_TRUSTED_FEEDS: trustedFeeds ? 'true' : 'false',
+    STAFF_TOTP_REQUIRED: trustedFeeds ? 'true' : 'false',
+    STAFF_TOTP_ENCRYPTION_KEY: trustedFeeds
       ? randomBytes(32).toString('hex')
       : undefined,
     E2E_SMS: smsOnly ? 'true' : 'false',
@@ -199,6 +207,12 @@ async function run() {
           : []),
         ...(staffTotpOnly
           ? [[randomUUID(), `staff-${project}@e2e.test`, 'admin']]
+          : []),
+        ...(trustedFeeds
+          ? [
+              [randomUUID(), `feed-admin-${project}@e2e.test`, 'admin'],
+              [randomUUID(), `feed-owner-${project}@e2e.test`, 'agency'],
+            ]
           : []),
       ]),
     ])
