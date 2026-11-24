@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import ListingPublicationActions from './listing-publication-actions';
 import ListingMediaGallery from './listing-media-gallery';
@@ -122,6 +122,15 @@ export default function OwnerListings({
     [media, setMedia] = useState<Media[]>([]),
     [reason, setReason] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const formId = useId();
+  const savedHeading = useRef<HTMLHeadingElement>(null);
+  const focusSavedList = useRef(false);
+  useEffect(() => {
+    if (!listing && focusSavedList.current) {
+      savedHeading.current?.focus();
+      focusSavedList.current = false;
+    }
+  }, [listing]);
   const previewHeading = useRef<HTMLHeadingElement>(null);
   const restoreEditorFocus = useRef(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
@@ -533,6 +542,52 @@ export default function OwnerListings({
       'Объявление отправлено на модерацию. Оно появится после одобрения.',
     );
   }
+  function closeSavedDraft(value: Listing) {
+    if (!mounted.current) return;
+    if (value.status !== 'draft')
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    setItems((current) => [
+      value,
+      ...current.filter((item) => item.id !== value.id),
+    ]);
+    setPropertyDirty(false);
+    setDraftToReopen(null);
+    setPreviewOpen(false);
+    focusSavedList.current = true;
+    setListing(null);
+    setNotice(
+      'Черновик сохранён. Продолжить заполнение можно в списке «Сохранённые объявления».',
+    );
+  }
+  async function keepDraft() {
+    if (!listing) return;
+    const current = await api<Listing>(`v1/listings/${listing.id}`);
+    if (!mounted.current) return;
+    if (current.status === 'draft') {
+      closeSavedDraft(current);
+    } else if (
+      current.version !== listing.version ||
+      current.status !== listing.status
+    ) {
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    } else if (current.status === 'paused') {
+      closeSavedDraft(
+        await api<Listing>(`v1/listings/${current.id}`, 'PATCH', {
+          version: current.version,
+        }),
+      );
+    } else if (['rejected', 'processing'].includes(current.status)) {
+      closeSavedDraft(await transition(current, 'draft'));
+    } else {
+      throw new Error(
+        'Статус объявления изменился. Откройте его снова в кабинете.',
+      );
+    }
+  }
   const editable =
     listing && ['draft', 'paused', 'rejected'].includes(listing.status);
   const termsChanged =
@@ -763,6 +818,7 @@ export default function OwnerListings({
             </button>
           )}
           <SavedListingsList
+            headingRef={savedHeading}
             items={items.map((item) => ({
               id: item.id,
               title: item.title,
@@ -839,6 +895,7 @@ export default function OwnerListings({
               {editable && property && propertyFields.length > 0 && (
                 <form
                   key={property.version}
+                  id={formId + '-property'}
                   onChange={() => setPropertyDirty(true)}
                   onReset={() => {
                     setCommercialType(
@@ -848,6 +905,10 @@ export default function OwnerListings({
                   }}
                   onSubmit={(event) => {
                     event.preventDefault();
+                    const closeAfterSave =
+                      (
+                        event.nativeEvent as SubmitEvent
+                      ).submitter?.getAttribute('value') === 'save-draft';
                     const fields = new FormData(event.currentTarget);
                     const attributes = { ...property.attributes };
                     const visibleFields = listingAttributeFields(
@@ -938,7 +999,8 @@ export default function OwnerListings({
                       );
                       if (!mounted.current) return;
                       assign(current);
-                      setNotice('Характеристики сохранены.');
+                      if (closeAfterSave) closeSavedDraft(current);
+                      else setNotice('Характеристики сохранены.');
                     }, true);
                   }}
                 >
@@ -1071,8 +1133,13 @@ export default function OwnerListings({
               </button>
               {editable && (
                 <form
+                  id={formId + '-offer'}
                   onSubmit={(event) => {
                     event.preventDefault();
+                    const closeAfterSave =
+                      (
+                        event.nativeEvent as SubmitEvent
+                      ).submitter?.getAttribute('value') === 'save-draft';
                     const listingTitle = title.trim();
                     const listingPrice = Number(price);
                     const offerError = offerValidationError(
@@ -1096,7 +1163,9 @@ export default function OwnerListings({
                         },
                       );
                       assign(updated);
-                      if (mounted.current) setNotice('Изменения сохранены.');
+                      if (closeAfterSave) closeSavedDraft(updated);
+                      else if (mounted.current)
+                        setNotice('Изменения сохранены.');
                     }, true);
                   }}
                 >
@@ -1117,6 +1186,29 @@ export default function OwnerListings({
                     onReset={() => assign(listing)}
                   />
                 </form>
+              )}
+              {editable && (
+                <button
+                  type={hasUnsavedChanges ? 'submit' : 'button'}
+                  form={
+                    hasUnsavedChanges
+                      ? formId + (propertyDirty ? '-property' : '-offer')
+                      : undefined
+                  }
+                  value="save-draft"
+                  disabled={
+                    busy ||
+                    creating ||
+                    loading ||
+                    uploadPending ||
+                    mediaRefreshNeeded
+                  }
+                  onClick={
+                    hasUnsavedChanges ? undefined : () => void run(keepDraft)
+                  }
+                >
+                  Сохранить и выйти
+                </button>
               )}
               <ListingModerationActions
                 status={listing.status}
@@ -1198,6 +1290,13 @@ export default function OwnerListings({
               onClick={() => setPreviewOpen(false)}
             >
               Вернуться к редактированию
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(keepDraft)}
+            >
+              Сохранить в черновики
             </button>
             <button
               type="button"

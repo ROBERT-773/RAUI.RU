@@ -20,6 +20,7 @@ afterEach(() => {
 function setup(fail: boolean | ApiError = false) {
   let failed = false;
   vi.mocked(api).mockImplementation(async (path, method) => {
+    if (path === 'v1/account/listing-drafts') return [];
     if (path.startsWith('v1/geo/geocode?'))
       return [
         {
@@ -127,6 +128,183 @@ function setup(fail: boolean | ApiError = false) {
     throw new Error(path);
   });
 }
+function setupListingDrafts(failFirstListing = false) {
+  setup(failFirstListing);
+  const fallback = vi.mocked(api).getMockImplementation()!;
+  const drafts = new Map<
+    string,
+    { id: string; version: number; form: Record<string, unknown> }
+  >();
+  vi.mocked(api).mockImplementation(async (path, method, body, options) => {
+    if (path === 'v1/account/listing-drafts') return [...drafts.values()];
+    if (path.startsWith('v1/account/listing-drafts/') && method === 'PUT') {
+      const id = path.split('/').at(-1)!;
+      const { version, form } = body as {
+        version: number;
+        form: Record<string, unknown>;
+      };
+      if ((drafts.get(id)?.version ?? 0) !== version)
+        throw new ApiError('Conflict', 409);
+      const existing = drafts.get(id);
+      if (existing && JSON.stringify(existing.form) === JSON.stringify(form))
+        return existing;
+      const row = { id, version: version + 1, form };
+      drafts.set(id, row);
+      return row;
+    }
+    return fallback(path, method, body, options);
+  });
+  return drafts;
+}
+
+test('an incomplete address and its step return from the account after a remount, alongside another draft', async () => {
+  const drafts = setupListingDrafts();
+  const saved = vi.fn();
+  const view = render(<NewListing onCreated={saved} />);
+  await screen.findByRole('option', { name: 'Квартира' });
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  const next = screen.getByRole<HTMLButtonElement>('button', { name: 'Далее' });
+  await waitFor(() => expect(next.disabled).toBe(false));
+  fireEvent.click(next);
+  fireEvent.change(screen.getByLabelText('Адрес'), {
+    target: { value: 'Москва, Тверская' },
+  });
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  expect(drafts.size).toBe(1);
+  expect([...drafts.values()][0]?.form).toMatchObject({
+    step: 1,
+    category: 'apartment',
+    address: 'Москва, Тверская',
+    longitude: '',
+    latitude: '',
+  });
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Начать другое объявление' }),
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await waitFor(() => expect(drafts.size).toBe(2));
+  expect(saved).not.toHaveBeenCalled();
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.some(([path]) =>
+        ['v1/properties', 'v1/listings'].includes(path),
+      ),
+  ).toBe(false);
+  view.unmount();
+  render(<NewListing onCreated={saved} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: /Продолжить.*Тверская/ }),
+  );
+  expect(screen.getByRole('group', { name: 'Расположение' })).toBeTruthy();
+  expect(screen.getByLabelText<HTMLInputElement>('Адрес').value).toBe(
+    'Москва, Тверская',
+  );
+  expect(screen.getByRole('button', { name: 'Далее' })).toBeTruthy();
+});
+
+test('conflicting partial saves keep local text and require an explicit reload', async () => {
+  const drafts = setupListingDrafts();
+  render(<NewListing onCreated={() => {}} />);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  const [row] = [...drafts.values()];
+  drafts.set(row!.id, {
+    ...row!,
+    version: 2,
+    form: { ...row!.form, title: 'Другая версия' },
+  });
+  fireEvent.change(screen.getByLabelText('Сделка'), {
+    target: { value: 'long_rent' },
+  });
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик изменился/);
+  expect(screen.getByLabelText<HTMLSelectElement>('Сделка').value).toBe(
+    'long_rent',
+  );
+  expect(drafts.get(row!.id)?.form.title).toBe('Другая версия');
+  expect(drafts.get(row!.id)?.version).toBe(2);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить отдельным черновиком' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  expect(drafts.size).toBe(2);
+  expect(
+    [...drafts.values()].find((draft) => draft.id !== row!.id)?.form.deal,
+  ).toBe('long_rent');
+});
+
+test('finishing a saved form binds one listing to its last saved version', async () => {
+  const drafts = setupListingDrafts();
+  const created = vi.fn();
+  render(<NewListing onCreated={created} />);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  const [id] = drafts.keys();
+  await fill();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await waitFor(() => expect(created).toHaveBeenCalledWith('listing-1'));
+  expect(drafts.get(id!)?.form).toMatchObject({
+    step: 3,
+    title: 'Квартира рядом с парком',
+  });
+  expect(api).toHaveBeenCalledWith('v1/properties', 'POST', expect.anything(), {
+    idempotencyKey: 'draft-property-' + id + '-2',
+  });
+  expect(api).toHaveBeenCalledWith(
+    'v1/listings',
+    'POST',
+    expect.objectContaining({ formDraft: { id, version: 2 } }),
+    { idempotencyKey: 'draft-listing-' + id + '-2' },
+  );
+});
+
+test('reopening the saved final step after interruption retries the same property and listing keys', async () => {
+  setupListingDrafts(true);
+  const created = vi.fn();
+  const first = render(<NewListing onCreated={created} />);
+  await fill();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+  await screen.findByText(/Не удалось сохранить черновик/);
+  first.unmount();
+  render(<NewListing onCreated={created} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: /Продолжить.*Квартира рядом/ }),
+  );
+  const submit = screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Сохранить черновик',
+  });
+  await waitFor(() => expect(submit.disabled).toBe(false));
+  fireEvent.click(submit);
+  await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
+  for (const endpoint of ['v1/properties', 'v1/listings']) {
+    const writes = vi
+      .mocked(api)
+      .mock.calls.filter(
+        ([path, method]) => path === endpoint && method === 'POST',
+      );
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+  }
+});
+
 async function fill(
   deal = 'sale',
   agency?: string,
@@ -733,6 +911,7 @@ test('changing category clears category-specific values', async () => {
 test('ignores late definitions from a previous category', async () => {
   let release: ((value: unknown) => void) | undefined;
   vi.mocked(api).mockImplementation(async (path) => {
+    if (path === 'v1/account/listing-drafts') return [];
     if (path === 'v1/categories')
       return [
         { code: 'apartment', name: 'Квартира' },

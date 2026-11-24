@@ -441,13 +441,25 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
   }
 });
 
-async function fillApartmentDetails(form: ReturnType<Page['locator']>) {
+async function fillApartmentDetails(
+  form: Locator,
+  savePartialAddress?: () => Promise<void>,
+) {
   await form.getByLabel('Категория').selectOption('apartment');
   const next = form.getByRole('button', { name: 'Далее', exact: true });
   await next.click();
   await form
     .getByRole('combobox', { name: 'Регион', exact: true })
     .selectOption('moscow');
+  if (savePartialAddress) {
+    await form
+      .getByLabel('Адрес', { exact: true })
+      .fill('Москва, Тверская улица');
+    await savePartialAddress();
+    await expect(form.getByLabel('Адрес', { exact: true })).toHaveValue(
+      'Москва, Тверская улица',
+    );
+  }
   for (const [label, value] of [
     ['Адрес', 'Москва, Тверская улица, 19'],
     ['Населённый пункт', 'Москва'],
@@ -590,7 +602,48 @@ test('independent agent reopens an apartment sale draft, revises its preview and
   await login(page, `agent-${info.project.name}@e2e.test`, 'Кабинет риелтора');
   await page.getByRole('link', { name: 'Мои объявления', exact: true }).click();
   const form = page.locator('#new-listing');
-  await fillApartmentDetails(form);
+  let partialId: string | undefined;
+  await fillApartmentDetails(form, async () => {
+    const savingForm = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        new URL(response.url()).pathname.startsWith(
+          '/api/v1/account/listing-drafts/',
+        ),
+    );
+    await form
+      .getByRole('button', { name: 'Сохранить в черновики', exact: true })
+      .click();
+    const stored = await savingForm;
+    expect(stored.ok()).toBe(true);
+    partialId = ((await stored.json()) as { id: string }).id;
+    const otherSession = await browser.newContext();
+    try {
+      const otherPage = await otherSession.newPage();
+      await login(
+        otherPage,
+        `agent-${info.project.name}@e2e.test`,
+        'Кабинет риелтора',
+      );
+      await otherPage
+        .getByRole('link', { name: 'Мои объявления', exact: true })
+        .click();
+      await otherPage
+        .getByRole('region', { name: 'Незавершённые объявления' })
+        .getByRole('button', { name: /Продолжить/ })
+        .click();
+      await expect(
+        otherPage.locator('#new-listing').getByLabel('Адрес', { exact: true }),
+      ).toHaveValue('Москва, Тверская улица');
+    } finally {
+      await otherSession.close();
+    }
+    await page.reload();
+    const drafts = page.getByRole('region', {
+      name: 'Незавершённые объявления',
+    });
+    await drafts.getByRole('button', { name: /Продолжить/ }).click();
+  });
   const title = `Объявление риелтора ${randomUUID()}`;
   await form.getByLabel('Заголовок', { exact: true }).fill(title);
   await form.getByLabel('Цена, ₽', { exact: true }).fill('11000000');
@@ -602,6 +655,11 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     .click();
   const saved = await saving;
   expect(saved.status()).toBe(201);
+  const unfinished = await page.request.get('/api/v1/account/listing-drafts');
+  expect(unfinished.ok()).toBe(true);
+  expect(
+    ((await unfinished.json()) as { id: string }[]).map(({ id }) => id),
+  ).not.toContain(partialId);
   const draft = (await saved.json()) as {
     id: string;
     organization_id: string | null;
@@ -632,6 +690,20 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     expect(beforeSubmit.status()).toBe(200);
     expect((await beforeSubmit.json()).status).toBe('draft');
     expect((await visitor.request.get(listingPath)).status()).toBe(404);
+    await page
+      .getByRole('button', { name: 'Сохранить в черновики', exact: true })
+      .click();
+    await expect(
+      page.getByText(/Черновик сохранён. Продолжить заполнение/),
+    ).toBeVisible();
+    await page.reload();
+    await page.getByRole('button', { name: title, exact: true }).click();
+    await editor
+      .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
+      .click();
+    await expect(
+      preview.getByText('11 000 000 ₽', { exact: true }),
+    ).toBeVisible();
     await page
       .getByRole('button', { name: 'Вернуться к редактированию', exact: true })
       .click();

@@ -42,6 +42,11 @@ import {
 import { uploadSchema } from '../modules/media/media';
 import { createSchema } from '../modules/properties/properties';
 import { fields } from '../modules/listings/listings';
+import {
+  savedListingForm,
+  saveListingForm,
+  listingFormReference,
+} from '../modules/listings/form-drafts';
 import { addressSchema } from '../modules/geo/geo';
 import { staffPermissions, uuid } from './security';
 import {
@@ -138,6 +143,7 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/organizations/{organizationId}/feeds': feedInput,
   'post /v1/organizations/{organizationId}/feeds/link': feedLinkInput,
   'post /v1/account/feeds/link': feedLinkInput,
+  'put /v1/account/listing-drafts/{id}': saveListingForm,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/dry-run': importInput,
   'post /v1/organizations/{organizationId}/feeds/{feedId}/apply': importInput,
   'patch /v1/organizations/{organizationId}/feeds/{feedId}': feedConfig,
@@ -282,6 +288,7 @@ const bodyContracts: Record<string, z.ZodType> = {
       ),
   }),
   'post /v1/listings': object({
+    formDraft: listingFormReference.optional(),
     propertyId: uuid,
     dealType: z.enum(['sale', 'long_rent', 'short_rent']),
     title: fields.title.default(''),
@@ -522,6 +529,29 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (
+        operationId === 'get /v1/account/listing-drafts' ||
+        operationId === 'put /v1/account/listing-drafts/{id}'
+      ) {
+        operation.responses['200'] = {
+          description:
+            method === 'get'
+              ? 'Unfinished listing forms saved by the signed-in seller'
+              : 'Saved form with its current version',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                method === 'get' ? z.array(savedListingForm) : savedListingForm,
+              ) as SchemaObject,
+            },
+          },
+        };
+        if (method === 'put')
+          operation.responses['404'] = {
+            description:
+              'No form draft owned by this seller with the requested ID',
+          };
+      }
       if (feedReads[operationId]) {
         if (path === adminFeeds)
           operation.parameters = [

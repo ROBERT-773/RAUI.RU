@@ -1,5 +1,11 @@
 'use client';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '../lib/client';
 import {
@@ -9,6 +15,12 @@ import {
   listingAttributeFields,
 } from '../lib/listing-attribute-fields';
 import ListingTermsFields, { type ListingTerms } from './listing-terms';
+import {
+  ListingFormDrafts,
+  sameListingForm,
+  type AccountListingDraft,
+  type ListingForm,
+} from './listing-form-drafts';
 interface Category {
   code: string;
   name: string;
@@ -93,7 +105,9 @@ export default function NewListing({
   }, [canRepresentAgency, agencyRequest]);
   const selectedAgency =
     canRepresentAgency && agencyStatus === 'ready'
-      ? requiresAgency && agencies.length === 1
+      ? requiresAgency &&
+        agencies.length === 1 &&
+        (!organizationId || organizationId === agencies[0]!.id)
         ? agencies[0]
         : agencies.find(({ id }) => id === organizationId)
       : undefined;
@@ -172,6 +186,120 @@ export default function NewListing({
   const definitionRequest = useRef(0);
   const addressRequest = useRef(0);
   const hasGeocodedCoordinates = useRef(false);
+  const [drafts, setDrafts] = useState<AccountListingDraft[]>([]);
+  const [activeDraft, setActiveDraft] = useState<AccountListingDraft | null>(
+    null,
+  );
+  const [draftListFailed, setDraftListFailed] = useState(false);
+  const [draftNotice, setDraftNotice] = useState('');
+  const [draftConflict, setDraftConflict] = useState(false);
+  const draftListRequest = useRef(0);
+  const pendingDraftId = useRef('');
+  const touched = useRef(false);
+  const formData: ListingForm = {
+    step,
+    category,
+    deal,
+    region,
+    organizationId: selectedAgency?.id ?? organizationId,
+    locality,
+    address,
+    longitude,
+    latitude,
+    attributes,
+    title,
+    price,
+    terms,
+  };
+  const reloadDrafts = useCallback(() => {
+    const request = ++draftListRequest.current;
+    return api<AccountListingDraft[]>('v1/account/listing-drafts')
+      .then((records) => {
+        if (!mounted.current || request !== draftListRequest.current) return;
+        setDrafts(records);
+        setDraftListFailed(false);
+      })
+      .catch(() => {
+        if (mounted.current && request === draftListRequest.current)
+          setDraftListFailed(true);
+      });
+  }, []);
+  async function persistDraft(base = activeDraft) {
+    if (!pendingDraftId.current) pendingDraftId.current = crypto.randomUUID();
+    const id = base?.id ?? pendingDraftId.current;
+    const record = await api<AccountListingDraft>(
+      `v1/account/listing-drafts/${id}`,
+      'PUT',
+      {
+        version: base?.version ?? 0,
+        form: formData,
+      },
+    );
+    if (mounted.current) {
+      draftListRequest.current++;
+      setActiveDraft(record);
+      setDraftConflict(false);
+      setDrafts((previous) => [
+        record,
+        ...previous.filter((item) => item.id !== record.id),
+      ]);
+      touched.current = false;
+      void reloadDrafts();
+    }
+    return record;
+  }
+  function handleDraftError(failure: unknown) {
+    if (failure instanceof ApiError && failure.status === 401) {
+      setSessionExpired(true);
+      setError(
+        'Сессия завершилась. Скопируйте нужные данные перед повторным входом.',
+      );
+    } else if (
+      failure instanceof ApiError &&
+      (failure.status === 404 || failure.status === 409)
+    ) {
+      setLocked(false);
+      attempt.current = undefined;
+      setDraftConflict(true);
+      setError(
+        'Черновик изменился или уже завершён. Проверьте список незавершённых объявлений. Введённые данные остались в форме.',
+      );
+      void reloadDrafts();
+    } else {
+      setError(
+        'Не удалось сохранить форму в кабинете. Введённые данные остались здесь. Повторите сохранение.',
+      );
+    }
+  }
+  async function saveIncomplete(asCopy = false) {
+    if (saving.current || disabled || locked || completed || sessionExpired)
+      return;
+    saving.current = true;
+    setBusy(true);
+    onBusyChange?.(true);
+    setError('');
+    setDraftNotice('');
+    if (asCopy) {
+      pendingDraftId.current = crypto.randomUUID();
+      setActiveDraft(null);
+      setDraftConflict(false);
+    }
+    try {
+      await persistDraft(asCopy ? null : activeDraft);
+      if (mounted.current)
+        setDraftNotice(
+          'Черновик сохранён в кабинете. Можно продолжить сейчас или вернуться позже.',
+        );
+    } catch (failure) {
+      if (mounted.current) handleDraftError(failure);
+    } finally {
+      saving.current = false;
+      if (mounted.current) {
+        setBusy(false);
+        onBusyChange?.(false);
+      }
+    }
+  }
   function invalidateAddressLookup() {
     addressRequest.current++;
     setAddressLookup(undefined);
@@ -223,7 +351,9 @@ export default function NewListing({
   useEffect(() => {
     let active = true;
     mounted.current = true;
+    void reloadDrafts();
     const requests = definitionRequest;
+    const formRequests = draftListRequest;
     api<Category[]>('v1/categories')
       .then((value) => {
         if (active) setCategories(value);
@@ -236,12 +366,16 @@ export default function NewListing({
       active = false;
       mounted.current = false;
       requests.current++;
+      formRequests.current++;
     };
-  }, []);
-  async function chooseCategory(value: string) {
+  }, [reloadDrafts]);
+  async function chooseCategory(
+    value: string,
+    initialAttributes: Record<string, string> = {},
+  ) {
     const request = ++definitionRequest.current;
     setCategory(value);
-    setAttributes({});
+    setAttributes(initialAttributes);
     setDefinitions(null);
     setError('');
     if (!value) return;
@@ -260,7 +394,11 @@ export default function NewListing({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (saving.current || disabled || completed || sessionExpired) return;
-    if (!locked && requiresAgency && !selectedAgency) {
+    if (
+      !locked &&
+      (requiresAgency || (canRepresentAgency && organizationId)) &&
+      !selectedAgency
+    ) {
       setError('Выберите агентство для объявления.');
       return;
     }
@@ -284,16 +422,9 @@ export default function NewListing({
         return;
       }
     }
-    if (!locked && step < steps.length - 1) {
-      if (step === 0 && (!category || !definitions)) return;
-      if (step === 1 && !validLocation) {
-        setError(
-          'Укажите адрес, населённый пункт и корректные координаты объекта.',
-        );
-        return;
-      }
+    if (!locked) {
       if (
-        step === 0 &&
+        (step === 0 || step === steps.length - 1) &&
         commercialTypeField?.required &&
         !commercialTypeField.options.includes(
           attributes.commercial_property_type ?? '',
@@ -303,7 +434,7 @@ export default function NewListing({
         return;
       }
       if (
-        step === 2 &&
+        step >= 2 &&
         visibleDefinitions.some(({ code }) => code === 'kitchen_area') &&
         attributes.kitchen_area &&
         (Number(attributes.kitchen_area) < 0 ||
@@ -314,7 +445,7 @@ export default function NewListing({
         return;
       }
       if (
-        step === 2 &&
+        step >= 2 &&
         visibleDefinitions.some(({ code }) => code === 'floor') &&
         visibleDefinitions.some(({ code }) => code === 'floors') &&
         attributes.floor &&
@@ -324,9 +455,19 @@ export default function NewListing({
         setError('Этаж не может быть больше количества этажей в доме.');
         return;
       }
-      setError('');
-      setStep(step + 1);
-      return;
+      if (step < steps.length - 1) {
+        if (step === 0 && (!category || !definitions)) return;
+        if (step === 1 && !validLocation) {
+          setError(
+            'Укажите адрес, населённый пункт и корректные координаты объекта.',
+          );
+          return;
+        }
+        setError('');
+        setDraftNotice('');
+        setStep(step + 1);
+        return;
+      }
     }
     if (!definitions) return;
     if (!attempt.current) {
@@ -381,7 +522,13 @@ export default function NewListing({
           dealType: deal,
           title: listingTitle,
           price: listingPrice,
-          ...(Object.keys(terms).length ? { terms } : {}),
+          ...(Object.keys(terms).length
+            ? {
+                terms: Object.fromEntries(
+                  Object.entries(terms).sort(([a], [b]) => a.localeCompare(b)),
+                ),
+              }
+            : {}),
         },
         propertyKey: crypto.randomUUID(),
         listingKey: crypto.randomUUID(),
@@ -394,6 +541,23 @@ export default function NewListing({
     setError('');
     try {
       const current = attempt.current;
+      if (activeDraft && !current.listing.formDraft) {
+        let record: AccountListingDraft;
+        try {
+          record = await persistDraft();
+        } catch (failure) {
+          if (mounted.current) {
+            attempt.current = undefined;
+            setLocked(false);
+            handleDraftError(failure);
+          }
+          return;
+        }
+        if (!mounted.current || !allowed.current) return;
+        current.listing.formDraft = { id: record.id, version: record.version };
+        current.propertyKey = `draft-property-${record.id}-${record.version}`;
+        current.listingKey = `draft-listing-${record.id}-${record.version}`;
+      }
       if (!current.propertyId) {
         const property = await api<{ id: string }>(
           'v1/properties',
@@ -411,11 +575,28 @@ export default function NewListing({
         { idempotencyKey: current.listingKey },
       );
       if (mounted.current) {
+        if (activeDraft) {
+          draftListRequest.current++;
+          setDrafts((previous) =>
+            previous.filter((draft) => draft.id !== activeDraft.id),
+          );
+          setActiveDraft(null);
+          pendingDraftId.current = '';
+        }
+        setDraftNotice('');
         setCompleted(true);
         onCreated(listing.id);
       }
     } catch (error) {
       if (!mounted.current) return;
+      if (
+        activeDraft &&
+        error instanceof ApiError &&
+        [404, 409].includes(error.status)
+      ) {
+        handleDraftError(error);
+        return;
+      }
       if (error instanceof ApiError && error.status === 401) {
         setSessionExpired(true);
         setError(
@@ -459,9 +640,19 @@ export default function NewListing({
     setLocked(false);
     setSessionExpired(false);
     setCompleted(false);
+    setActiveDraft(null);
+    setDraftConflict(false);
+    pendingDraftId.current = '';
+    touched.current = false;
+    setDraftNotice('');
     setStep(0);
     setError('');
-    setAttributes({});
+    void chooseCategory('');
+    setDeal('sale');
+    setRegion(
+      regionOptions.find(({ code }) => code === 'moscow')?.code ??
+        regionOptions[0]!.code,
+    );
     setAddress('');
     invalidateAddressLookup();
     setLocality('');
@@ -470,7 +661,51 @@ export default function NewListing({
     setTitle('');
     setPrice('');
     setTerms({});
-    setOrganizationId('');
+    setOrganizationId(initialAgencyId);
+  }
+  function mayLeaveForm() {
+    const changed = activeDraft
+      ? !sameListingForm(formData, activeDraft.form)
+      : touched.current;
+    return (
+      !changed ||
+      completed ||
+      window.confirm(
+        'В форме есть несохранённые изменения. Перейти без их сохранения?',
+      )
+    );
+  }
+  function resumeDraft(record: AccountListingDraft) {
+    if (saving.current || disabled || (locked && !completed) || !mayLeaveForm())
+      return;
+    const saved = record.form;
+    attempt.current = undefined;
+    setLocked(false);
+    setCompleted(false);
+    setSessionExpired(false);
+    setDraftNotice('');
+    setActiveDraft(record);
+    setDraftConflict(false);
+    pendingDraftId.current = record.id;
+    touched.current = false;
+    invalidateAddressLookup();
+    void chooseCategory(saved.category, saved.attributes);
+    setDeal(saved.deal);
+    setOrganizationId(saved.organizationId);
+    setRegion(saved.region);
+    setAddress(saved.address);
+    setLocality(saved.locality);
+    setLongitude(saved.longitude);
+    setLatitude(saved.latitude);
+    hasGeocodedCoordinates.current = Boolean(saved.longitude && saved.latitude);
+    setPrice(saved.price);
+    setTitle(saved.title);
+    setTerms(saved.terms);
+    setStep(saved.step);
+    if (step === saved.step)
+      form.current
+        ?.querySelector<HTMLElement>('fieldset:not([hidden]) > legend')
+        ?.focus();
   }
   return (
     <form
@@ -478,8 +713,21 @@ export default function NewListing({
       id="new-listing"
       className="listing-wizard"
       onSubmit={save}
+      onChange={() => {
+        touched.current = true;
+        setDraftNotice('');
+      }}
     >
       <h2>Новое объявление</h2>
+      <ListingFormDrafts
+        drafts={drafts}
+        categories={categories}
+        steps={steps}
+        failed={draftListFailed}
+        disabled={disabled || busy || sessionExpired || (locked && !completed)}
+        onResume={resumeDraft}
+        onRetry={() => void reloadDrafts()}
+      />
       <p>
         Сохраните черновик, затем добавьте фотографии и отправьте объявление на
         проверку.
@@ -830,6 +1078,7 @@ export default function NewListing({
         <ListingTermsFields deal={deal} terms={terms} onChange={setTerms} />
       </fieldset>
       {error && <p role="alert">{error}</p>}
+      {draftNotice && <p role="status">{draftNotice}</p>}
       {sessionExpired && (
         <Link href="/account?action=publish">Войти снова</Link>
       )}
@@ -841,6 +1090,28 @@ export default function NewListing({
       )}
       {!completed && (
         <div className="actions">
+          {!locked && !sessionExpired && (
+            <button
+              type="button"
+              disabled={busy || disabled}
+              onClick={() => void saveIncomplete(draftConflict)}
+            >
+              {draftConflict
+                ? 'Сохранить отдельным черновиком'
+                : 'Сохранить в черновики'}
+            </button>
+          )}
+          {activeDraft && !locked && !sessionExpired && (
+            <button
+              type="button"
+              disabled={busy || disabled}
+              onClick={() => {
+                if (mayLeaveForm()) reset();
+              }}
+            >
+              Начать другое объявление
+            </button>
+          )}
           {step > 0 && !locked && (
             <button
               type="button"

@@ -694,6 +694,48 @@ test.each(['photos', 'description', 'price', 'characteristics'])(
   },
 );
 
+test('saving from preview returns to the list and keeps the draft private without a transition', async () => {
+  setup();
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён. Продолжить заполнение/);
+  expect(
+    screen.queryByRole('heading', { name: 'Предпросмотр объявления' }),
+  ).toBeNull();
+  expect(document.activeElement).toBe(
+    screen.getByRole('heading', { name: 'Сохранённые объявления' }),
+  );
+  expect(
+    vi.mocked(api).mock.calls.some(([url]) => url.endsWith('/transitions')),
+  ).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: listing.title }));
+  expect(await screen.findByRole('textbox', { name: 'Описание' })).toBeTruthy();
+});
+
+test('save and exit writes unfinished edits even when there are no photos', async () => {
+  setup('draft', false, 0);
+  render(<OwnerListings />);
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  const description = await screen.findByRole('textbox', { name: 'Описание' });
+  fireEvent.change(description, { target: { value: 'Начало' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить и выйти' }));
+  await screen.findByText(/Черновик сохранён. Продолжить заполнение/);
+  expect(api).toHaveBeenCalledWith(
+    'v1/listings/' + listing.id,
+    'PATCH',
+    expect.objectContaining({ description: 'Начало' }),
+  );
+  expect(
+    vi.mocked(api).mock.calls.some(([url]) => url.endsWith('/transitions')),
+  ).toBe(false);
+});
+
 test.each([null, 'processing', 'moderation'])(
   'submission advances with fresh versions, including a lost response: %s',
   async (lostResponse) => {

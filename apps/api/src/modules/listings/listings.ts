@@ -40,6 +40,11 @@ import {
 import { buildPublicPriceSnapshot } from './public-price-history';
 import { Media, MediaModule } from '../media/media';
 import { enqueueImmediateListingNotifications } from '../product/subscription-outbox';
+import {
+  ListingFormDraftController,
+  ListingFormDrafts,
+  listingFormReference,
+} from './form-drafts';
 export const transitions: Record<ListingState, ListingState[]> = {
   draft: ['processing'],
   processing: ['draft', 'moderation'],
@@ -126,6 +131,7 @@ export class Listings {
           price: fields.price.optional(),
           description: fields.description.default(''),
           terms: fields.terms.default({}),
+          formDraft: listingFormReference.optional(),
         })
         .strict(),
       body,
@@ -136,6 +142,22 @@ export class Listings {
       key,
       input,
       async (sql) => {
+        if (input.formDraft) {
+          const [draft] = await this.db.rows<{
+            version: number;
+            listing_id: string | null;
+          }>(
+            'SELECT version,listing_id FROM listing_form_drafts WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+            [input.formDraft.id, actor.id],
+            sql,
+          );
+          if (!draft)
+            throw new NotFoundException('Listing form draft not found');
+          if (draft.listing_id || draft.version !== input.formDraft.version)
+            throw new ConflictException(
+              'Listing form draft is stale or already completed',
+            );
+        }
         const property = await this.properties.access(
           actor,
           input.propertyId,
@@ -184,6 +206,11 @@ export class Listings {
           {},
           listing!,
         );
+        if (input.formDraft)
+          await sql.query(
+            'UPDATE listing_form_drafts SET listing_id=$2,form=NULL,updated_at=now() WHERE id=$1',
+            [input.formDraft.id, listing!.id],
+          );
         return listing!;
       },
       (sql) => this.properties.access(actor, input.propertyId, sql),
@@ -486,8 +513,8 @@ export class ListingController {
     OrganizationsModule,
     MediaModule,
   ],
-  controllers: [ListingController],
-  providers: [Listings, Idempotency],
+  controllers: [ListingController, ListingFormDraftController],
+  providers: [Listings, ListingFormDrafts, Idempotency],
   exports: [Listings],
 })
 export class ListingsModule {}
