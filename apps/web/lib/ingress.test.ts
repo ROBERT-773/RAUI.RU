@@ -573,6 +573,69 @@ test('registration approval proxy admits only queue, detail and idempotent decis
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
+test('seller contact proxy forwards precisely the supported routes and keeps CSRF and no-store for selections', async () => {
+  const origin = 'https://staging.raui.ru';
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  vi.stubEnv('WEB_ORIGIN', origin);
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+    expect(init.cache).toBe('no-store');
+    if (init.method === 'PUT') {
+      expect(new Headers(init.headers).get('x-csrf-token')).toBe(
+        'synthetic-csrf',
+      );
+      expect(
+        JSON.parse(new TextDecoder().decode(init.body as ArrayBuffer)),
+      ).toEqual({ phoneIds: [], expectedPhoneIds: [] });
+      expect(url).toMatch(/\/contact-settings$/);
+    }
+    return Response.json({ ok: true });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const handlers = await import('../app/api/[...path]/route');
+  const id = '11111111-1111-4111-8111-111111111111';
+  const selected = 'listings/' + id + '/contact-settings';
+  const account = 'account/contact-settings';
+  const phones = 'account/contact-phones/';
+  const cases = [
+    ['PUT', selected, 200],
+    ['GET', selected, 200],
+    ['GET', account, 200],
+    ['PATCH', account, 200],
+    ['POST', phones + 'request', 200],
+    ['POST', phones + 'verify', 200],
+    ['DELETE', phones + id, 200],
+    ['PUT', selected, 403, 'https://other.example'],
+    ['PUT', 'listings/not-a-uuid/contact-settings', 404],
+    ['PUT', selected + '/more', 404],
+    ['PUT', 'listings/' + id, 404],
+    ['PATCH', selected, 404],
+    ['PUT', account, 404],
+    ['POST', account, 404],
+    ['PATCH', account + '/other', 404],
+    ['GET', phones + 'request', 404],
+    ['POST', phones + 'verify/more', 404],
+    ['DELETE', phones + 'not-a-uuid', 404],
+  ] as const;
+  for (const [method, route, expected, sender = origin] of cases) {
+    const path = ['v1', ...route.split('/')];
+    const response = await handlers[method](
+      new NextRequest(origin + '/api/' + path.join('/'), {
+        method,
+        headers: { origin: sender, 'x-csrf-token': 'synthetic-csrf' },
+        ...(method === 'GET'
+          ? {}
+          : { body: JSON.stringify({ phoneIds: [], expectedPhoneIds: [] }) }),
+      }),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(response.status, method + ' ' + route).toBe(expected);
+    if (expected === 200)
+      expect(response.headers.get('cache-control')).toContain('no-store');
+  }
+  expect(fetcher).toHaveBeenCalledTimes(7);
+});
+
 test('phone OTP proxy accepts only exact methods and forwards idempotency without caching', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'local');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
