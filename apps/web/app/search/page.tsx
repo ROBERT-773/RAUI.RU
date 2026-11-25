@@ -26,7 +26,6 @@ export default async function Page({
     initial.regionCode = region;
   if (city === 'moscow') initial.locality = 'Москва';
   if (typeof q === 'string' && q.trim()) initial.q = q.trim().slice(0, 200);
-  else if (deal) initial.locality = 'Москва';
   if (typeof budget === 'string' && /^[1-9][0-9]{0,13}$/.test(budget))
     initial.price = { max: Number(budget) };
   try {
