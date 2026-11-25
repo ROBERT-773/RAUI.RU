@@ -504,6 +504,47 @@ test('saved search create, rename, reopen and delete persist', async ({
   expect((await removeRefresh).status()).toBe(200);
   expect(await savedArticle(page, created.id)).toBeNull();
 });
+test('buyer can recognize a saved stay and reopen the same dates and guest count', async ({
+  page,
+}) => {
+  await login(page);
+  await page.goto('/search');
+  await page
+    .getByRole('combobox', { name: 'Сделка', exact: true })
+    .selectOption('short_rent');
+  await page.getByLabel('Заезд', { exact: true }).fill('2026-12-30');
+  await page.getByLabel('Выезд', { exact: true }).fill('2027-01-02');
+  await page.getByLabel('Число гостей', { exact: true }).fill('2');
+  await page.getByRole('button', { name: 'Найти', exact: true }).click();
+  await expect(page).toHaveURL(/definition=.*rental_available_from/);
+  const saving = page.waitForResponse((response) =>
+    endpoint(response, 'POST', '/api/v1/account/saved-searches'),
+  );
+  await page
+    .getByRole('button', { name: 'Сохранить поиск', exact: true })
+    .click();
+  const response = await saving;
+  expect(response.status()).toBe(201);
+  const created = (await response.json()) as SavedRow;
+  const article = await savedArticle(page, created.id);
+  expect(article).not.toBeNull();
+  await expect(article!).toContainText(
+    'Заезд: 30.12.2026 · Выезд: 02.01.2027 · Число гостей: 2',
+  );
+  await article!
+    .getByRole('link', { name: 'Открыть поиск', exact: true })
+    .click();
+  await expect(page.getByLabel('Заезд', { exact: true })).toHaveValue(
+    '2026-12-30',
+  );
+  await expect(page.getByLabel('Выезд', { exact: true })).toHaveValue(
+    '2027-01-02',
+  );
+  await expect(page.getByLabel('Число гостей', { exact: true })).toHaveValue(
+    '2',
+  );
+});
+
 test('inquiry and account messages', async ({ page }, testInfo) => {
   const text = 'Можно посмотреть квартиру? ' + testInfo.project.name;
   await login(page);
