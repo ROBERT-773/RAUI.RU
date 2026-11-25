@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { ApiError } from '../lib/client';
-import { AccountEntryDialog } from './account-entry-link';
+import {
+  AccountEntryDialog,
+  accountEntryHistoryKey,
+} from './account-entry-link';
 
 type Action = {
   trigger: HTMLButtonElement;
@@ -17,7 +20,7 @@ const historyKey = 'rauiAccountAction';
 export function useAccountAction(onError: (message: string) => void) {
   const [dialogAction, setDialogAction] = useState<Action | null>(null);
   const waiting = useRef<Action | null>(null);
-  const inFlight = useRef(new Set<HTMLButtonElement>());
+  const inFlight = useRef(new Map<HTMLButtonElement, number | 'retry'>());
   const generation = useRef(0);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
 
@@ -63,11 +66,18 @@ export function useAccountAction(onError: (message: string) => void) {
     execute: () => Promise<void>,
   ) {
     const trigger = event.currentTarget;
-    if (event.detail > 1 || waiting.current || inFlight.current.has(trigger))
-      return;
     const epoch = generation.current;
+    const active = inFlight.current.get(trigger);
+    if (
+      event.detail > 1 ||
+      waiting.current ||
+      active === epoch ||
+      active === 'retry'
+    )
+      return;
+    const entryAtClick = window.history.state?.[accountEntryHistoryKey];
     const href = window.location.href;
-    inFlight.current.add(trigger);
+    inFlight.current.set(trigger, epoch);
     try {
       await execute();
     } catch (error) {
@@ -81,7 +91,12 @@ export function useAccountAction(onError: (message: string) => void) {
         onError((error as Error).message);
         return;
       }
-      if (waiting.current) return;
+      // Opening a cabinet link pushes history at the same URL without a popstate event.
+      if (
+        waiting.current ||
+        window.history.state?.[accountEntryHistoryKey] !== entryAtClick
+      )
+        return;
       const action = {
         trigger,
         title,
@@ -99,7 +114,9 @@ export function useAccountAction(onError: (message: string) => void) {
       waiting.current = action;
       setDialogAction(action);
     } finally {
-      inFlight.current.delete(trigger);
+      // A new click after Back may already own this button while the old request settles.
+      if (inFlight.current.get(trigger) === epoch)
+        inFlight.current.delete(trigger);
     }
   }
 
@@ -112,7 +129,7 @@ export function useAccountAction(onError: (message: string) => void) {
     if (!ownsEntry) return;
     window.history.back();
     if (!authenticated || !action.trigger.isConnected) return;
-    inFlight.current.add(action.trigger);
+    inFlight.current.set(action.trigger, 'retry');
     void action
       .execute()
       .catch((error: Error) => {

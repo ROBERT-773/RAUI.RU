@@ -19,7 +19,7 @@ const Account = dynamic(() => import('./account'), {
   ssr: false,
   loading: OpeningStatus,
 });
-const historyKey = 'rauiAccountEntry';
+export const accountEntryHistoryKey = 'rauiAccountEntry';
 type Intent = 'login' | 'publish';
 type Channels = {
   smsAvailable: boolean;
@@ -142,7 +142,7 @@ export function AccountEntryLink({
   const [open, setOpen] = useState(false);
   useEffect(() => {
     function sync() {
-      const active = window.history.state?.[historyKey] === id;
+      const active = window.history.state?.[accountEntryHistoryKey] === id;
       if (active) returnFocus.current = true;
       closing.current = false;
       setOpen(active);
@@ -185,12 +185,12 @@ export function AccountEntryLink({
             return;
           event.preventDefault();
           if (open || closing.current) return;
-          if (window.history.state?.[historyKey] === id) {
+          if (window.history.state?.[accountEntryHistoryKey] === id) {
             setOpen(true);
             return;
           }
           window.history.pushState(
-            { ...window.history.state, [historyKey]: id },
+            { ...window.history.state, [accountEntryHistoryKey]: id },
             '',
             window.location.href,
           );
@@ -210,7 +210,7 @@ export function AccountEntryLink({
             if (closing.current) return;
             closing.current = true;
             setOpen(false);
-            if (window.history.state?.[historyKey] === id)
+            if (window.history.state?.[accountEntryHistoryKey] === id)
               window.history.back();
             else closing.current = false;
           }}
