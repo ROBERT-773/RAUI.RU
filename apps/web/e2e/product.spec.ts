@@ -295,7 +295,7 @@ test('guest opens a result from its cover and signs in on the listing to save it
   page,
 }) => {
   await page.goto('/');
-  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
+  await page.getByRole('link', { name: 'Недвижимость', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
@@ -811,7 +811,7 @@ test('HTML uses fresh CSP nonces and protected browser headers', async ({
   expect(second?.headers()['content-security-policy']).not.toContain(
     "'nonce-" + nonce + "'",
   );
-  await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
+  await page.getByRole('link', { name: 'Недвижимость', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: 'Квартира 2 комнаты' }),
   ).toBeVisible();
