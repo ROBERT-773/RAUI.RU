@@ -85,13 +85,16 @@ export async function checkProfessionalImage(
     await editor
       .getByRole('combobox', { name: 'Агентство', exact: true })
       .selectOption(agencyId);
-  await editor
-    .getByText(
-      agencyId ? 'Публичный профиль агентства' : 'Публичный профиль агента',
-      { exact: true },
-    )
-    .click();
-  await editor.getByLabel('Публичное имя').fill(name);
+  const profileToggle = editor.getByText(
+    agencyId ? 'Публичный профиль агентства' : 'Публичный профиль агента',
+    { exact: true },
+  );
+  const nameField = editor.getByLabel('Публичное имя');
+  await expect(nameField).toHaveCount(1);
+  await expect(profileToggle).toHaveCount(1);
+  await profileToggle.click();
+  await expect(nameField).toBeVisible();
+  await nameField.fill(name);
   await editor.getByLabel('Регионы работы').selectOption('moscow');
   const publish = async (visible: boolean) => {
     await editor.getByLabel('Показывать в каталоге').setChecked(visible);

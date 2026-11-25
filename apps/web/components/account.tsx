@@ -526,7 +526,7 @@ export default function Account({
         {notice && <p role="status">{notice}</p>}
         <AccountProfile
           focusContacts={initialContacts}
-          key={identityEpoch.current}
+          key={'account-profile-' + identityEpoch.current}
           smsAvailable={smsAvailable}
           onRefresh={refreshProfile}
           onSessionExpired={() => expireIdentity(profileEpoch)}
@@ -551,7 +551,7 @@ export default function Account({
         ))}
       {canList &&
         (canContinueListing ? (
-          <ListingSummary key={user.id} />
+          <ListingSummary key={'listings-' + user.id} />
         ) : (
           <Link href="/account/listings">Мои объявления</Link>
         ))}
@@ -561,7 +561,9 @@ export default function Account({
           <Link href="/admin/feedback">Предложения о портале</Link>
         </nav>
       )}
-      {user.role === 'agent' && <AgentPublicProfile key={user.public_id} />}
+      {user.role === 'agent' && (
+        <AgentPublicProfile key={'agent-profile-' + user.id} />
+      )}
       {user.role === 'agent' && (
         <ProfessionalFeedLinks
           key={'feeds-' + user.id}
@@ -572,7 +574,7 @@ export default function Account({
       )}
       {['agent', 'agency', 'developer'].includes(user.role) && (
         <AgencyPublicProfiles
-          key={user.public_id}
+          key={'organizations-' + user.id}
           userId={user.id}
           canCreate={user.role === 'agency' || user.role === 'developer'}
           kind={user.role === 'developer' ? 'developer' : 'agency'}
@@ -849,7 +851,9 @@ export default function Account({
           )}
         </>
       )}
-      {tab === 'subscriptions' && <AccountSubscriptions key={user.public_id} />}
+      {tab === 'subscriptions' && (
+        <AccountSubscriptions key={'subscriptions-' + user.id} />
+      )}
       {tab === 'notifications' && (
         <>
           <label>
