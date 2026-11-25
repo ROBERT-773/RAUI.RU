@@ -2,6 +2,7 @@
 import { Button } from '@raui/ui';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
+import { invalidPhoneInput, normalizePhoneInput } from '../lib/phone-input';
 interface Challenge {
   challengeId: string;
   expiresAt: string;
@@ -24,7 +25,7 @@ export default function PhoneOtpForm({
   onBusy?: (busy: boolean) => void;
   disabled?: boolean;
 }) {
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState('+7');
   const [code, setCode] = useState('');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,7 +74,11 @@ export default function PhoneOtpForm({
   }
   async function request() {
     if (lock.current || disabled || Date.now() < resendAt) return;
-    if (!pending.current && !/^\+[1-9][0-9]{7,14}$/.test(phone)) return;
+    const normalized = pending.current?.phone ?? normalizePhoneInput(phone);
+    if (!normalized) {
+      setError(invalidPhoneInput);
+      return;
+    }
     lock.current = true;
     setBusy(true);
     callbacks.current.onBusy?.(true);
@@ -82,7 +87,11 @@ export default function PhoneOtpForm({
     setCode('');
     setChallenge(null);
     const current = epoch.current;
-    const allocation = pending.current ?? { phone, key: crypto.randomUUID() };
+    const allocation = pending.current ?? {
+      phone: normalized,
+      key: crypto.randomUUID(),
+    };
+    setPhone(allocation.phone);
     pending.current = allocation;
     try {
       const result = await api<Challenge>(
@@ -192,7 +201,6 @@ export default function PhoneOtpForm({
             type="tel"
             autoComplete="tel"
             value={phone}
-            pattern="\+[1-9][0-9]{7,14}"
             required
             disabled={busy || disabled || uncertain}
             onChange={(event) => {
@@ -203,7 +211,7 @@ export default function PhoneOtpForm({
             }}
           />
         </label>
-        <p>Международный формат: + и от 8 до 15 цифр.</p>
+        <p>Российский номер можно ввести с +7 или 8.</p>
         <Button type="submit" disabled={busy || disabled || remaining > 0}>
           {uncertain
             ? 'Проверить результат запроса'
