@@ -221,7 +221,11 @@ async function run() {
         [randomUUID(), `agency-${project}@e2e.test`, 'agency'],
         [randomUUID(), `agent-${project}@e2e.test`, 'agent'],
         ...(emailCodeOnly
-          ? [[randomUUID(), `code-recovery-${project}@e2e.test`, 'agent']]
+          ? ['code-recovery', 'code-change'].map((prefix) => [
+              randomUUID(),
+              `${prefix}-${project}@e2e.test`,
+              'agent',
+            ])
           : []),
         ...(runFeeds
           ? [[randomUUID(), `developer-${project}@e2e.test`, 'developer']]

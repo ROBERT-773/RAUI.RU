@@ -3,20 +3,24 @@ import { backendFetch } from './backend';
 
 export async function signInCapabilities() {
   const requestHeaders = await headers();
-  async function available(channel: 'phone' | 'email') {
-    try {
-      const response = await backendFetch(
-        '/v1/auth/' + channel + '-sign-in/capabilities',
-        requestHeaders,
-      );
-      return response.ok && (await response.json()).available === true;
-    } catch {
-      return false;
-    }
+  const unavailable = {
+    smsAvailable: false,
+    emailAvailable: false,
+    resetLinkAvailable: false,
+  };
+  try {
+    const response = await backendFetch(
+      '/v1/auth/password-reset/capabilities',
+      requestHeaders,
+    );
+    if (!response.ok) return unavailable;
+    const options = await response.json();
+    return {
+      smsAvailable: options.smsAvailable === true,
+      emailAvailable: options.emailAvailable === true,
+      resetLinkAvailable: options.resetLinkAvailable === true,
+    };
+  } catch {
+    return unavailable;
   }
-  const [smsAvailable, emailAvailable] = await Promise.all([
-    available('phone'),
-    available('email'),
-  ]);
-  return { smsAvailable, emailAvailable };
 }

@@ -69,6 +69,14 @@ import {
   ConfiguredPhoneOtpDelivery,
 } from './phone-otp-delivery';
 export const passwordSchema = z.string().min(12).max(128);
+export const changePasswordSchema = z.strictObject({
+  password: passwordSchema,
+  currentPassword: z.string().min(1).max(128).optional(),
+});
+const passwordChangeMode = `CASE
+  WHEN u.role='admin' OR EXISTS (SELECT FROM staff_permission_grants g WHERE g.user_id=u.id) THEN 'recovery-link'
+  WHEN s.password_change_until>clock_timestamp() THEN 'recent-code'
+  ELSE 'current-password' END`;
 const emailSchema = z
   .email()
   .max(254)
@@ -297,7 +305,7 @@ export class AuthService {
     });
     return this.respondSession(res, session, input.transport);
   }
-  async issueSession(sql: Sql, userId: string) {
+  async issueSession(sql: Sql, userId: string, verifiedByCode = false) {
     const [user] = await this.db.rows<User>(
       'SELECT * FROM users WHERE id=$1',
       [userId],
@@ -308,8 +316,9 @@ export class AuthService {
     const csrf = token();
     const days = loadConfig().SESSION_DAYS;
     await sql.query(
-      "INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at) VALUES($1,$2,$3,now()+$4*interval '1 day')",
-      [userId, hash(secret), hash(csrf), days],
+      `INSERT INTO sessions(user_id,token_hash,csrf_hash,expires_at,password_change_until)
+       VALUES($1,$2,$3,now()+$4*interval '1 day',CASE WHEN $5::boolean THEN clock_timestamp()+interval '15 minutes' END)`,
+      [userId, hash(secret), hash(csrf), days, verifiedByCode],
     );
     await this.audit.record(sql, userId, 'auth.login', 'user', userId);
     return { user, secret, csrf, days };
@@ -387,12 +396,80 @@ export class AuthService {
     return result.session;
   }
   async me(actor: Actor) {
-    const [user] = await this.db.rows<User>(
-      `SELECT u.*,r.reason AS registration_approval_reason FROM users u
-       LEFT JOIN registration_approval_requests r ON r.user_id=u.id WHERE u.id=$1`,
-      [actor.id],
+    const [user] = await this.db.rows<User & { password_change_mode: string }>(
+      `SELECT u.*,r.reason AS registration_approval_reason,${passwordChangeMode} AS password_change_mode
+       FROM users u JOIN sessions s ON s.user_id=u.id
+       LEFT JOIN registration_approval_requests r ON r.user_id=u.id WHERE u.id=$1 AND s.id=$2`,
+      [actor.id, actor.session_id],
     );
-    return { ...publicUser(user!), twoFactorEnabled: false };
+    if (!user) throw new UnauthorizedException();
+    return {
+      ...publicUser(user),
+      twoFactorEnabled: false,
+      passwordChangeMode: user.password_change_mode,
+    };
+  }
+  async changePassword(actor: Actor, body: unknown) {
+    const { password, currentPassword } = parse(changePasswordSchema, body);
+    const state = (sql?: Sql) =>
+      this.db.rows<{ email: string; password_hash: string; mode: string }>(
+        `SELECT u.email,u.password_hash,${passwordChangeMode} AS mode FROM users u JOIN sessions s ON s.user_id=u.id
+       WHERE u.id=$1 AND s.id=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() AND u.active`,
+        [actor.id, actor.session_id],
+        sql,
+      );
+    const [before] = await state();
+    if (!before) throw new UnauthorizedException();
+    if (before.mode === 'recovery-link') throw new ForbiddenException();
+    let passwordVerified = false;
+    if (currentPassword !== undefined) {
+      try {
+        await this.checkPasswordRate(before.email);
+      } catch (e) {
+        if (e instanceof UnauthorizedException)
+          throw new HttpException('Too many password attempts', 429);
+        throw e;
+      }
+      passwordVerified = await passwordMatches(
+        currentPassword,
+        before.password_hash,
+      );
+      if (!passwordVerified) throw new ForbiddenException();
+    }
+    if (!passwordVerified && before.mode !== 'recent-code')
+      throw new ForbiddenException();
+    const newHash = await passwordHash(password);
+    return this.db.transaction(async (sql) => {
+      await lockPhoneOtpActor(sql, actor);
+      const [current] = await state(sql);
+      if (
+        !current ||
+        current.mode === 'recovery-link' ||
+        current.password_hash !== before.password_hash ||
+        (!passwordVerified && current.mode !== 'recent-code')
+      )
+        throw new ForbiddenException();
+      await sql.query(
+        'UPDATE users SET password_hash=$2,updated_at=clock_timestamp() WHERE id=$1',
+        [actor.id, newHash],
+      );
+      await sql.query(
+        "UPDATE auth_challenges SET used_at=clock_timestamp() WHERE user_id=$1 AND purpose='reset' AND used_at IS NULL",
+        [actor.id],
+      );
+      await sql.query(
+        'UPDATE sessions SET revoked_at=clock_timestamp() WHERE user_id=$1 AND revoked_at IS NULL',
+        [actor.id],
+      );
+      await this.audit.record(
+        sql,
+        actor.id,
+        'auth.password.changed',
+        'user',
+        actor.id,
+      );
+      return this.issueSession(sql, actor.id);
+    });
   }
   async request(body: unknown, purpose: 'email' | 'reset', actor?: Actor) {
     if (actor) {
@@ -591,7 +668,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const session = await this.emailSignIn.confirm(body, (sql, id) =>
-      this.auth.issueSession(sql, id),
+      this.auth.issueSession(sql, id, true),
     );
     return this.auth.respondSession(res, session);
   }
@@ -633,7 +710,7 @@ export class AuthController {
   ) {
     res.setHeader('Cache-Control', 'no-store');
     const result = await this.phoneSignIn.confirm(body, (sql, userId) =>
-      this.auth.issueSession(sql, userId),
+      this.auth.issueSession(sql, userId, true),
     );
     return result.kind === 'signup'
       ? result
@@ -659,6 +736,16 @@ export class AuthController {
   }
   @Get('me') me(@CurrentActor() actor: Actor) {
     return this.auth.me(actor);
+  }
+  @Post('password') async password(
+    @CurrentActor() actor: Actor,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.auth.respondSession(
+      res,
+      await this.auth.changePassword(actor, body),
+    );
   }
   @Get('csrf') csrf(
     @Req() req: AuthRequest,
@@ -751,6 +838,19 @@ export class AuthController {
   }
   @Public() @Post('password-reset') reset(@Body() body: unknown) {
     return this.auth.request(body, 'reset');
+  }
+  @Public() @Get('password-reset/capabilities') recoveryCapabilities(
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const config = loadConfig();
+    res.setHeader('Cache-Control', 'no-store');
+    return {
+      smsAvailable: phoneSignInAvailable(config),
+      emailAvailable: emailSignInAvailable(config),
+      resetLinkAvailable: Boolean(
+        config.VERIFICATION_GATEWAY_URL || config.RESET_SMTP_ENABLED === 'true',
+      ),
+    };
   }
   @Public() @Post('password-reset/confirm') confirmReset(
     @Body() body: unknown,

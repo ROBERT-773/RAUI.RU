@@ -79,6 +79,7 @@ export default function Account({
   initialContacts = false,
   smsAvailable = false,
   emailAvailable = false,
+  resetLinkAvailable = false,
   recoverAccess = false,
 }: {
   continueListing?: boolean;
@@ -87,6 +88,7 @@ export default function Account({
   initialContacts?: boolean;
   smsAvailable?: boolean;
   emailAvailable?: boolean;
+  resetLinkAvailable?: boolean;
   recoverAccess?: boolean;
 } = {}) {
   const [user, setUser] = useState<AccountUser | null>(null),
@@ -329,9 +331,12 @@ export default function Account({
           {smsAvailable && (
             <Button onClick={() => setSignInMethod('phone')}>На телефон</Button>
           )}
-          <Link href="/account/forgot-password?mode=password">
-            Сменить пароль по ссылке
-          </Link>
+          {resetLinkAvailable && (
+            <Link href="/account/forgot-password?mode=password">
+              Сменить пароль по ссылке
+            </Link>
+          )}
+          <Link href="/account">Вернуться ко входу</Link>
         </div>
       </section>
     );
@@ -355,6 +360,7 @@ export default function Account({
         }) => {
           clearPrivateState();
           setCsrf(csrfToken);
+          if (recoverAccess) setProfileOpen(true);
           focusAfterCode.current = !continueFeedback;
           setUser(next);
           announceFeedbackIdentityChange();
@@ -608,6 +614,8 @@ export default function Account({
           focusContacts={initialContacts}
           key={'account-profile-' + identityEpoch.current}
           smsAvailable={smsAvailable}
+          emailAvailable={emailAvailable}
+          resetLinkAvailable={resetLinkAvailable}
           onRefresh={refreshProfile}
           onSessionExpired={() => expireIdentity(profileEpoch)}
         />

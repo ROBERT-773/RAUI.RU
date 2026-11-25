@@ -155,6 +155,7 @@ export class SessionGuard implements CanActivate {
         'GET /v1/auth/sessions',
         'POST /v1/auth/logout',
         'POST /v1/auth/logout-all',
+        'POST /v1/auth/password',
         'POST /v1/auth/verification/email',
         'POST /v1/auth/verification/phone',
         'POST /v1/auth/verification/phone/confirm',
