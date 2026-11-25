@@ -38,6 +38,11 @@ import {
   OrganizationsModule,
 } from '../organizations/organizations';
 import { visibleProfessionals } from '../professional/public-profile-visibility';
+import {
+  ProfessionalProfileImageController,
+  ProfessionalProfileImages,
+} from '../professional/profile-image';
+import { StorageModule } from '../media/storage';
 import { SearchIndex, listingMapping } from './index';
 import {
   searchSchema,
@@ -123,7 +128,7 @@ export class Search {
     } else if (actor.role !== 'agent') throw new ForbiddenException();
     const ownerColumn = agencyId ? 'agency_id' : 'agent_id';
     const [profile] = await this.db.rows(
-      `SELECT p.id, p.display_name AS name, p.published_at IS NOT NULL AS published,
+      `SELECT p.id, p.image_id AS "imageId", p.display_name AS name, p.published_at IS NOT NULL AS published,
               ARRAY(SELECT r.region_code FROM public_professional_regions r WHERE r.profile_id=p.id ORDER BY r.region_code) AS "regionCodes"
        FROM public_professional_profiles p WHERE p.${ownerColumn}=$1`,
       [agencyId ?? actor.id],
@@ -175,11 +180,11 @@ export class Search {
       }
       const {
         rows: [profile],
-      } = await sql.query<{ id: string }>(
+      } = await sql.query<{ id: string; imageId: string | null }>(
         `INSERT INTO public_professional_profiles(${ownerColumn},display_name,published_at)
          VALUES ($1,$2,CASE WHEN $3 THEN now() END)
          ON CONFLICT (${ownerColumn}) DO UPDATE SET display_name=EXCLUDED.display_name,
-           published_at=EXCLUDED.published_at RETURNING id`,
+           published_at=EXCLUDED.published_at RETURNING id,image_id AS "imageId"`,
         [agencyId ?? actor.id, input.name, input.published],
       );
       if (!profile) throw new Error('Profile save returned no row');
@@ -193,6 +198,7 @@ export class Search {
       );
       return {
         id: profile.id,
+        imageId: profile.imageId,
         name: input.name,
         regionCodes: regions,
         published: input.published,
@@ -270,13 +276,14 @@ export class Search {
       name: string;
       kind: 'agent' | 'agency';
       regionCodes: string[];
+      imageId: string | null;
       listings: unknown[];
       listingCount: number;
       listingPageCount: number;
       listingCountsByRegion: Record<string, number>;
     }>(
       `WITH profile AS (
-        SELECT p.id, p.agent_id, p.agency_id, p.display_name AS name,
+        SELECT p.id, p.agent_id, p.agency_id, p.display_name AS name, p.image_id AS "imageId",
               CASE WHEN p.agent_id IS NULL THEN 'agency' ELSE 'agent' END AS kind,
               array_agg(r.region_code ORDER BY r.region_code) AS "regionCodes"
        ${visibleProfessionals} AND p.id = $1
@@ -291,7 +298,7 @@ export class Search {
        ), counts AS (
          SELECT region_code, count(*) AS total FROM scoped_listings GROUP BY region_code
        )
-       SELECT profile.id, profile.name, profile.kind, profile."regionCodes",
+       SELECT profile.id, profile.name, profile.kind, profile."regionCodes", profile."imageId",
               COALESCE(listings.items, '[]'::jsonb) AS listings,
               (SELECT COALESCE(sum(total), 0)::int FROM counts) AS "listingCount",
               (SELECT ceil(COALESCE(sum(total), 0) / $4::int)::int
@@ -825,9 +832,9 @@ export class SearchController {
   }
 }
 @Module({
-  imports: [PaidPlacementModule, GeoModule, OrganizationsModule],
-  controllers: [SearchController],
-  providers: [Search, SearchIndex],
+  imports: [PaidPlacementModule, GeoModule, OrganizationsModule, StorageModule],
+  controllers: [SearchController, ProfessionalProfileImageController],
+  providers: [Search, SearchIndex, ProfessionalProfileImages],
   exports: [Search, SearchIndex],
 })
 export class SearchModule {}

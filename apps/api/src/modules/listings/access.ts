@@ -65,8 +65,16 @@ export class ListingAccess {
     private readonly orgs: Organizations,
   ) {}
   async visible(id: string, sql: Sql = this.db.pool) {
-    const [listing] = await this.db.rows<Listing>(
-      `SELECT l.* FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND ${publicEligibility}`,
+    const [listing] = await this.db.rows<
+      Listing & {
+        seller_type: 'owner' | 'agent' | 'agency' | 'developer' | 'other';
+      }
+    >(
+      `SELECT l.*, COALESCE(org.kind, CASE WHEN u.role IN ('owner','agent','agency','developer')
+                THEN u.role ELSE 'other' END) AS seller_type
+       FROM listings l JOIN users u ON u.id=l.seller_id
+       LEFT JOIN organizations org ON org.id=l.organization_id
+       WHERE l.id=$1 AND ${publicEligibility}`,
       [parse(uuid, id)],
       sql,
     );

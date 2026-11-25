@@ -713,6 +713,74 @@ test.each([
   },
 );
 
+test('an agency manager keeps exactly one editable personal profile when returning to the agent cabinet', async () => {
+  stubFetch('fetch', async (url) => ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      if (url.endsWith('/auth/me'))
+        return {
+          id: 'agent-one',
+          public_id: '107',
+          role: 'agent',
+          display_name: 'Тестовый агент',
+          registration_approval_state: 'approved',
+          email_verified_at: '2026-10-01',
+          phone_verified_at: '2026-10-01',
+        };
+      if (url.endsWith('/organizations'))
+        return [
+          {
+            id: 'agency-one',
+            name: 'Тестовое агентство',
+            kind: 'agency',
+            active: true,
+            membership_role: 'admin',
+            membership_active: true,
+          },
+        ];
+      if (url.includes('/search/professional-profile'))
+        return { profile: null };
+      if (url.endsWith('/summary')) return { total: 0, sale: 0, rent: 0 };
+      if (
+        url.endsWith('/members') ||
+        url.endsWith('/listing-subscriptions') ||
+        url.endsWith('/links')
+      )
+        return [];
+      return { items: [], cursor: null };
+    },
+  }));
+  render(<Account />);
+  const personal = 'Публичный профиль агента';
+  const agency = 'Публичный профиль агентства';
+  await screen.findByText(agency);
+  fireEvent.click(screen.getByRole('button', { name: 'Подписки' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Профиль и подтверждение контактов' }),
+  );
+  expect(screen.queryByText(personal)).toBeNull();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Вернуться к разделам аккаунта' }),
+  );
+  await screen.findByText(agency);
+  expect(screen.getAllByText(personal)).toHaveLength(1);
+  const summary = screen.getByText(personal);
+  fireEvent.click(summary);
+  const name = await within(summary.closest('details')!).findByRole('textbox', {
+    name: 'Публичное имя',
+  });
+  fireEvent.change(name, { target: { value: 'Новое публичное имя' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Избранное' }));
+  expect(screen.getAllByText(personal)).toHaveLength(1);
+  expect(screen.getAllByText(agency)).toHaveLength(1);
+  expect(
+    within(summary.closest('details')!).getByDisplayValue(
+      'Новое публичное имя',
+    ),
+  ).toBe(name);
+});
+
 test('the listing link follows the selected agency in the cabinet', async () => {
   stubFetch('fetch', async (url) => ({
     ok: true,

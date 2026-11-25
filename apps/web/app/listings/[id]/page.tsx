@@ -16,6 +16,7 @@ import { moscowPath } from '../../../lib/moscow-search';
 import DetailActions from '../../../components/detail-actions';
 import PublicPhotoGallery from '../../../components/public-photo-gallery';
 import ListingLocationMap from '../../../components/listing-location-map';
+import { ListingAuthors } from '../../../components/professional-identity';
 import { catalogHref } from '../../../lib/catalog-links';
 export async function generateMetadata({
   params,
@@ -197,21 +198,10 @@ export default async function Page({
         messagesAllowed={data.contact?.messagesAllowed ?? true}
         callsAllowed={Boolean(data.contact?.phones.length)}
       />
-      {!!data.professionals?.length && (
-        <section aria-labelledby="listing-professionals">
-          <h2 id="listing-professionals">Кто разместил объявление</h2>
-          <ul>
-            {data.professionals.map((profile) => (
-              <li key={profile.id}>
-                {profile.kind === 'agent' ? 'Агент' : 'Агентство'}{' '}
-                <Link href={'/professionals/' + profile.id}>
-                  {profile.name}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <ListingAuthors
+        profiles={data.professionals}
+        sellerType={data.sellerType}
+      />
       <script
         type="application/ld+json"
         nonce={(await headers()).get('x-nonce') ?? undefined}

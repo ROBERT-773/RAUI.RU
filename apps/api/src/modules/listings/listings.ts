@@ -262,8 +262,13 @@ export class Listings {
     const [contact, media, professionals] = await Promise.all([
       publicListingContact(this.db.pool, id),
       this.media.publicAssets(this.db.pool, id),
-      this.db.rows<{ id: string; name: string; kind: 'agent' | 'agency' }>(
-        `SELECT DISTINCT p.id, p.display_name AS name,
+      this.db.rows<{
+        id: string;
+        name: string;
+        kind: 'agent' | 'agency';
+        imageId: string | null;
+      }>(
+        `SELECT DISTINCT p.id, p.display_name AS name, p.image_id AS "imageId",
                 CASE WHEN p.agent_id IS NULL THEN 'agency' ELSE 'agent' END AS kind
          ${visibleProfessionals}
          AND (p.agent_id = $1 OR p.agency_id = $2)
@@ -277,6 +282,7 @@ export class Listings {
       price: listing.price,
       dealType: listing.deal_type,
       description: listing.description,
+      sellerType: listing.seller_type,
       rentalTerms: publicRentalTerms(listing.deal_type, listing.terms),
       contact,
       professionals,

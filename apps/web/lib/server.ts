@@ -13,6 +13,13 @@ export const site = publicOrigin(
   process.env.SITE_URL,
   process.env.DEPLOYMENT_ENV === 'production',
 );
+export type ProfessionalSummary = {
+  id: string;
+  name: string;
+  kind: 'agent' | 'agency';
+  imageId?: string | null;
+};
+export type SellerType = 'owner' | 'agent' | 'agency' | 'developer' | 'other';
 export async function publicRegions(): Promise<
   { code: string; name: string }[]
 > {
@@ -38,10 +45,7 @@ export async function publicProfessional(
   );
   if (response.status === 404 || response.status === 400) return null;
   if (!response.ok) throw new Error('Could not load professional profile');
-  return (await response.json()) as {
-    id: string;
-    name: string;
-    kind: 'agent' | 'agency';
+  return (await response.json()) as ProfessionalSummary & {
     regionCodes: string[];
     listingCount: number;
     listingPageCount: number;
@@ -146,7 +150,8 @@ export interface Detail {
   dealType: string;
   contact?: { messagesAllowed: boolean; phones: string[] };
   rentalTerms?: PublicRentalTerms;
-  professionals?: { id: string; name: string; kind: 'agent' | 'agency' }[];
+  professionals?: ProfessionalSummary[];
+  sellerType?: SellerType;
   property: {
     category_code: string;
     attributes: Record<string, unknown>;
