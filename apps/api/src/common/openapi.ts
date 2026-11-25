@@ -39,6 +39,7 @@ import type {
 } from '@nestjs/swagger';
 import {
   registerSchema,
+  changePasswordSchema,
   registerWithPhoneSchema,
   phoneSignInEnrollmentSchema,
   loginSchema,
@@ -304,6 +305,7 @@ const bodyContracts: Record<string, z.ZodType> = {
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   }),
   'post /v1/auth/password-reset': object({ email: z.email().max(254) }),
+  'post /v1/auth/password': changePasswordSchema,
   'post /v1/auth/password-reset/confirm': object({
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
     password: passwordSchema,
@@ -1197,6 +1199,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
           'post /v1/auth/register',
           'post /v1/auth/login',
           'post /v1/auth/email-sign-in/confirm',
+          'post /v1/auth/password',
           'get /v1/auth/me',
         ].includes(operationId)
       ) {
@@ -1256,6 +1259,10 @@ export function enrichOpenApi(document: OpenAPIObject) {
             ...(operationId === 'get /v1/auth/me'
               ? {
                   twoFactorEnabled: { type: 'boolean' as const, enum: [false] },
+                  passwordChangeMode: {
+                    type: 'string' as const,
+                    enum: ['current-password', 'recent-code', 'recovery-link'],
+                  },
                 }
               : {}),
           },
@@ -1266,6 +1273,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
             'application/json': {
               schema:
                 operationId === 'post /v1/auth/login' ||
+                operationId === 'post /v1/auth/password' ||
                 operationId === 'post /v1/auth/email-sign-in/confirm'
                   ? {
                       type: 'object',

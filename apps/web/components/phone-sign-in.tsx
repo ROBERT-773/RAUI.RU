@@ -32,6 +32,7 @@ type PhoneSignInProps<T> = { onOther: () => void; recoveryMode?: boolean } & (
   | { enrollmentPhone: string; onEnrolled: () => void; onSession?: never }
   | {
       enrollmentPhone?: never;
+      fixedDestination?: string | undefined;
       onEnrolled?: never;
       onSession: (session: Session<T>) => void;
     }
@@ -55,7 +56,8 @@ export function SignInByCode<T>(
   const email = props.channel === 'email';
   const path = email ? 'v1/auth/email-sign-in' : 'v1/auth/phone-sign-in';
   const [destination, setDestination] = useState(
-    email ? '' : (props.enrollmentPhone ?? '+7'),
+    ('fixedDestination' in props ? props.fixedDestination : undefined) ??
+      (email ? '' : (props.enrollmentPhone ?? '+7')),
   );
   const normalized = email
     ? destination.trim().toLowerCase()
@@ -340,6 +342,8 @@ export function SignInByCode<T>(
     <>
       {props.enrollmentPhone ? (
         <h4>Подключить вход по SMS</h4>
+      ) : 'fixedDestination' in props && props.fixedDestination ? (
+        <h4>Подтвердите смену пароля</h4>
       ) : (
         <h1>
           {props.recoveryMode ? 'Восстановить доступ' : 'Вход или регистрация'}
@@ -353,6 +357,9 @@ export function SignInByCode<T>(
             type={email ? 'email' : 'tel'}
             autoComplete={email ? 'email' : 'tel'}
             value={destination}
+            readOnly={
+              'fixedDestination' in props && Boolean(props.fixedDestination)
+            }
             disabled={
               committed ||
               Boolean(challenge) ||
@@ -499,7 +506,9 @@ export function SignInByCode<T>(
             props.onOther();
           }}
         >
-          {props.enrollmentPhone ? 'Отмена' : 'Другой способ'}
+          {props.enrollmentPhone || 'fixedDestination' in props
+            ? 'Отмена'
+            : 'Другой способ'}
         </Button>
         {notice && <p role="status">{notice}</p>}
         {retryUntil && !challenge && !signupToken && (

@@ -149,7 +149,7 @@ test('Visibility revisions real PostgreSQL acceptance: seed, writers, rollback a
     assert.equal(
       (await pool.query('SELECT count(*)::int AS n FROM schema_migrations'))
         .rows[0].n,
-      43,
+      44,
     );
     assert.equal(await generation('seller', seller), '0');
     assert.ok(BigInt((await generation('seller', postMigrationSeller))!) > 0n);

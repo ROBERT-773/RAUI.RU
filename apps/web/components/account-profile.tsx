@@ -5,7 +5,10 @@ import { api } from '../lib/client';
 import PhoneOtpForm from './phone-otp-form';
 import PhoneSignIn from './phone-sign-in';
 import AccountContactSettings from './account-contact-settings';
+import AccountPassword, { type PasswordChangeMode } from './account-password';
 interface Profile {
+  id: string;
+  passwordChangeMode?: PasswordChangeMode | 'recovery-link';
   email: string;
   phone: string | null;
   role: string;
@@ -27,11 +30,13 @@ export default function AccountProfile({
   onRefresh,
   onSessionExpired,
   smsAvailable = false,
+  emailAvailable = false,
   focusContacts = false,
 }: {
   onRefresh?: () => void;
   onSessionExpired?: () => void;
   smsAvailable?: boolean;
+  emailAvailable?: boolean;
   focusContacts?: boolean;
 }) {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -285,24 +290,46 @@ export default function AccountProfile({
                 </Button>
               </form>
             ))}
-          {profile.email_verified_at && (
-            <>
-              <h3>Пароль</h3>
-              <p>
-                Для установки или смены пароля запросите письмо на{' '}
-                {profile.email}.
-              </p>
-              <Button
-                disabled={busy || otpBusy}
-                onClick={() =>
-                  void action('v1/auth/password-reset', {
-                    email: profile.email,
-                  })
-                }
-              >
-                Установить или сменить пароль
-              </Button>
-            </>
+          {profile.passwordChangeMode === 'current-password' ||
+          profile.passwordChangeMode === 'recent-code' ? (
+            <AccountPassword
+              key={profile.id}
+              userId={profile.id}
+              mode={profile.passwordChangeMode}
+              email={
+                emailAvailable && profile.email_verified_at
+                  ? profile.email
+                  : undefined
+              }
+              phone={
+                smsAvailable &&
+                profile.phone_verified_at &&
+                profile.phone_sign_in_enrolled_at
+                  ? (profile.phone ?? undefined)
+                  : undefined
+              }
+              onSessionExpired={expireSession}
+            />
+          ) : (
+            profile.email_verified_at && (
+              <>
+                <h3>Пароль</h3>
+                <p>
+                  Для установки или смены пароля запросите письмо на{' '}
+                  {profile.email}.
+                </p>
+                <Button
+                  disabled={busy || otpBusy}
+                  onClick={() =>
+                    void action('v1/auth/password-reset', {
+                      email: profile.email,
+                    })
+                  }
+                >
+                  Установить или сменить пароль
+                </Button>
+              </>
+            )
           )}
           {profile.registration_approval_state === 'approved' &&
             profile.email_verified_at &&

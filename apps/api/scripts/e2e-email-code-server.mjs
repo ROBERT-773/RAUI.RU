@@ -26,7 +26,7 @@ const module = await Test.createTestingModule({ imports: [AppModule] })
   .useValue({
     async send(destination, code) {
       if (
-        !/^(?:agent|code-buyer|code-owner|code-recovery)-(?:chromium|firefox|webkit|ios-webkit|android-chromium)@e2e\.test$/.test(
+        !/^(?:agent|code-buyer|code-owner|code-recovery|code-change)-(?:chromium|firefox|webkit|ios-webkit|android-chromium)@e2e\.test$/.test(
           destination,
         ) ||
         !/^\d{6}$/.test(code)

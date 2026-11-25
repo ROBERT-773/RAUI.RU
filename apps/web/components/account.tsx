@@ -355,6 +355,7 @@ export default function Account({
         }) => {
           clearPrivateState();
           setCsrf(csrfToken);
+          if (recoverAccess) setProfileOpen(true);
           focusAfterCode.current = !continueFeedback;
           setUser(next);
           announceFeedbackIdentityChange();
@@ -608,6 +609,7 @@ export default function Account({
           focusContacts={initialContacts}
           key={'account-profile-' + identityEpoch.current}
           smsAvailable={smsAvailable}
+          emailAvailable={emailAvailable}
           onRefresh={refreshProfile}
           onSessionExpired={() => expireIdentity(profileEpoch)}
         />

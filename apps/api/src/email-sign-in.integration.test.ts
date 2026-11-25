@@ -432,4 +432,106 @@ test('email verification creates one ordinary session and guards account and cre
     (await confirm(uncertain, possiblyDelivered.challengeId)).status,
     201,
   );
+
+  // A new buyer chooses a password inside the cabinet after proving their email.
+  await noFlood();
+  const buyer = 'choose-password@example.test';
+  const loginReceipt = await begin(buyer);
+  const signedIn = await confirm(buyer, loginReceipt.challengeId);
+  assert.equal(signedIn.status, 201);
+  const cookie = signedIn.headers.getSetCookie()[0]!.split(';')[0]!;
+  type CabinetSession = {
+    csrfToken: string;
+    user: { id: string; public_id: string };
+  };
+  const initial = (await signedIn.json()) as CabinetSession;
+  const authUrl = url.slice(0, -'/email-sign-in'.length);
+  const me = (c: string) => fetch(authUrl + '/me', { headers: { cookie: c } });
+  const change = (c: string, csrf: string, fields: Record<string, string>) =>
+    fetch(authUrl + '/password', {
+      method: 'POST',
+      headers: {
+        Cookie: c,
+        Origin: 'https://example.test',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
+      body: JSON.stringify(fields),
+    });
+  const mode = async (c: string) =>
+    ((await (await me(c)).json()) as { passwordChangeMode: string })
+      .passwordChangeMode;
+  assert.equal(await mode(cookie), 'recent-code');
+  const password = 'First-test-password-1!';
+  assert.equal((await change(cookie, '', { password })).status, 403);
+  const changed = await change(cookie, initial.csrfToken, { password });
+  assert.equal(changed.status, 201);
+  const rotated = changed.headers.getSetCookie()[0]!.split(';')[0]!;
+  const result = (await changed.json()) as CabinetSession;
+  assert.equal(result.user.id, initial.user.id);
+  assert.equal((await me(cookie)).status, 401);
+  assert.equal(await mode(rotated), 'current-password');
+  assert.equal(
+    (
+      await change(rotated, result.csrfToken, {
+        password: 'Another-password-42!',
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await change(rotated, result.csrfToken, {
+        currentPassword: 'wrong',
+        password: 'Another-password-42!',
+      })
+    ).status,
+    403,
+  );
+  const again = await change(rotated, result.csrfToken, {
+    currentPassword: password,
+    password: 'Another-password-42!',
+  });
+  assert.equal(again.status, 201);
+  const credentials = (value: string) =>
+    fetch(authUrl + '/login', {
+      method: 'POST',
+      headers: {
+        Origin: 'https://example.test',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email: buyer, password: value }),
+    });
+  assert.equal((await credentials(password)).status, 401);
+  const last = await credentials('Another-password-42!');
+  assert.equal(last.status, 201);
+  assert.equal(
+    ((await last.json()) as CabinetSession).user.public_id,
+    initial.user.public_id,
+  );
+  for (const reason of ['expired', 'contact-changed'] as const) {
+    await noFlood();
+    const address = reason + '-password@example.test';
+    const challenge = await begin(address);
+    const login = await confirm(address, challenge.challengeId);
+    const verified = (await login.json()) as CabinetSession;
+    const current = login.headers.getSetCookie()[0]!.split(';')[0]!;
+    assert.equal(await mode(current), 'recent-code');
+    if (reason === 'expired') {
+      await db.query(
+        "UPDATE sessions SET password_change_until=clock_timestamp()-interval '1 second' WHERE user_id=$1",
+        [verified.user.id],
+      );
+    } else {
+      await db.query('UPDATE users SET email=$2 WHERE id=$1', [
+        verified.user.id,
+        'renamed-' + address,
+      ]);
+    }
+    assert.equal(await mode(current), 'current-password');
+    assert.equal(
+      (await change(current, verified.csrfToken, { password })).status,
+      403,
+    );
+  }
 });

@@ -285,8 +285,7 @@ export class EmailSignInService {
         return current.rowCount ? issue(sql, user.id) : null;
       }
       if (existingOnly || user) return null;
-      // Generate an inaccessible random password; the owner can later choose
-      // their password via the independent, verified email reset flow.
+      // The new user signs in by code and can choose a password in their cabinet.
       const {
         rows: [created],
       } = await sql.query<{ id: string }>(

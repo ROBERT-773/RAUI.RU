@@ -43,7 +43,8 @@ async function enterEmailCode(
   const email = page.getByLabel('Email', { exact: true });
   await expect(email).toBeVisible();
   await expect(page.getByLabel('Пароль', { exact: true })).toHaveCount(0);
-  await email.fill(address);
+  if (await email.isEditable()) await email.fill(address);
+  else await expect(email).toHaveValue(address);
   if (options.registerAsOwner) {
     await page.getByText('Роль при регистрации', { exact: true }).click();
     await page.getByLabel('Кто вы?').selectOption('owner');
@@ -106,8 +107,75 @@ for (const [prefix, heading, expectedRole] of [
       prefix === 'agent' ? 'approved' : 'pending',
     );
     if (prefix !== 'agent') expect(user.phone_verified_at).toBeNull();
+    if (prefix === 'code-buyer') {
+      await page
+        .getByRole('button', { name: 'Установить или сменить пароль' })
+        .click();
+      await setCabinetPassword(page);
+      const updated = await (await page.request.get('/api/v1/auth/me')).json();
+      expect(updated.id).toBe(user.id);
+      expect(updated.passwordChangeMode).toBe('current-password');
+    }
   });
 }
+
+async function setCabinetPassword(page: Page) {
+  await expect(page.getByLabel('Текущий пароль', { exact: true })).toHaveCount(
+    0,
+  );
+  await page
+    .getByLabel('Новый пароль', { exact: true })
+    .fill('E2E-changed-password-84!');
+  await page
+    .getByLabel('Повторите новый пароль', { exact: true })
+    .fill('E2E-changed-password-84!');
+  await page
+    .getByRole('button', { name: 'Сохранить пароль', exact: true })
+    .click();
+  await expect(
+    page.getByText('Пароль сохранён.', { exact: true }),
+  ).toBeVisible();
+}
+
+test('an existing agent requests a fresh code from their profile and chooses a new password', async ({
+  page,
+}, info) => {
+  const address = 'code-change-' + info.project.name + '@e2e.test';
+  await openEmailSignIn(page);
+  await page.getByRole('button', { name: 'Другой способ' }).click();
+  await page.getByLabel('Email', { exact: true }).fill(address);
+  await page
+    .getByLabel('Пароль', { exact: true })
+    .fill('E2E-only-password-42!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Профиль и подтверждение контактов' })
+    .click();
+  const original = await (await page.request.get('/api/v1/auth/me')).json();
+  await page
+    .getByRole('button', { name: 'Установить или сменить пароль' })
+    .click();
+  await expect(
+    page.getByLabel('Текущий пароль', { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Получить код на почту' }).click();
+  await enterEmailCode(page, address, { existingOnly: true });
+  await setCabinetPassword(page);
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  await openEmailSignIn(page);
+  await page.getByRole('button', { name: 'Другой способ' }).click();
+  await page.getByLabel('Email', { exact: true }).fill(address);
+  await page
+    .getByLabel('Пароль', { exact: true })
+    .fill('E2E-changed-password-84!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Кабинет риелтора', level: 1 }),
+  ).toBeVisible();
+  expect((await (await page.request.get('/api/v1/auth/me')).json()).id).toBe(
+    original.id,
+  );
+});
 
 test('forgotten password opens the existing agent cabinet with email code and preserves password login', async ({
   page,

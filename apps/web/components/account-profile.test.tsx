@@ -49,6 +49,44 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
+
+test('a recently verified buyer sets a password in the cabinet without requesting another email', async () => {
+  vi.mocked(api).mockImplementation(async (path) =>
+    path === 'v1/auth/me'
+      ? {
+          ...user,
+          role: 'buyer',
+          email_verified_at: 'now',
+          passwordChangeMode: 'recent-code',
+        }
+      : path === 'v1/auth/password'
+        ? { csrfToken: 'new-session' }
+        : {},
+  );
+  render(<AccountProfile />);
+  fireEvent.click(
+    await screen.findByRole('button', {
+      name: 'Установить или сменить пароль',
+    }),
+  );
+  expect(screen.queryByLabelText('Текущий пароль')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Новый пароль'), {
+    target: { value: 'Test-password-42!' },
+  });
+  fireEvent.change(screen.getByLabelText('Повторите новый пароль'), {
+    target: { value: 'Test-password-42!' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить пароль' }));
+  expect(await screen.findByText('Пароль сохранён.')).toBeTruthy();
+  expect(api).toHaveBeenCalledWith('v1/auth/password', 'POST', {
+    password: 'Test-password-42!',
+  });
+  expect(api).not.toHaveBeenCalledWith(
+    'v1/auth/password-reset',
+    'POST',
+    expect.anything(),
+  );
+});
 test('approved sellers can edit contact settings on the normal profile and a parent rerender preserves typed phone and pending proof', async () => {
   vi.mocked(api).mockImplementation(async (path) => {
     if (path === 'v1/auth/me')
