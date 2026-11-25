@@ -509,7 +509,9 @@ test('buyer can recognize a saved stay and reopen the same dates and guest count
 }) => {
   await login(page);
   await page.goto('/search');
-  await page.getByLabel('Сделка', { exact: true }).selectOption('short_rent');
+  await page
+    .getByRole('combobox', { name: 'Сделка', exact: true })
+    .selectOption('short_rent');
   await page.getByLabel('Заезд', { exact: true }).fill('2026-12-30');
   await page.getByLabel('Выезд', { exact: true }).fill('2027-01-02');
   await page.getByLabel('Число гостей', { exact: true }).fill('2');
