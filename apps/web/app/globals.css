@@ -407,6 +407,12 @@ h2 {
   margin: 0;
 }
 @media (max-width: 740px) {
+  .home-hero-content {
+    padding-block-start: 4.25rem;
+  }
+  .home-hero-image::after {
+    background-color: rgb(8 28 43 / 16%);
+  }
   .home-search button {
     flex: 1;
   }
