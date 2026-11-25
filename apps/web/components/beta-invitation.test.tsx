@@ -89,7 +89,7 @@ test('dismissal persists, feedback stays available and closing with Escape resto
       await screen.findByRole('link', { name: 'Войти и продолжить' })
     ).getAttribute('href'),
   ).toBe('/account?action=feedback');
-  expect(field()).toBe(document.activeElement);
+  await waitFor(() => expect(document.activeElement).toBe(field()));
   fireEvent(
     screen.getByRole('dialog'),
     new Event('cancel', { cancelable: true }),
