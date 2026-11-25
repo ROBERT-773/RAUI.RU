@@ -2206,6 +2206,7 @@ post /v1/partner/listings/bulk-pause`.split('\n'),
       const keys = new Set(
         `post /v1/auth/verification/phone/otp
 post /v1/auth/phone-sign-in
+post /v1/auth/email-sign-in
 post /v1/organizations
 post /v1/properties
 post /v1/listings
