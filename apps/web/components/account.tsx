@@ -645,6 +645,7 @@ export default function Account({
         ))}
       {user.role === 'admin' && (
         <nav className="actions" aria-label="Разделы администратора">
+          <Link href="/admin/search">Поиск пользователей и объявлений</Link>
           <Link href="/admin/feeds">Автопубликация из XML</Link>
           <Link href="/admin/feedback">Предложения о портале</Link>
         </nav>

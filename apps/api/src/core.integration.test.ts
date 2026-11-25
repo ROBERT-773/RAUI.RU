@@ -2059,6 +2059,34 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
       };
       assert.ok(schema.paths['/v1/auth/register']);
       assert.ok(schema.paths['/v1/properties']);
+      for (const collection of ['users', 'listings']) {
+        const search = schema.paths['/v1/admin/search/' + collection] as {
+          post: {
+            security: unknown[];
+            requestBody: {
+              content: Record<string, { schema: { required: string[] } }>;
+            };
+            responses: Record<
+              string,
+              { content?: Record<string, { schema: { required: string[] } }> }
+            >;
+          };
+        };
+        assert.ok(search.post.security.length > 0);
+        assert.deepEqual(
+          search.post.requestBody.content['application/json']!.schema.required,
+          ['query'],
+        );
+        assert.deepEqual(
+          search.post.responses['200']?.content?.[
+            'application/json'
+          ]?.schema.required
+            ?.slice()
+            .sort(),
+          ['items', 'nextCursor'],
+        );
+        assert.equal(search.post.responses['201'], undefined);
+      }
       const summaryContract = schema.paths['/v1/listings/summary'] as {
         get: {
           responses: {

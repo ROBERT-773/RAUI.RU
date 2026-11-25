@@ -1,4 +1,5 @@
 import { RegistrationApprovals } from './registration-approval';
+import { AdminDirectorySearch } from './directory-search';
 import {
   Body,
   Controller,
@@ -546,7 +547,7 @@ export class AdminController {
 }
 @Module({
   imports: [ListingPublicationModule, StorageModule, PublicationQuotaModule],
-  controllers: [AdminController],
+  controllers: [AdminController, AdminDirectorySearch],
   providers: [Administration, RegistrationApprovals, Idempotency],
 })
 export class AdminModule {}
