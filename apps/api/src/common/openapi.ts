@@ -423,6 +423,7 @@ post /v1/auth/register
 post /v1/auth/login
 get /v1/auth/phone-sign-in/capabilities
 get /v1/auth/email-sign-in/capabilities
+get /v1/auth/password-reset/capabilities
 post /v1/auth/email-sign-in
 post /v1/auth/email-sign-in/confirm
 post /v1/auth/phone-sign-in
@@ -574,6 +575,28 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (operationId === 'get /v1/auth/password-reset/capabilities') {
+        operation.responses['200'] = {
+          description:
+            'Configured recovery channels, independent of the account',
+          headers: {
+            'Cache-Control': {
+              schema: { type: 'string', example: 'no-store' },
+            },
+          },
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                z.strictObject({
+                  smsAvailable: z.boolean(),
+                  emailAvailable: z.boolean(),
+                  resetLinkAvailable: z.boolean(),
+                }),
+              ) as SchemaObject,
+            },
+          },
+        };
+      }
       if (
         operationId === 'post /v1/auth/email-sign-in' ||
         operationId === 'get /v1/auth/email-sign-in/capabilities'

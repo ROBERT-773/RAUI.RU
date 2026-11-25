@@ -128,7 +128,9 @@ test('submits a user ID as the password login identifier', async () => {
 test('both recovery channels lead to code entry while the password fallback stays available', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
   stubFetch('fetch', fetch);
-  render(<Account smsAvailable emailAvailable recoverAccess />);
+  render(
+    <Account smsAvailable emailAvailable resetLinkAvailable recoverAccess />,
+  );
   await screen.findByRole('heading', { name: 'Восстановить доступ' });
   expect(
     screen

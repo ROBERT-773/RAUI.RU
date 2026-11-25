@@ -240,3 +240,20 @@ test('forgotten password opens the existing agent cabinet with email code and pr
   await openEmailSignIn(page);
   expect(await passwordSignIn()).toEqual(original);
 });
+
+test('an explicitly requested email link reaches the anonymous reset endpoint when mail is configured', async ({
+  page,
+}) => {
+  await page.goto('/account/forgot-password?mode=password');
+  await page.getByLabel('Email', { exact: true }).fill('unknown@e2e.test');
+  const request = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === '/api/v1/auth/password-reset' &&
+      r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Отправить ссылку' }).click();
+  expect((await request).status()).toBe(201);
+  await expect(page.getByRole('status')).toContainText(
+    'Если аккаунт с этим email существует',
+  );
+});

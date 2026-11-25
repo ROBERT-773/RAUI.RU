@@ -31,12 +31,14 @@ export default function AccountProfile({
   onSessionExpired,
   smsAvailable = false,
   emailAvailable = false,
+  resetLinkAvailable = false,
   focusContacts = false,
 }: {
   onRefresh?: () => void;
   onSessionExpired?: () => void;
   smsAvailable?: boolean;
   emailAvailable?: boolean;
+  resetLinkAvailable?: boolean;
   focusContacts?: boolean;
 }) {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -314,20 +316,26 @@ export default function AccountProfile({
             profile.email_verified_at && (
               <>
                 <h3>Пароль</h3>
-                <p>
-                  Для установки или смены пароля запросите письмо на{' '}
-                  {profile.email}.
-                </p>
-                <Button
-                  disabled={busy || otpBusy}
-                  onClick={() =>
-                    void action('v1/auth/password-reset', {
-                      email: profile.email,
-                    })
-                  }
-                >
-                  Установить или сменить пароль
-                </Button>
+                {resetLinkAvailable ? (
+                  <>
+                    <p>
+                      Для установки или смены пароля запросите письмо на{' '}
+                      {profile.email}.
+                    </p>
+                    <Button
+                      disabled={busy || otpBusy}
+                      onClick={() =>
+                        void action('v1/auth/password-reset', {
+                          email: profile.email,
+                        })
+                      }
+                    >
+                      Установить или сменить пароль
+                    </Button>
+                  </>
+                ) : (
+                  <p>Отправка ссылки для смены пароля временно недоступна.</p>
+                )}
               </>
             )
           )}

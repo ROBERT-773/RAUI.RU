@@ -58,6 +58,43 @@ test('email verification creates one ordinary session and guards account and cre
   configure(app);
   await app.listen(0, '127.0.0.1');
   const url = (await app.getUrl()) + '/v1/auth/email-sign-in';
+  await t.test(
+    'recovery options follow configured delivery independently of account identity',
+    async () => {
+      const previous = process.env;
+      process.env = { ...previous, PHONE_SIGN_IN_ENABLED: 'false' };
+      const check = async (
+        emailAvailable: boolean,
+        resetLinkAvailable: boolean,
+      ) => {
+        const response = await fetch(
+          new URL('password-reset/capabilities', url),
+        );
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.deepEqual(await response.json(), {
+          smsAvailable: false,
+          emailAvailable,
+          resetLinkAvailable,
+        });
+      };
+      try {
+        delete process.env.VERIFICATION_GATEWAY_URL;
+        delete process.env.VERIFICATION_GATEWAY_TOKEN;
+        await check(true, true);
+        process.env.EMAIL_SIGN_IN_ENABLED = 'false';
+        await check(false, true);
+        process.env.RESET_SMTP_ENABLED = 'false';
+        await check(false, false);
+        process.env.VERIFICATION_GATEWAY_URL =
+          'https://verification.example.test';
+        process.env.VERIFICATION_GATEWAY_TOKEN = 'test-gateway-token';
+        await check(false, true);
+      } finally {
+        process.env = previous;
+      }
+    },
+  );
   const browserKey = randomBytes(32).toString('base64url');
   const post = (
     suffix: string,

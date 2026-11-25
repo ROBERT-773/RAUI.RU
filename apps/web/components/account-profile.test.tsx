@@ -28,7 +28,7 @@ test('sends a password change link to the verified email of the current profile 
       ? { ...user, email_verified_at: 'now' }
       : { accepted: true },
   );
-  render(<AccountProfile />);
+  render(<AccountProfile resetLinkAvailable />);
   const action = await screen.findByRole('button', {
     name: 'Установить или сменить пароль',
   });
@@ -48,6 +48,21 @@ test('sends a password change link to the verified email of the current profile 
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+});
+
+test('a profile using recovery links does not offer to send mail when delivery is off', async () => {
+  vi.mocked(api).mockResolvedValue({
+    ...user,
+    email_verified_at: 'now',
+    passwordChangeMode: 'recovery-link',
+  });
+  render(<AccountProfile />);
+  await screen.findByText(
+    'Отправка ссылки для смены пароля временно недоступна.',
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Установить или сменить пароль' }),
+  ).toBeNull();
 });
 
 test('a recently verified buyer sets a password in the cabinet without requesting another email', async () => {

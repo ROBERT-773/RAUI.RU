@@ -757,23 +757,25 @@ test('Cookie session survives a fresh tab without CSRF storage and permits searc
   }
 });
 
-test('Password recovery reaches the API anonymously and removes invalid reset fragments', async ({
+test('Password recovery explains disabled delivery and removes invalid reset fragments', async ({
   page,
 }) => {
   await page.goto('/account');
   await page.getByRole('link', { name: 'Забыли пароль?' }).click();
   await expect(
-    page.getByRole('heading', { name: 'Восстановить пароль' }),
+    page.getByRole('heading', { name: 'Восстановить доступ' }),
   ).toBeVisible();
-  await page.getByLabel('Email', { exact: true }).fill('unknown@e2e.test');
-  const request = page.waitForResponse((response) =>
-    endpoint(response, 'POST', '/api/v1/auth/password-reset'),
-  );
-  await page.getByRole('button', { name: 'Отправить ссылку' }).click();
-  expect((await request).status()).toBe(201);
-  await expect(page.getByRole('status')).toContainText(
-    'Если аккаунт с этим email существует',
-  );
+  await expect(
+    page.getByText(
+      'Отправка кодов и писем для восстановления временно недоступна.',
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Отправить ссылку' }),
+  ).toHaveCount(0);
+  await page.getByRole('link', { name: 'Вернуться ко входу' }).click();
+  await expect(page.getByLabel('Пароль', { exact: true })).toBeVisible();
   await page.goto('/account/reset-password#token=invalid');
   await expect(
     page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' }),

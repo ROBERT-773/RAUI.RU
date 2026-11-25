@@ -839,6 +839,19 @@ export class AuthController {
   @Public() @Post('password-reset') reset(@Body() body: unknown) {
     return this.auth.request(body, 'reset');
   }
+  @Public() @Get('password-reset/capabilities') recoveryCapabilities(
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const config = loadConfig();
+    res.setHeader('Cache-Control', 'no-store');
+    return {
+      smsAvailable: phoneSignInAvailable(config),
+      emailAvailable: emailSignInAvailable(config),
+      resetLinkAvailable: Boolean(
+        config.VERIFICATION_GATEWAY_URL || config.RESET_SMTP_ENABLED === 'true',
+      ),
+    };
+  }
   @Public() @Post('password-reset/confirm') confirmReset(
     @Body() body: unknown,
   ) {

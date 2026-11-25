@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import PasswordRecovery from '../../../components/password-recovery';
 import { signInCapabilities } from '../../../lib/sign-in-capabilities';
@@ -12,14 +13,29 @@ export default async function Page({
 }: {
   searchParams: Promise<{ mode?: string }>;
 }) {
-  if ((await searchParams).mode !== 'password') {
-    const channels = await signInCapabilities();
-    if (channels.emailAvailable || channels.smsAvailable)
-      redirect('/account?action=recover');
-  }
+  const [params, channels] = await Promise.all([
+    searchParams,
+    signInCapabilities(),
+  ]);
+  if (
+    (params.mode !== 'password' || !channels.resetLinkAvailable) &&
+    (channels.emailAvailable || channels.smsAvailable)
+  )
+    redirect('/account?action=recover');
   return (
     <main id="content">
-      <PasswordRecovery />
+      {channels.resetLinkAvailable ? (
+        <PasswordRecovery />
+      ) : (
+        <>
+          <h1>Восстановить доступ</h1>
+          <p>
+            Отправка кодов и писем для восстановления временно недоступна.
+            Попробуйте позже.
+          </p>
+          <Link href="/account">Вернуться ко входу</Link>
+        </>
+      )}
     </main>
   );
 }
