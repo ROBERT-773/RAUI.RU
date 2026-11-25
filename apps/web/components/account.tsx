@@ -110,6 +110,7 @@ export default function Account({
             : 'password',
     ),
     [passwordVisible, setPasswordVisible] = useState(false),
+    [passwordSubmitting, setPasswordSubmitting] = useState(false),
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
     [threads, setThreads] = useState<Thread[]>([]),
@@ -379,11 +380,16 @@ export default function Account({
         <h1>{register ? 'Создать аккаунт' : 'Войти в аккаунт'}</h1>
         <form
           className="account-form panel"
+          aria-busy={passwordSubmitting}
+          onChange={() => setNotice('')}
           onSubmit={async (e) => {
             e.preventDefault();
+            if (passwordSubmitting) return;
             setPasswordVisible(false);
             const epoch = identityEpoch.current;
             const d = new FormData(e.currentTarget);
+            setPasswordSubmitting(true);
+            setNotice('');
             try {
               let deliveryUnavailable = false;
               if (register) {
@@ -421,7 +427,15 @@ export default function Account({
               if (approved(result.user)) void load(initialTab);
             } catch (error) {
               if (epoch !== identityEpoch.current) return;
-              setNotice((error as Error).message);
+              setNotice(
+                !register && sessionExpired(error)
+                  ? loginById
+                    ? 'Не удалось войти. Проверьте ID пользователя и пароль.'
+                    : 'Не удалось войти. Проверьте адрес почты и пароль.'
+                  : (error as Error).message,
+              );
+            } finally {
+              setPasswordSubmitting(false);
             }
           }}
         >
@@ -432,6 +446,7 @@ export default function Account({
                 <select
                   name="role"
                   defaultValue=""
+                  disabled={passwordSubmitting}
                   required
                   aria-describedby="registration-role-help"
                 >
@@ -456,6 +471,7 @@ export default function Account({
                 <input
                   name="name"
                   autoComplete="name"
+                  readOnly={passwordSubmitting}
                   required
                   maxLength={100}
                 />
@@ -471,13 +487,20 @@ export default function Account({
                 autoComplete="username"
                 pattern="[1-9][0-9]{0,18}"
                 maxLength={19}
+                readOnly={passwordSubmitting}
                 required
               />
             </label>
           ) : (
             <label key="email">
               Email
-              <input name="email" type="email" autoComplete="email" required />
+              <input
+                name="email"
+                type="email"
+                autoComplete="email"
+                readOnly={passwordSubmitting}
+                required
+              />
             </label>
           )}
           <label>
@@ -486,15 +509,34 @@ export default function Account({
               name="password"
               type={passwordVisible ? 'text' : 'password'}
               autoComplete={register ? 'new-password' : 'current-password'}
-              minLength={12}
+              minLength={register ? 12 : undefined}
+              aria-describedby={notice ? 'password-form-notice' : undefined}
+              readOnly={passwordSubmitting}
               required
             />
           </label>
           <Button onClick={() => setPasswordVisible(!passwordVisible)}>
             {passwordVisible ? 'Скрыть пароль' : 'Показать пароль'}
           </Button>
-          <Button className="primary" type="submit">
-            {register ? 'Создать и войти' : 'Войти'}
+          {notice && (
+            <p
+              className="password-form-notice"
+              id="password-form-notice"
+              role="alert"
+            >
+              {notice}
+            </p>
+          )}
+          <Button
+            className="primary"
+            type="submit"
+            disabled={passwordSubmitting}
+          >
+            {passwordSubmitting
+              ? 'Проверяем данные…'
+              : register
+                ? 'Создать и войти'
+                : 'Войти'}
           </Button>
         </form>
         {!register && (
@@ -512,6 +554,7 @@ export default function Account({
         )}
         {!register && (
           <Button
+            disabled={passwordSubmitting}
             onClick={() => {
               setPasswordVisible(false);
               setNotice('');
@@ -522,17 +565,19 @@ export default function Account({
           </Button>
         )}
         <Button
+          disabled={passwordSubmitting}
           onClick={() => {
             setPasswordVisible(false);
             setLoginById(false);
+            setNotice('');
             setRegister(!register);
           }}
         >
           {register ? 'Уже есть аккаунт' : 'Регистрация'}
         </Button>
-        {notice && <p role="alert">{notice}</p>}
         {smsAvailable && (
           <Button
+            disabled={passwordSubmitting}
             onClick={() => {
               setNotice('');
               setPasswordVisible(false);
@@ -544,6 +589,7 @@ export default function Account({
         )}
         {emailAvailable && (
           <Button
+            disabled={passwordSubmitting}
             onClick={() => {
               setNotice('');
               setPasswordVisible(false);
