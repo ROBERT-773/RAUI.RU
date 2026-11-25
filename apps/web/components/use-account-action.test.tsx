@@ -13,7 +13,8 @@ import { useAccountAction } from './use-account-action';
 const form = vi.hoisted(() => ({
   authenticated: undefined as (() => void) | undefined,
 }));
-vi.mock('./account-entry-link', () => ({
+vi.mock('./account-entry-link', async (original) => ({
+  ...(await original<object>()),
   AccountEntryDialog: ({
     title,
     onAuthenticated,
