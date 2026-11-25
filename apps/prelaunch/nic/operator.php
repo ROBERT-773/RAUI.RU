@@ -11,7 +11,7 @@ function spreadsheetCell(string $value): string
 
 try {
     $command = $argv[1] ?? 'check';
-    if (!in_array($command, ['check', 'export'], true)) throw new RuntimeException('Unsupported command');
+    if (!in_array($command, ['check', 'export', 'export-jsonl'], true)) throw new RuntimeException('Unsupported command');
     $db = openStore();
     if ($command === 'check') {
         $db->exec('BEGIN IMMEDIATE');
@@ -23,18 +23,29 @@ try {
     if (is_link($dir) || (!is_dir($dir) && !@mkdir($dir, 0700) && !is_dir($dir))) throw new RuntimeException('Export directory unavailable');
     if (DIRECTORY_SEPARATOR === '/' && (fileperms($dir) & 0077) !== 0) throw new RuntimeException('Private permissions required');
     $id = bin2hex(random_bytes(16));
-    $name = 'contacts-' . $id . '.csv';
+    $jsonl = $command === 'export-jsonl';
+    $name = 'contacts-' . $id . ($jsonl ? '.jsonl' : '.csv');
     $temp = $dir . DIRECTORY_SEPARATOR . '.' . $id . '.partial';
     $out = fopen($temp, 'xb');
     if ($out === false) throw new RuntimeException('Export unavailable');
     try {
-        if (fwrite($out, "\xEF\xBB\xBF") !== 3) throw new RuntimeException('Incomplete export');
-        if (fputcsv($out, ['email', 'phone', 'consented_at', 'consent_version'], ',', '"', '') === false) throw new RuntimeException('Incomplete export');
+        $columns = ['email', 'phone', 'consented_at', 'consent_version'];
+        if ($jsonl) {
+            $columns[] = 'created_at';
+        } else {
+            if (fwrite($out, "\xEF\xBB\xBF") !== 3) throw new RuntimeException('Incomplete export');
+            if (fputcsv($out, $columns, ',', '"', '') === false) throw new RuntimeException('Incomplete export');
+        }
         $db->beginTransaction();
-        $rows = $db->query('SELECT email,phone,consented_at,consent_version FROM launch_interest ORDER BY consented_at,email,phone');
+        $rows = $db->query('SELECT ' . implode(',', $columns) . ' FROM launch_interest ORDER BY consented_at,email,phone');
         $count = 0;
-        while ($row = $rows->fetch(PDO::FETCH_NUM)) {
-            if (fputcsv($out, array_map('spreadsheetCell', $row), ',', '"', '') === false) throw new RuntimeException('Incomplete export');
+        while ($row = $rows->fetch(PDO::FETCH_ASSOC)) {
+            if ($jsonl) {
+                $line = json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+                if (fwrite($out, $line) !== strlen($line)) throw new RuntimeException('Incomplete export');
+            } elseif (fputcsv($out, array_map('spreadsheetCell', $row), ',', '"', '') === false) {
+                throw new RuntimeException('Incomplete export');
+            }
             $count++;
         }
         $db->commit();

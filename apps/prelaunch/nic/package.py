@@ -32,6 +32,8 @@ for n in ['register.php','landing.php']:
     write('docs'+prefix+'/'+n,(source/n).read_bytes())
 for n in ['store.php','operator.php']:
     write('raui-prelaunch-private/'+n,(source/n).read_bytes())
+for n in ['001_initial.sql', '002_created_at.sql']:
+    write('raui-prelaunch-private/migrations/'+n, (source/'migrations'/n).read_bytes())
 write('activation/index.php',(source/'index.php').read_bytes())
 write('README.md',(source/'README.md').read_bytes())
 names=['index.html','start.css','registration.js','assets/raui-logo.png','assets/raui-moscow-evening.webp']

@@ -29,16 +29,34 @@ function openStore(): PDO
     }
     $db = new PDO('sqlite:' . $dbPath, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $db->exec('PRAGMA busy_timeout = 5000');
-    $db->exec('CREATE TABLE IF NOT EXISTS launch_interest (
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        consent_version TEXT NOT NULL,
-        consented_at TEXT NOT NULL,
-        PRIMARY KEY(email,phone)
-    ) WITHOUT ROWID');
-    $db->exec('CREATE TABLE IF NOT EXISTS launch_quota (k TEXT PRIMARY KEY, amount INTEGER NOT NULL, ends INTEGER NOT NULL) WITHOUT ROWID');
-    $db->exec('CREATE TABLE IF NOT EXISTS launch_settings (k TEXT PRIMARY KEY, v TEXT NOT NULL) WITHOUT ROWID');
+    migrateStore($db);
     return $db;
+}
+
+function migrateStore(PDO $db): void
+{
+    $steps = [1 => '001_initial.sql', 2 => '002_created_at.sql'];
+    $latest = count($steps);
+    $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
+    if ($version === $latest) return;
+    if ($version > $latest) throw new RuntimeException('Unsupported database version');
+    $db->exec('BEGIN IMMEDIATE');
+    try {
+        // Another PHP worker may have completed the upgrade while this one waited.
+        $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
+        if ($version < 0 || $version > $latest) throw new RuntimeException('Unsupported database version');
+        foreach ($steps as $number => $name) {
+            if ($number <= $version) continue;
+            $source = file_get_contents(__DIR__ . '/migrations/' . $name);
+            if ($source === false || trim($source) === '') throw new RuntimeException('Migration unavailable');
+            $db->exec($source);
+        }
+        $db->exec('PRAGMA user_version = ' . $latest);
+        $db->exec('COMMIT');
+    } catch (Throwable $error) {
+        $db->exec('ROLLBACK');
+        throw $error;
+    }
 }
 
 function validContacts($body): ?array
@@ -84,8 +102,9 @@ function handleSubmission(PDO $db, string $peer, int $inputStatus, ?array $conta
         } elseif ($inputStatus !== 200 || $contacts === null) {
             $status = $inputStatus === 200 ? 400 : $inputStatus;
         } else {
-            $db->prepare('INSERT OR IGNORE INTO launch_interest(email,phone,consent_version,consented_at) VALUES (?,?,?,?)')
-                ->execute([$contacts[0], $contacts[1], 'launch-notice-v1', gmdate('Y-m-d\TH:i:s\Z', $now)]);
+            $stamp = gmdate('Y-m-d\TH:i:s\Z', $now);
+            $db->prepare('INSERT OR IGNORE INTO launch_interest(email,phone,consent_version,consented_at,created_at) VALUES (?,?,?,?,?)')
+                ->execute([$contacts[0], $contacts[1], 'launch-notice-v1', $stamp, $stamp]);
             $status = 201;
         }
         $db->exec('COMMIT');
