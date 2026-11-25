@@ -216,6 +216,65 @@ test('CSRF recovery proxy rejects cross-origin browser reads before contacting A
   expect(fetch).not.toHaveBeenCalled();
 });
 
+test('administrator directory searches forward only same-origin POST bodies without query parameters or caching', async () => {
+  const origin = 'https://staging.raui.ru';
+  vi.stubEnv('DEPLOYMENT_ENV', 'local');
+  vi.stubEnv('WEB_ORIGIN', origin);
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const upstream = vi.fn(async (url: string, init: RequestInit) => {
+    expect(new URL(url).search).toBe('');
+    expect(init.method).toBe('POST');
+    expect(init.cache).toBe('no-store');
+    expect(new Headers(init.headers).get('x-csrf-token')).toBe(
+      'directory-token',
+    );
+    expect(new Headers(init.headers).get('cookie')).toBe(
+      'session=directory-fixture',
+    );
+    expect(await new Response(init.body).json()).toEqual({
+      query: 'directory fixture',
+    });
+    return Response.json(
+      { items: [], nextCursor: null },
+      {
+        headers: { 'cache-control': 'public, max-age=60' },
+      },
+    );
+  });
+  vi.stubGlobal('fetch', upstream);
+  const handlers = await import('../app/api/[...path]/route');
+  for (const [method, path, requestOrigin, status] of [
+    ['POST', 'users', origin, 200],
+    ['POST', 'listings', origin, 200],
+    ['POST', 'users?query=private', origin, 404],
+    ['GET', 'users', origin, 404],
+    ['POST', 'users/extra', origin, 404],
+    ['POST', 'other', origin, 404],
+    ['POST', 'listings', 'https://wrong.test', 403],
+  ] as const) {
+    const url = new URL('/api/v1/admin/search/' + path, origin);
+    const request = new NextRequest(url, {
+      method,
+      headers: {
+        origin: requestOrigin,
+        cookie: 'session=directory-fixture',
+        'content-type': 'application/json',
+        'x-csrf-token': 'directory-token',
+      },
+      ...(method === 'POST'
+        ? { body: JSON.stringify({ query: 'directory fixture' }) }
+        : {}),
+    });
+    const response = await handlers[method](request, {
+      params: Promise.resolve({ path: url.pathname.slice(5).split('/') }),
+    });
+    expect(response.status, method + ' ' + path).toBe(status);
+    if (status === 200)
+      expect(response.headers.get('cache-control')).toBe('no-store');
+  }
+  expect(upstream).toHaveBeenCalledTimes(2);
+});
+
 test('feedback forwards authenticated submissions and admin reads only', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'development');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');

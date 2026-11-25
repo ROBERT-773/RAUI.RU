@@ -25,6 +25,7 @@ for (const testFile of [
   'email-sign-in.integration.test.js',
   'contact-settings.integration.test.js',
   'feedback.integration.test.js',
+  'admin-directory-search.integration.test.js',
   'professional-profile-image.integration.test.js',
   'search.integration.test.js',
   'commerce.integration.test.js',

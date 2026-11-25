@@ -130,6 +130,13 @@ async function proxy(
     feedback &&
     path.length === 3 &&
     request.method === (path[1] === 'admin' ? 'GET' : 'POST');
+  const adminDirectoryRoute =
+    path[1] === 'admin' &&
+    path[2] === 'search' &&
+    path.length === 4 &&
+    ['users', 'listings'].includes(path[3] ?? '') &&
+    request.method === 'POST' &&
+    !request.nextUrl.search;
   const profilePictures =
     path[1] === 'search' &&
     ['professional-profile', 'professionals'].includes(path[2] ?? '') &&
@@ -166,7 +173,8 @@ async function proxy(
       !(request.method === 'GET' && path.length === 3)) ||
     (personalFeeds && !ownFeedsRoute) ||
     (feedback && !feedbackRoute) ||
-    (!feedbackRoute &&
+    (!adminDirectoryRoute &&
+      !feedbackRoute &&
       !feedTrustRoute &&
       !staffPermissionsRoute &&
       !registrationRoute &&

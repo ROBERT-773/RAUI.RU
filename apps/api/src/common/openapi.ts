@@ -66,6 +66,12 @@ import { listingContactSelectionSchema } from '../modules/listings/contact-setti
 import { feedbackInput } from '../modules/product/feedback';
 import { professionalImageInput } from '../modules/professional/profile-image';
 import {
+  adminDirectorySearchSchema,
+  adminListingDirectorySearchSchema,
+  adminListingSearchResultSchema,
+  adminUserSearchResultSchema,
+} from '../modules/admin/directory-search';
+import {
   staffTotpCodeInput,
   staffTotpEnrollmentInput,
 } from '../modules/auth/staff-totp-controller';
@@ -167,6 +173,8 @@ const contactResponses: Record<string, z.ZodType> = {
   'get /v1/listings/{id}/public/contact': publicContact,
 };
 const bodyContracts: Record<string, z.ZodType> = {
+  'post /v1/admin/search/users': adminDirectorySearchSchema,
+  'post /v1/admin/search/listings': adminListingDirectorySearchSchema,
   'put /v1/search/professional-profile/image': professionalImageInput,
   'put /v1/search/professional-profile/agency/{id}/image':
     professionalImageInput,
@@ -634,6 +642,34 @@ export function enrichOpenApi(document: OpenAPIObject) {
               'Email sign-in disabled, unconfigured, or unavailable before recipient delivery. A retry with the same key preserves a known delivery failure.',
           };
         }
+      }
+      if (
+        operationId === 'post /v1/admin/search/users' ||
+        operationId === 'post /v1/admin/search/listings'
+      ) {
+        const users = path.endsWith('/users');
+        operation.description = users
+          ? 'Administrator-only search by public ID, email, name or full phone number. Submit personal information in the JSON body. Only an exact phone match is returned in matchedPhone.'
+          : 'Administrator-only search by listing ID, title or address, or exact seller public ID with by=seller, across listing statuses. A public link is available only for an eligible published listing.';
+        delete operation.responses['201'];
+        operation.responses['200'] = {
+          description:
+            'Results in UUID order and the cursor for the next page, if present.',
+          headers: {
+            'Cache-Control': {
+              schema: { type: 'string', example: 'no-store' },
+            },
+          },
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                users
+                  ? adminUserSearchResultSchema
+                  : adminListingSearchResultSchema,
+              ) as SchemaObject,
+            },
+          },
+        };
       }
       if (contactResponses[operationId]) {
         operation.responses[method === 'post' ? '201' : '200'] = {
