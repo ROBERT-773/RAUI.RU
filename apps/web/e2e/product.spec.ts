@@ -53,11 +53,10 @@ test('disabling a listing subscription in the cabinet takes precedence over an o
   const subscriptions = page.getByRole('region', {
     name: 'Подписки на объявления',
   });
-  const row = subscriptions
-    .locator('article')
-    .filter({
-      has: page.locator('a[href="' + new URL(card.url()).pathname + '"]'),
-    });
+  const cardPath = new URL(card.url()).pathname;
+  const row = subscriptions.locator('article').filter({
+    has: page.locator(`a[href="${cardPath}"]`),
+  });
   await row.getByRole('button', { name: 'Отключить подписку' }).click();
   await expect(row).toHaveCount(0);
   await save.click();
