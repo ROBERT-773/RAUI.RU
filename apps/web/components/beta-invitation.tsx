@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { AccountEntryLink } from './account-entry-link';
 import { useEffect, useRef, useState } from 'react';
 import BetaFeedback from './beta-feedback';
 import {
@@ -60,7 +60,7 @@ export default function BetaInvitation({
   return (
     <section
       id="beta-feedback"
-      aria-label="Бесплатная бета RAUI"
+      aria-label="Бесплатное размещение объявлений"
       className={dismissed ? styles.compact : styles.invitation}
     >
       {!dismissed && (
@@ -80,7 +80,7 @@ export default function BetaInvitation({
             ×
           </button>
           <div className={styles.copy}>
-            <h2>Бесплатная бета RAUI</h2>
+            <h2>Бесплатное размещение объявлений</h2>
             <p>
               Мы развиваем портал недвижимости. Разместите базовое объявление
               бесплатно и расскажите, что стоит улучшить.
@@ -101,9 +101,12 @@ export default function BetaInvitation({
       )}
       <div className={styles.actions}>
         {!dismissed && (
-          <Link href="/account/listings#new-listing">
+          <AccountEntryLink
+            href="/account/listings#new-listing"
+            intent="publish"
+          >
             Разместить объявление
-          </Link>
+          </AccountEntryLink>
         )}
         <button
           type="button"

@@ -20,5 +20,5 @@ export const catalogNavigation = [
   },
   { label: 'Сделки', href: '/services#deals' },
   { label: 'Сервисы', href: '/services' },
-  { label: 'Приложение RAUI', href: '/services#mobile' },
+  { label: 'Мобильная версия', href: '/services#mobile' },
 ];

@@ -2,7 +2,7 @@
 import { Button } from '@raui/ui';
 import { useEffect, useState, useTransition } from 'react';
 import dynamic from 'next/dynamic';
-import Link from 'next/link';
+import { AccountEntryLink } from './account-entry-link';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
@@ -24,7 +24,7 @@ export default function SearchProduct({
   initialDefinition = { limit: 20 },
   initialMode = 'list',
   initialPage = null,
-  title = 'Найдите своё место',
+  title = 'Расширенный поиск',
 }: {
   initialDefinition?: SearchDefinition;
   initialMode?: 'list' | 'map';
@@ -510,7 +510,9 @@ function SearchView({
         <Button onClick={save} disabled={loading || navigationPending}>
           Сохранить поиск
         </Button>
-        <Link href="/account">Избранное и аккаунт</Link>
+        <AccountEntryLink href="/account?tab=favorite">
+          Избранное и аккаунт
+        </AccountEntryLink>
       </div>
       {notice && <p role="status">{notice}</p>}
       {error && (

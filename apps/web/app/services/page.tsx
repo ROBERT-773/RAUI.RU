@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: 'Сервисы — RAUI.RU' };
 export default function Services() {
   return (
     <main id="content">
-      <h1>Сервисы RAUI</h1>
+      <h1>Сервисы</h1>
       <div className="cards">
         <section className="panel" id="deals">
           <h2>Сделки и объявления</h2>
@@ -24,12 +24,12 @@ export default function Services() {
           </div>
         </section>
         <section className="panel" id="mobile">
-          <h2>RAUI на телефоне</h2>
+          <h2>Мобильная версия</h2>
           <p>
             Откройте веб-версию в мобильном браузере. Для быстрого доступа
             добавьте страницу на главный экран через меню браузера.
           </p>
-          <Link href="/">Открыть RAUI</Link>
+          <Link href="/">На главную</Link>
         </section>
       </div>
     </main>

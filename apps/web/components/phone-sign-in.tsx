@@ -1,5 +1,6 @@
 'use client';
 import { Button } from '@raui/ui';
+import Link from 'next/link';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../lib/client';
 import { invalidPhoneInput, normalizePhoneInput } from '../lib/phone-input';
@@ -28,7 +29,12 @@ function browserKey() {
     .replace(/=+$/, '');
 }
 
-type PhoneSignInProps<T> = { onOther: () => void; recoveryMode?: boolean } & (
+type PhoneSignInProps<T> = {
+  onOther: () => void;
+  recoveryMode?: boolean;
+  compactEntry?: boolean;
+  entryTitle?: string | undefined;
+} & (
   | { enrollmentPhone: string; onEnrolled: () => void; onSession?: never }
   | {
       enrollmentPhone?: never;
@@ -43,6 +49,16 @@ export type SessionSignInProps<T> = Extract<
   PhoneSignInProps<T>,
   { onSession: unknown }
 >;
+export type EmailCodeSignInProps<T> = SessionSignInProps<T> & {
+  identifierOptions?: {
+    initialValue: string;
+    emailAvailable: boolean;
+    smsAvailable: boolean;
+    recoveryHref: string;
+    onPassword: (value: string) => void;
+    onRegister: (value: string) => void;
+  };
+};
 
 export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
   return <SignInByCode {...props} channel="phone" />;
@@ -51,12 +67,14 @@ export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
 export function SignInByCode<T>(
   props:
     | (PhoneSignInProps<T> & { channel: 'phone' })
-    | (SessionSignInProps<T> & { channel: 'email' }),
+    | (EmailCodeSignInProps<T> & { channel: 'email' }),
 ) {
   const email = props.channel === 'email';
+  const identifier = email ? props.identifierOptions : undefined;
   const path = email ? 'v1/auth/email-sign-in' : 'v1/auth/phone-sign-in';
   const [destination, setDestination] = useState(
     ('fixedDestination' in props ? props.fixedDestination : undefined) ??
+      identifier?.initialValue ??
       (email ? '' : (props.enrollmentPhone ?? '+7')),
   );
   const normalized = email
@@ -67,6 +85,7 @@ export function SignInByCode<T>(
   );
   const retryUntil = normalized ? retryWindows.get(normalized) : undefined;
   const [registrationRole, setRegistrationRole] = useState('buyer');
+  const [passwordChosen, setPasswordChosen] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signupToken, setSignupToken] = useState('');
   const [operation, setOperation] = useState<Operation | null>(null);
@@ -329,14 +348,53 @@ export function SignInByCode<T>(
     }
   }
 
+  function continueWithIdentifier(usePassword = passwordChosen) {
+    if (!identifier || busy) return;
+    if (!normalized) {
+      setError('Введите email или ID пользователя.');
+      destinationField.current?.focus();
+      return;
+    }
+    const isId =
+      /^[1-9][0-9]{0,18}$/.test(normalized) &&
+      (normalized.length < 19 || normalized <= '9223372036854775807');
+    if (!isId && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      setError('Введите адрес электронной почты или цифровой ID пользователя.');
+      destinationField.current?.focus();
+      return;
+    }
+    if (isId || !identifier.emailAvailable || usePassword)
+      identifier.onPassword(normalized);
+    else void execute('request');
+  }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     if (signupToken) void execute('register', form);
     else if (challenge && props.onEnrolled) void execute('enroll', form);
+    else if (!challenge && identifier) continueWithIdentifier();
     else if (!challenge) void execute('request');
   }
   const codeDialog = Boolean(challenge && props.onSession);
+  const roleChoice = email && !props.recoveryMode && !challenge && (
+    <details>
+      <summary>Роль при регистрации</summary>
+      <label>
+        Кто вы?
+        <select
+          value={registrationRole}
+          onChange={(event) => setRegistrationRole(event.target.value)}
+        >
+          <option value="buyer">Ищу недвижимость</option>
+          <option value="owner">Собственник</option>
+          <option value="agent">Агент</option>
+          <option value="agency">Агентство</option>
+          <option value="developer">Застройщик</option>
+        </select>
+      </label>
+      <p>Выбранная роль используется при создании аккаунта.</p>
+    </details>
+  );
 
   return (
     <>
@@ -346,16 +404,32 @@ export function SignInByCode<T>(
         <h4>Подтвердите смену пароля</h4>
       ) : (
         <h1>
-          {props.recoveryMode ? 'Восстановить доступ' : 'Вход или регистрация'}
+          {props.recoveryMode
+            ? 'Восстановить доступ'
+            : passwordChosen
+              ? 'Вход с паролем'
+              : (props.entryTitle ?? 'Вход или регистрация')}
         </h1>
       )}
-      <form className="account-form panel" onSubmit={submit}>
+      <form
+        className={props.compactEntry ? 'account-form' : 'account-form panel'}
+        onSubmit={submit}
+      >
         <label>
-          {email ? 'Email' : 'Мобильный телефон'}
+          {identifier
+            ? 'Email или ID'
+            : email
+              ? 'Email'
+              : props.compactEntry
+                ? 'Телефон'
+                : 'Мобильный телефон'}
           <input
             ref={destinationField}
-            type={email ? 'email' : 'tel'}
-            autoComplete={email ? 'email' : 'tel'}
+            type={identifier ? 'text' : email ? 'email' : 'tel'}
+            autoComplete={identifier ? 'username' : email ? 'email' : 'tel'}
+            autoCapitalize={email ? 'none' : undefined}
+            maxLength={identifier ? 254 : undefined}
+            autoFocus={props.compactEntry}
             value={destination}
             readOnly={
               'fixedDestination' in props && Boolean(props.fixedDestination)
@@ -373,25 +447,7 @@ export function SignInByCode<T>(
             }}
           />
         </label>
-        {email && !props.recoveryMode && !challenge && (
-          <details>
-            <summary>Роль при регистрации</summary>
-            <label>
-              Кто вы?
-              <select
-                value={registrationRole}
-                onChange={(event) => setRegistrationRole(event.target.value)}
-              >
-                <option value="buyer">Ищу недвижимость</option>
-                <option value="owner">Собственник</option>
-                <option value="agent">Агент</option>
-                <option value="agency">Агентство</option>
-                <option value="developer">Застройщик</option>
-              </select>
-            </label>
-            <p>Выбранная роль используется при создании аккаунта.</p>
-          </details>
-        )}
+        {!identifier && roleChoice}
         {challenge && props.onEnrolled && (
           <label>
             Код из SMS
@@ -476,16 +532,23 @@ export function SignInByCode<T>(
         )}
         {!codeDialog && (
           <Button
+            className={props.compactEntry ? 'primary' : undefined}
             type="submit"
             disabled={
-              busy || (!signupToken && !challenge && Boolean(retryUntil))
+              busy ||
+              (!passwordChosen &&
+                !signupToken &&
+                !challenge &&
+                Boolean(retryUntil))
             }
           >
             {signupToken
               ? 'Создать аккаунт'
               : challenge
                 ? 'Подключить'
-                : 'Получить код'}
+                : identifier
+                  ? 'Продолжить'
+                  : 'Получить код'}
           </Button>
         )}
         {(signupToken || (challenge && props.onEnrolled)) && (
@@ -493,23 +556,67 @@ export function SignInByCode<T>(
             Запросить новый код или изменить номер
           </Button>
         )}
-        <Button
-          disabled={committed}
-          onClick={() => {
-            if (
-              lock.current &&
-              lock.current !== 'request' &&
-              lock.current !== 'resend'
-            )
-              return;
-            resetChallenge();
-            props.onOther();
-          }}
-        >
-          {props.enrollmentPhone || 'fixedDestination' in props
-            ? 'Отмена'
-            : 'Другой способ'}
-        </Button>
+        {identifier ? (
+          <details className="auth-alternatives">
+            <summary className="auth-secondary">Другой способ</summary>
+            {identifier.emailAvailable && (
+              <Button
+                className="auth-secondary"
+                disabled={busy}
+                onClick={(event) => {
+                  const next = !passwordChosen;
+                  setPasswordChosen(next);
+                  const menu = event.currentTarget.closest('details');
+                  if (menu) menu.open = false;
+                  setError('');
+                  destinationField.current?.focus();
+                  if (next && normalized) continueWithIdentifier(true);
+                }}
+              >
+                {passwordChosen ? 'Войти по коду' : 'Войти с паролем'}
+              </Button>
+            )}
+            <Button
+              className="auth-secondary"
+              disabled={committed}
+              onClick={() => identifier.onRegister(destination.trim())}
+            >
+              Регистрация
+            </Button>
+            {identifier.smsAvailable && (
+              <Button
+                className="auth-secondary"
+                disabled={committed}
+                onClick={props.onOther}
+              >
+                Войти по SMS
+              </Button>
+            )}
+            <Link className="auth-secondary" href={identifier.recoveryHref}>
+              Забыли пароль?
+            </Link>
+            {identifier.emailAvailable && !passwordChosen && roleChoice}
+          </details>
+        ) : (
+          <Button
+            className={props.compactEntry ? 'auth-secondary' : undefined}
+            disabled={committed}
+            onClick={() => {
+              if (
+                lock.current &&
+                lock.current !== 'request' &&
+                lock.current !== 'resend'
+              )
+                return;
+              resetChallenge();
+              props.onOther();
+            }}
+          >
+            {props.enrollmentPhone || 'fixedDestination' in props
+              ? 'Отмена'
+              : 'Другой способ'}
+          </Button>
+        )}
         {notice && <p role="status">{notice}</p>}
         {retryUntil && !challenge && !signupToken && (
           <p role="status">

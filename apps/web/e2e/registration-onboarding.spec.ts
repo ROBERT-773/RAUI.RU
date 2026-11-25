@@ -1,3 +1,4 @@
+import { continueWithIdentifier, openSignInOptions } from './sign-in';
 import { test, expect, type Page, type Response } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +22,7 @@ async function login(
   heading = 'Кабинет собственника',
 ) {
   await page.goto('/account');
-  await page.getByLabel('Email', { exact: true }).fill(email);
+  await continueWithIdentifier(page, email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(
@@ -46,6 +47,7 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
   const secondOwner = await secondOwnerContext.newPage();
   try {
     await page.goto('/account');
+    await openSignInOptions(page);
     await page
       .getByRole('button', { name: 'Регистрация', exact: true })
       .click();
@@ -156,7 +158,7 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
       .click();
     expect((await refreshed).status()).toBe(401);
     await expect(
-      page.getByRole('heading', { name: 'Войти в аккаунт', exact: true }),
+      page.getByRole('dialog', { name: 'Вход или регистрация', exact: true }),
     ).toBeVisible();
     await expect(page.getByText(name, { exact: true })).toHaveCount(0);
     // Another already-open onboarding session can exit after the same revocation.
@@ -168,12 +170,12 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
       .click();
     expect((await logout).status()).toBe(401);
     await expect(
-      secondOwner.getByRole('heading', {
-        name: 'Войти в аккаунт',
+      secondOwner.getByRole('dialog', {
+        name: 'Вход или регистрация',
         exact: true,
       }),
     ).toBeVisible();
-    await page.getByLabel('Email', { exact: true }).fill(email);
+    await continueWithIdentifier(page, email);
     await page.getByLabel('Пароль', { exact: true }).fill(password);
     const rejectedLogin = page.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/auth/login'),
@@ -181,7 +183,7 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
     await page.getByRole('button', { name: 'Войти', exact: true }).click();
     expect((await rejectedLogin).status()).toBe(401);
     await expect(
-      page.getByRole('heading', { name: 'Войти в аккаунт', exact: true }),
+      page.getByRole('heading', { name: 'Введите пароль', exact: true }),
     ).toBeVisible();
   } finally {
     await staffContext.close();
@@ -203,6 +205,7 @@ test('new owner registers, saves a draft and publishes after moderation', async 
   const visitorContext = await browser.newContext();
   try {
     await page.goto('/account');
+    await openSignInOptions(page);
     await page
       .getByRole('button', { name: 'Регистрация', exact: true })
       .click();
@@ -259,11 +262,11 @@ test('new owner registers, saves a draft and publishes after moderation', async 
       .click();
     expect((await emailConfirmation).status()).toBe(201);
     const phone =
-      '+120255501' + String(test.info().project.name.length).padStart(2, '0');
-    await expect(
-      page.getByLabel('Номер телефона', { exact: true }),
-    ).toBeEnabled();
-    await page.getByLabel('Номер телефона', { exact: true }).fill(phone);
+      '+700000000' + String(test.info().project.name.length).padStart(2, '0');
+    const phoneInput = page.getByLabel('Номер телефона', { exact: true });
+    await expect(phoneInput).toBeEnabled();
+    await expect(phoneInput).toHaveValue('+7');
+    await phoneInput.fill('8 ' + phone.slice(2));
     const phoneRequest = page.waitForResponse((response) =>
       endpoint(response, 'POST', '/api/v1/auth/verification/phone'),
     );

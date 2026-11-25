@@ -1,3 +1,4 @@
+import { continueWithIdentifier } from './sign-in';
 import { execFileSync } from 'node:child_process';
 import { authenticatorCode } from './authenticator-code';
 import { expect, test, type Page } from '@playwright/test';
@@ -34,9 +35,7 @@ test('staff enrolls in the browser and a separate session remains locked', async
   }
   async function login(target: Page) {
     await target.goto('/account');
-    await target
-      .getByLabel('Email', { exact: true })
-      .fill(`staff-${info.project.name}@e2e.test`);
+    await continueWithIdentifier(target, `staff-${info.project.name}@e2e.test`);
     await target.getByLabel('Пароль', { exact: true }).fill(password);
     await submit(target, 'Войти', 'auth/login', 201);
     await expect(

@@ -1,3 +1,4 @@
+import { continueWithIdentifier } from './sign-in';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
@@ -12,7 +13,7 @@ const password = 'E2E-only-password-42!';
 const adminPath = '/api/v1/admin/integrations/feeds';
 async function login(page: Page, email: string, heading: string) {
   await page.goto('/account');
-  await page.getByLabel('Email', { exact: true }).fill(email);
+  await continueWithIdentifier(page, email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(

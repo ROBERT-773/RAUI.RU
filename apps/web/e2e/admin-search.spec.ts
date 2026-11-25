@@ -1,3 +1,4 @@
+import { continueWithIdentifier } from './sign-in';
 import { expect, test, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 
@@ -16,7 +17,7 @@ test.beforeEach(() => {
 
 async function signIn(page: Page, email: string) {
   await page.goto('/account');
-  await page.getByLabel('Email', { exact: true }).fill(email);
+  await continueWithIdentifier(page, email);
   await page
     .getByLabel('Пароль', { exact: true })
     .fill('E2E-only-password-42!');

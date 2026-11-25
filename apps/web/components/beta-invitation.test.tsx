@@ -126,7 +126,7 @@ test('retry after lost response uses the same key even after reopening; the rece
   expect(field().value).toBe(message);
   send();
   const receipt = await screen.findByText(
-    'Спасибо! Ваше предложение отправлено команде RAUI.',
+    'Спасибо! Ваше предложение отправлено.',
   );
   await waitFor(() => expect(document.activeElement).toBe(receipt));
   expect(readFeedbackDraft()).toBeNull();
