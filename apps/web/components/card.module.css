@@ -1,0 +1,37 @@
+:global(.card) .heading,
+:global(.home-preview .card) .heading {
+  margin: 0;
+}
+
+.link {
+  display: block;
+  text-decoration: none;
+}
+
+.link img {
+  display: block;
+}
+
+.link :global(.photo-placeholder) {
+  font-weight: 400;
+}
+
+.title {
+  display: block;
+  padding: 1rem 1rem 0;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
+:global(.home-preview) .title {
+  padding: 0.7rem 0.7rem 0;
+}
+
+:global(.card) .heading + :global(.card-body) {
+  padding-top: 0.5rem;
+}
+
+.link:focus-visible {
+  outline: 3px solid #07537b;
+  outline-offset: -3px;
+}

@@ -7,6 +7,7 @@ import {
   fireEvent,
 } from '@testing-library/react';
 import SearchProduct from './search';
+import { AccountEntryLink } from './account-entry-link';
 import type { SearchDefinition } from '@raui/types/product';
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 const { replace } = navigation;
@@ -731,3 +732,102 @@ test('empty short rental results clear only the stay dates', async () => {
   });
   expect(definition.attributes).toEqual({ guest_capacity: { min: 3 } });
 });
+
+test('opens login for a guest saving the applied definition and keeps the current price draft on cancel', async () => {
+  const submitted: unknown[] = [];
+  stubFetch('fetch', async (url, init) => {
+    if (url === '/api/v1/account/saved-searches') {
+      submitted.push(JSON.parse(String(init?.body)));
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    return {
+      ok: true,
+      json: async () =>
+        url.includes('/attributes') ? [] : { items: [], total: 0 },
+    };
+  });
+  const definition = { dealType: 'sale', price: { max: 4000000 } } as const;
+  render(<SearchProduct initialDefinition={definition} />);
+  const trigger = screen.getByRole('button', { name: 'Сохранить поиск' });
+  await vi.waitFor(() => expect(trigger).toHaveProperty('disabled', false));
+  const price = screen.getByLabelText<HTMLInputElement>('Цена до', {
+    exact: true,
+  });
+  fireEvent.change(price, { target: { value: '5700000' } });
+  fireEvent.click(trigger);
+  await screen.findByRole('dialog', { name: 'Войдите, чтобы сохранить поиск' });
+  expect(submitted).toEqual([{ name: 'Мой поиск', definition }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+  await vi.waitFor(() =>
+    expect(history.state?.rauiAccountAction).toBeUndefined(),
+  );
+  expect(price.value).toBe('5700000');
+  expect(document.activeElement).toBe(trigger);
+});
+
+test.each([true, false])(
+  'a late guest 401 cannot take over the cabinet dialog or invalidate a fresh save (finishes while open: %s)',
+  async (finishesWhileOpen) => {
+    const responses: (() => void)[] = [];
+    stubFetch('fetch', async (url) => {
+      if (url === '/api/v1/account/saved-searches') {
+        return new Promise((resolve) => {
+          responses.push(() =>
+            resolve({ ok: false, status: 401, json: async () => ({}) }),
+          );
+        });
+      }
+      return {
+        ok: true,
+        json: async () =>
+          url.includes('/attributes') ? [] : { items: [], total: 0 },
+      };
+    });
+    render(
+      <>
+        <AccountEntryLink href="/account">Войти в кабинет</AccountEntryLink>
+        <SearchProduct />
+      </>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Сохранить поиск' });
+    const cabinet = screen.getByRole('link', { name: 'Войти в кабинет' });
+    await vi.waitFor(() => expect(trigger).toHaveProperty('disabled', false));
+    const url = location.href;
+    fireEvent.click(trigger);
+    await vi.waitFor(() => expect(responses).toHaveLength(1));
+    fireEvent.click(cabinet);
+    await screen.findByRole('dialog', { name: 'Вход или регистрация' });
+    const cabinetState = history.state;
+    if (finishesWhileOpen) {
+      await act(async () => responses[0]!());
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+      expect(history.state).toEqual(cabinetState);
+    }
+    expect(location.href).toBe(url);
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    await vi.waitFor(() =>
+      expect(history.state?.rauiAccountEntry).toBeUndefined(),
+    );
+    expect(document.activeElement).toBe(cabinet);
+    fireEvent.click(trigger);
+    await vi.waitFor(() => expect(responses).toHaveLength(2));
+    if (!finishesWhileOpen) {
+      await act(async () => responses[0]!());
+      expect(screen.queryByRole('dialog')).toBeNull();
+      fireEvent.click(trigger);
+      await act(async () => {});
+      expect(responses).toHaveLength(2);
+    }
+    await act(async () => responses[1]!());
+    await screen.findByRole('dialog', {
+      name: 'Войдите, чтобы сохранить поиск',
+    });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    await vi.waitFor(() =>
+      expect(history.state?.rauiAccountAction).toBeUndefined(),
+    );
+    expect(location.href).toBe(url);
+    expect(document.activeElement).toBe(trigger);
+  },
+);

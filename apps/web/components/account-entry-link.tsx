@@ -19,7 +19,7 @@ const Account = dynamic(() => import('./account'), {
   ssr: false,
   loading: OpeningStatus,
 });
-const historyKey = 'rauiAccountEntry';
+export const accountEntryHistoryKey = 'rauiAccountEntry';
 type Intent = 'login' | 'publish';
 type Channels = {
   smsAvailable: boolean;
@@ -56,14 +56,31 @@ function destinationAfterSignIn(
     : '/account?action=publish';
 }
 
-function Entry({
-  href,
-  intent,
+function navigate(href: string) {
+  const target = new URL(href, window.location.href);
+  if (target.origin !== window.location.origin) return;
+  // Re-entering the current route also needs fresh authenticated page data.
+  if (
+    target.pathname === window.location.pathname &&
+    target.search === window.location.search
+  ) {
+    window.history.replaceState(null, '', target.href);
+    window.location.reload();
+  } else {
+    window.location.replace(target.href);
+  }
+}
+
+export function AccountEntryDialog({
+  title,
+  onAuthenticated,
   onClose,
+  onLeave,
 }: {
-  href: string;
-  intent: Intent;
+  title: string;
+  onAuthenticated: (user: AccountUser) => void;
   onClose: () => void;
+  onLeave?: () => void;
 }) {
   const [channels, setChannels] = useState<Channels | null>(null);
   useEffect(() => {
@@ -85,32 +102,21 @@ function Entry({
     };
   }, []);
 
-  function navigate(href: string) {
-    const target = new URL(href, window.location.href);
-    if (target.origin !== window.location.origin) return;
-    // Re-entering the current route also needs fresh authenticated page data.
-    if (
-      target.pathname === window.location.pathname &&
-      target.search === window.location.search
-    ) {
-      window.history.replaceState(null, '', target.href);
-      window.location.reload();
-    } else {
-      window.location.replace(target.href);
-    }
-  }
-
-  const title = intent === 'publish' ? publishTitle : loginTitle;
   return (
-    <AuthDialog title={title} onClose={onClose} onNavigate={navigate}>
+    <AuthDialog
+      title={title}
+      onClose={onClose}
+      onNavigate={(href) => {
+        onLeave?.();
+        navigate(href);
+      }}
+    >
       {channels ? (
         <Account
           {...channels}
           compactEntry
           entryTitle={title}
-          onAuthenticated={(user) =>
-            navigate(destinationAfterSignIn(user, href, intent))
-          }
+          onAuthenticated={onAuthenticated}
         />
       ) : (
         <OpeningStatus />
@@ -136,7 +142,7 @@ export function AccountEntryLink({
   const [open, setOpen] = useState(false);
   useEffect(() => {
     function sync() {
-      const active = window.history.state?.[historyKey] === id;
+      const active = window.history.state?.[accountEntryHistoryKey] === id;
       if (active) returnFocus.current = true;
       closing.current = false;
       setOpen(active);
@@ -179,12 +185,12 @@ export function AccountEntryLink({
             return;
           event.preventDefault();
           if (open || closing.current) return;
-          if (window.history.state?.[historyKey] === id) {
+          if (window.history.state?.[accountEntryHistoryKey] === id) {
             setOpen(true);
             return;
           }
           window.history.pushState(
-            { ...window.history.state, [historyKey]: id },
+            { ...window.history.state, [accountEntryHistoryKey]: id },
             '',
             window.location.href,
           );
@@ -195,14 +201,16 @@ export function AccountEntryLink({
         {children}
       </a>
       {open && (
-        <Entry
-          href={href}
-          intent={intent}
+        <AccountEntryDialog
+          title={intent === 'publish' ? publishTitle : loginTitle}
+          onAuthenticated={(user) =>
+            navigate(destinationAfterSignIn(user, href, intent))
+          }
           onClose={() => {
             if (closing.current) return;
             closing.current = true;
             setOpen(false);
-            if (window.history.state?.[historyKey] === id)
+            if (window.history.state?.[accountEntryHistoryKey] === id)
               window.history.back();
             else closing.current = false;
           }}
