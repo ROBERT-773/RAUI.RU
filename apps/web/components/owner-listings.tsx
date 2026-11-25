@@ -30,6 +30,7 @@ import {
 } from '../lib/contact-settings';
 import ListingEditorStatus from './listing-editor-status';
 import SavedListingsList from './saved-listings-list';
+import CabinetListingFilters from './cabinet-listing-filters';
 import {
   commercialLand,
   listingAreaError,
@@ -44,6 +45,9 @@ import ListingPropertyFields, {
 } from './listing-property-fields';
 interface Listing {
   id: string;
+  address?: string;
+  area?: string | null;
+  floor?: string | null;
   property_id?: string;
   organization_id?: string | null;
   title: string;
@@ -122,6 +126,14 @@ function retainCreatedDraft(items: Listing[], draft?: Listing) {
     ? [draft, ...items]
     : items;
 }
+function tableProperty(property: PropertyDetails) {
+  const { area, floor } = property.attributes;
+  return {
+    ...(property.address && { address: property.address.formatted }),
+    area: area == null ? null : String(area),
+    floor: floor == null ? null : String(floor),
+  };
+}
 export default function OwnerListings({
   regions = [],
   initialAgencyId = '',
@@ -135,19 +147,27 @@ export default function OwnerListings({
   const [items, setItems] = useState<Listing[]>([]),
     [more, setMore] = useState(false);
   const [listLoadFailed, setListLoadFailed] = useState(false);
+  const [listFilters, setListFilters] = useState('');
+  const listCursor = useRef('');
+  const [editingPublication, setEditingPublication] = useState(false);
   const [listing, setListing] = useState<Listing | null>(null),
     [media, setMedia] = useState<Media[]>([]),
     [reason, setReason] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contacts, setContacts] = useState<ListingContactSettings | null>(null);
-  const openFromProfile = useEffectEvent((id: string) => {
-    void open(id);
+  const openFromProfile = useEffectEvent((id: string, edit: boolean) => {
+    void open(id, edit);
   });
+  const explicitOpen = useRef<string | null>(null);
+  const [editOnOpen, setEditOnOpen] = useState<string | null>(null);
   useEffect(() => {
     if (!allowed) return;
-    const id = new URLSearchParams(window.location.search).get('listing');
-    if (id && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))
-      openFromProfile(id);
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('listing');
+    if (id && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)) {
+      explicitOpen.current = id;
+      openFromProfile(id, params.get('edit') === '1');
+    }
   }, [allowed]);
   const formId = useId();
   const savedHeading = useRef<HTMLHeadingElement>(null);
@@ -299,6 +319,7 @@ export default function OwnerListings({
           const value = await api<Listing[]>('v1/listings?limit=20');
           if (mounted.current && identity === identityGeneration.current) {
             setItems(value);
+            listCursor.current = value.at(-1)?.id ?? '';
             setMore(value.length === 20);
           }
         } catch (failure) {
@@ -337,11 +358,14 @@ export default function OwnerListings({
     setDescription(value.description);
     setTerms(value.terms ?? {});
     setItems((current) =>
-      current.map((item) => (item.id === value.id ? value : item)),
+      current.map((item) =>
+        item.id === value.id ? { ...item, ...value } : item,
+      ),
     );
   }, []);
-  async function open(id: string) {
+  async function open(id: string, edit = false) {
     const request = ++epoch.current;
+    setEditingPublication(false);
     setPreviewOpen(false);
     setLoading(true);
     setListing(null);
@@ -364,6 +388,7 @@ export default function OwnerListings({
         getListingContactSettings(id).catch(() => null),
       ]);
       if (request !== epoch.current || !mounted.current) return;
+      setEditOnOpen(edit ? id : null);
       setDraftToReopen((current) => (current === id ? null : current));
       assign(value);
       setContacts(contactSettings);
@@ -382,6 +407,11 @@ export default function OwnerListings({
           );
           if (request === epoch.current && mounted.current) {
             setProperty(details);
+            setItems((current) =>
+              current.map((item) =>
+                item.id === id ? { ...item, ...tableProperty(details) } : item,
+              ),
+            );
             setCommercialType(details.attributes.commercial_property_type);
             setPropertyFields(fields);
           }
@@ -447,9 +477,10 @@ export default function OwnerListings({
   async function loadMore() {
     await run(async () => {
       const value = await api<Listing[]>(
-        `v1/listings?limit=20&after=${items.at(-1)!.id}`,
+        `v1/listings?limit=20&after=${listCursor.current}${listFilters ? '&' + listFilters : ''}`,
       );
       if (mounted.current) {
+        listCursor.current = value.at(-1)?.id ?? '';
         setItems((current) => [
           ...current,
           ...value.filter((item) => !current.some((old) => old.id === item.id)),
@@ -457,6 +488,17 @@ export default function OwnerListings({
         setMore(value.length === 20);
       }
     });
+  }
+  async function searchListings(filters: string) {
+    const value = await api<Listing[]>(
+      'v1/listings?limit=20' + (filters ? '&' + filters : ''),
+    );
+    if (!mounted.current) return;
+    setListFilters(filters);
+    listCursor.current = value.at(-1)?.id ?? '';
+    setItems(value);
+    setMore(value.length === 20);
+    setListLoadFailed(false);
   }
   function key(value: Listing, status: string) {
     const id = `${value.id}:${value.version}:${status}`;
@@ -597,7 +639,7 @@ export default function OwnerListings({
         'Статус объявления изменился. Откройте его снова в кабинете.',
       );
     setItems((current) => [
-      value,
+      { ...current.find((item) => item.id === value.id), ...value },
       ...current.filter((item) => item.id !== value.id),
     ]);
     setPropertyDirty(false);
@@ -665,9 +707,32 @@ export default function OwnerListings({
     ['queued', 'pending', 'processing'].includes(item.state),
   );
   const listingId = listing?.id;
+  const applied = new URLSearchParams(listFilters);
+  const currentStatus = applied.get('status');
+  const currentDeal = applied.get('deal');
+  const currentQuery = applied.get('q')?.toLocaleLowerCase('ru');
+  const visibleItems = items.filter(
+    (item) =>
+      (!currentStatus || item.status === currentStatus) &&
+      (!currentDeal ||
+        (currentDeal === 'sale'
+          ? item.deal_type === 'sale'
+          : item.deal_type === 'long_rent' ||
+            item.deal_type === 'short_rent')) &&
+      (!currentQuery ||
+        item.id.toLowerCase() === currentQuery ||
+        item.title.toLocaleLowerCase('ru').includes(currentQuery) ||
+        item.address?.toLocaleLowerCase('ru').includes(currentQuery)),
+  );
   useEffect(() => {
-    if (!loading && listingId && createdDraftToFocus.current === listingId) {
+    if (
+      !loading &&
+      listingId &&
+      (createdDraftToFocus.current === listingId ||
+        explicitOpen.current === listingId)
+    ) {
       createdDraftToFocus.current = null;
+      explicitOpen.current = null;
       editorHeading.current?.focus();
     }
   }, [listingId, loading]);
@@ -842,6 +907,8 @@ export default function OwnerListings({
                   const value = await api<Listing[]>('v1/listings?limit=20');
                   if (!mounted.current) return;
                   setItems(retainCreatedDraft(value, draft));
+                  setListFilters('');
+                  listCursor.current = value.at(-1)?.id ?? '';
                   setMore(value.length === 20);
                   setListLoadFailed(false);
                 } catch {
@@ -865,12 +932,19 @@ export default function OwnerListings({
               Открыть сохранённый черновик
             </button>
           )}
+          <CabinetListingFilters
+            key={listFilters}
+            filters={listFilters}
+            disabled={
+              busy || creating || checking || loading || hasUnsavedChanges
+            }
+            onSearch={(filters) => void run(() => searchListings(filters))}
+          />
           <SavedListingsList
+            filtered={Boolean(listFilters)}
             headingRef={savedHeading}
-            items={items.map((item) => ({
-              id: item.id,
-              title: item.title,
-              status: item.status,
+            items={visibleItems.map((item) => ({
+              ...item,
               representation: showRepresentation
                 ? listingRepresentation(item)
                 : undefined,
@@ -881,21 +955,16 @@ export default function OwnerListings({
             retryDisabled={busy || creating || loading}
             openDisabled={busy || creating || loading || hasUnsavedChanges}
             loadMoreDisabled={busy || creating}
-            onRetry={() =>
-              void run(async () => {
-                const value = await api<Listing[]>('v1/listings?limit=20');
-                if (!mounted.current) return;
-                setItems(value);
-                setMore(value.length === 20);
-                setListLoadFailed(false);
-              })
-            }
-            onOpen={(id) => void open(id)}
+            onRetry={() => void run(() => searchListings(listFilters))}
+            onOpen={(id) => {
+              explicitOpen.current = id;
+              void open(id);
+            }}
             onLoadMore={() => void loadMore()}
           />
           {loading && <p role="status">Загружаем объявление…</p>}
           {listing && (
-            <article className="panel">
+            <article className="panel" id="listing-editor">
               <h2 ref={editorHeading} tabIndex={-1}>
                 {listing.title || 'Черновик объявления'}
               </h2>
@@ -915,6 +984,8 @@ export default function OwnerListings({
                 rejectionReason={reason}
               />
               <ListingPublicationActions
+                key={listing.id}
+                initialEdit={editOnOpen === listing.id}
                 listingId={listing.id}
                 status={listing.status}
                 disabled={busy || creating}
@@ -922,8 +993,10 @@ export default function OwnerListings({
                 onPause={() =>
                   void run(async () => {
                     assign(await transition(listing, 'paused'));
-                    if (mounted.current)
+                    if (mounted.current) {
+                      setEditingPublication(true);
                       setNotice('Размещение приостановлено.');
+                    }
                   })
                 }
                 onArchive={() => {
@@ -940,6 +1013,15 @@ export default function OwnerListings({
                   });
                 }}
               />
+              {(listing.status === 'published' || editingPublication) && (
+                <SavedListingPreview
+                  listing={listing}
+                  property={property}
+                  propertyFields={propertyFields}
+                  media={media}
+                  contacts={contacts}
+                />
+              )}
               {editable && property && propertyFields.length > 0 && (
                 <form
                   key={property.version}
@@ -1046,8 +1128,12 @@ export default function OwnerListings({
                         `v1/listings/${listing.id}`,
                       );
                       if (!mounted.current) return;
-                      assign(current);
-                      if (closeAfterSave) closeSavedDraft(current);
+                      const revised = {
+                        ...current,
+                        ...tableProperty({ ...property, ...updated }),
+                      };
+                      assign(revised);
+                      if (closeAfterSave) closeSavedDraft(revised);
                       else setNotice('Характеристики сохранены.');
                     }, true);
                   }}

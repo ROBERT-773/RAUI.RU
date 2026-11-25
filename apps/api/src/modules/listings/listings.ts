@@ -9,6 +9,7 @@ import {
   Body,
   Headers,
   Header,
+  HttpCode,
   Query,
   ConflictException,
   BadRequestException,
@@ -295,13 +296,31 @@ export class Listings {
       z.object({
         after: uuid.optional(),
         limit: z.coerce.number().int().min(1).max(100).default(20),
+        q: z.string().trim().max(200).optional(),
+        deal: z.enum(['sale', 'rent']).optional(),
+        status: z
+          .enum(Object.keys(transitions) as [ListingState, ...ListingState[]])
+          .optional(),
       }),
       query,
     );
     return this.db.rows(
-      `SELECT * FROM (${cabinetListings}) AS l
-       WHERE $2::uuid IS NULL OR l.id>$2 ORDER BY l.id LIMIT $3`,
-      [actor.id, input.after ?? null, input.limit],
+      `SELECT l.*, a.formatted AS address, p.attributes->>'area' AS area, p.attributes->>'floor' AS floor
+       FROM (${cabinetListings}) AS l JOIN properties p ON p.id=l.property_id
+       JOIN addresses a ON a.id=p.address_id
+       WHERE ($2::uuid IS NULL OR l.id>$2)
+         AND ($4::text IS NULL OR l.status::text=$4)
+         AND ($5::text IS NULL OR ($5='sale' AND l.deal_type='sale') OR ($5='rent' AND l.deal_type IN ('long_rent','short_rent')))
+         AND ($6::text IS NULL OR l.id::text=lower($6) OR strpos(lower(l.title),lower($6))>0 OR strpos(lower(a.formatted),lower($6))>0)
+       ORDER BY l.id LIMIT $3`,
+      [
+        actor.id,
+        input.after ?? null,
+        input.limit,
+        input.status ?? null,
+        input.deal ?? null,
+        input.q || null,
+      ],
     );
   }
   async summary(actor: Actor) {
@@ -547,6 +566,13 @@ export class ListingController {
   }
   @Get(':id') get(@CurrentActor() actor: Actor, @Param('id') id: string) {
     return this.listings.privateGet(actor, id);
+  }
+  @Get(':id/manage')
+  @HttpCode(204)
+  @Header('Cache-Control', 'private, no-store')
+  async canManage(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    seller(actor);
+    await this.listings.privateGet(actor, id);
   }
   @Patch(':id') patch(
     @CurrentActor() actor: Actor,

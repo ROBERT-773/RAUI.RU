@@ -768,6 +768,78 @@ export function enrichOpenApi(document: OpenAPIObject) {
             'Forbidden, invalid CSRF, or LISTING_MESSAGES_DISABLED when the seller accepts only calls on the listing.',
         };
       }
+      if (operationId === 'get /v1/listings/{id}/manage') {
+        delete operation.responses['200'];
+        operation.responses['204'] = {
+          description:
+            'The verified seller may manage this listing through the cabinet.',
+        };
+      }
+      if (operationId === 'get /v1/listings') {
+        operation.parameters = [
+          {
+            in: 'query',
+            name: 'q',
+            description: 'Address or title substring, or a full listing UUID',
+            schema: { type: 'string', maxLength: 200 },
+          },
+          {
+            in: 'query',
+            name: 'deal',
+            schema: { type: 'string', enum: ['sale', 'rent'] },
+          },
+          {
+            in: 'query',
+            name: 'status',
+            schema: {
+              type: 'string',
+              enum: [
+                'draft',
+                'processing',
+                'moderation',
+                'published',
+                'paused',
+                'rejected',
+                'archived',
+                'sold',
+                'rented',
+              ],
+            },
+          },
+          {
+            in: 'query',
+            name: 'after',
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            in: 'query',
+            name: 'limit',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          },
+        ];
+        operation.responses['200'] = {
+          description:
+            'Accessible cabinet listings with address, area in square metres and floor. Missing property attributes are null.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['id', 'address', 'area', 'floor'],
+                  properties: {
+                    id: { type: 'string', format: 'uuid' },
+                    address: { type: 'string' },
+                    area: { type: 'string', nullable: true },
+                    floor: { type: 'string', nullable: true },
+                  },
+                  additionalProperties: true,
+                },
+              },
+            },
+          },
+        };
+      }
       if (operationId === 'get /v1/listings/summary') {
         const count = { type: 'integer', minimum: 0 } as const;
         operation.responses['200'] = {

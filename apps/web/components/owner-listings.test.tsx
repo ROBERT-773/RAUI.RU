@@ -63,6 +63,7 @@ function setup(
     if (path === 'v1/account/publication-quota')
       return { applies: true, limit: 1, publishedObjects: 0, remaining: 1 };
     if (path === 'v1/listings?limit=20') return [{ ...savedListing, status }];
+    if (path.startsWith('v1/listings?limit=20&')) return [];
     if (path.endsWith('/history')) {
       if (historyUnavailable) throw new Error('History unavailable');
       return [
@@ -249,9 +250,9 @@ test.each([
     const draft = await screen.findByRole('button', {
       name: 'Квартира у парка',
     });
-    expect(draft.parentElement?.textContent ?? '').toBe(
-      `Квартира у парка — Черновик${representation ? ` · ${representation}` : ''}`,
-    );
+    const row = within(draft.closest('tr')!);
+    expect(row.getByRole('cell', { name: 'Черновик' })).toBeTruthy();
+    if (representation) expect(row.getByText(representation)).toBeTruthy();
     fireEvent.click(draft);
     const details = await screen.findByRole('article');
     if (representation)
@@ -360,6 +361,65 @@ test('published offer must be paused before editing and then uses authoritative 
     ),
   );
 });
+test('seller searches by address, deal and status and can clear the selection', async () => {
+  setup();
+  render(<OwnerListings />);
+  await screen.findByRole('button', { name: listing.title });
+  fireEvent.change(
+    screen.getByLabelText('Адрес, название или номер объявления'),
+    { target: { value: 'Парк' } },
+  );
+  fireEvent.change(screen.getByLabelText('Фильтр по сделке'), {
+    target: { value: 'rent' },
+  });
+  fireEvent.change(screen.getByLabelText('Фильтр по статусу'), {
+    target: { value: 'archived' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Найти объявления' }));
+  await waitFor(() =>
+    expect(
+      vi.mocked(api).mock.calls.some(([path]) => {
+        const params = new URLSearchParams(path.split('?')[1]);
+        return (
+          params.get('q') === 'Парк' &&
+          params.get('deal') === 'rent' &&
+          params.get('status') === 'archived'
+        );
+      }),
+    ).toBe(true),
+  );
+  expect(
+    await screen.findByText('По этим фильтрам объявлений нет.'),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
+  expect(
+    await screen.findByRole('button', { name: listing.title }),
+  ).toBeTruthy();
+});
+test('owner sees the saved published card and can cancel editing without pausing publication', async () => {
+  setup('published');
+  render(<OwnerListings />);
+  const table = await screen.findByRole('table', {
+    name: 'Сохранённые объявления',
+  });
+  fireEvent.click(within(table).getByRole('button', { name: listing.title }));
+  const preview = await screen.findByRole('region', {
+    name: 'Сохранённые данные объявления',
+  });
+  expect(within(preview).getByText(listing.description)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Редактировать' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  expect(
+    vi.mocked(api).mock.calls.some(([path]) => path.endsWith('/transitions')),
+  ).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Редактировать' }));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Приостановить и редактировать' }),
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Сохранить изменения' }),
+  ).toBeTruthy();
+});
 test('archive changes the saved listing only after confirmation', async () => {
   setup('published');
   const confirm = vi
@@ -389,7 +449,9 @@ test('archive changes the saved listing only after confirmation', async () => {
       { version: 3, status: 'archived' },
       expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
-    expect(saved.parentElement?.textContent).toContain('В архиве');
+    expect(
+      within(saved.closest('tr')!).getByRole('cell', { name: 'В архиве' }),
+    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'В архив' })).toBeNull();
   } finally {
     confirm.mockRestore();

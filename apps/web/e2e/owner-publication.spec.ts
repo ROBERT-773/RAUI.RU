@@ -376,6 +376,9 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
         exact: true,
       }),
     });
+    await expect(
+      visitor.getByRole('link', { name: 'Редактировать объявление' }),
+    ).toHaveCount(0);
     await expect(rentalTerms.getByText('0 ₽', { exact: true })).toBeVisible();
     await expect(rentalTerms.getByText('0 %', { exact: true })).toBeVisible();
     await expect(rentalTerms.getByText('Нет', { exact: true })).toBeVisible();
@@ -416,7 +419,8 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
     await expect(quotaPanel).toContainText(
       `Активных объявлений: ${baseline.publishedObjects + 1} из 1. Свободных мест: ${baseline.remaining - 1}.`,
     );
-    await page.getByRole('button', { name: title, exact: true }).click();
+    await page.goto('/listings/' + listingId);
+    await page.getByRole('link', { name: 'Редактировать объявление' }).click();
     await expect(
       draft.getByText('Статус: Опубликовано', { exact: true }),
     ).toBeVisible();
@@ -424,7 +428,10 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       endpoint(value, 'POST', `/api/v1/listings/${listingId}/transitions`),
     );
     await draft
-      .getByRole('button', { name: 'Приостановить', exact: true })
+      .getByRole('button', {
+        name: 'Приостановить и редактировать',
+        exact: true,
+      })
       .click();
     expect((await paused).status()).toBe(201);
     await expect(

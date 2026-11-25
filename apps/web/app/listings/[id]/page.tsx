@@ -4,7 +4,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { detail, site } from '../../../lib/server';
+import { canManagePublicListing, detail, site } from '../../../lib/server';
 import {
   attributeLabels,
   attributeValue,
@@ -53,6 +53,8 @@ export default async function Page({
     data = await detail(id);
   if (!data) notFound();
   const { definition, mode } = await searchParams;
+  const requestHeaders = await headers();
+  const canManage = await canManagePublicListing(id, requestHeaders);
   const hasSearchContext =
     typeof definition === 'string' && definition.length <= 16000;
   const deal = dealLabel(data.dealType);
@@ -129,6 +131,14 @@ export default async function Page({
       />
       {deal && <p className="deal-type">{deal}</p>}
       <h1>{data.title}</h1>
+      {canManage && (
+        <Link
+          prefetch={false}
+          href={'/account/listings?listing=' + id + '&edit=1#listing-editor'}
+        >
+          Редактировать объявление
+        </Link>
+      )}
       <p className="price">{formatListingPrice(data.price, data.dealType)}</p>
       <p>{data.property.formatted}</p>
       {locationUrl && (
@@ -204,7 +214,7 @@ export default async function Page({
       />
       <script
         type="application/ld+json"
-        nonce={(await headers()).get('x-nonce') ?? undefined}
+        nonce={requestHeaders.get('x-nonce') ?? undefined}
         dangerouslySetInnerHTML={{
           __html: jsonLd(structured),
         }}

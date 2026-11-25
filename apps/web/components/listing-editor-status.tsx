@@ -1,4 +1,4 @@
-const states: Record<string, string> = {
+export const listingStates: Record<string, string> = {
   draft: 'Черновик',
   processing: 'Подготовка к проверке',
   moderation: 'На модерации',
@@ -10,7 +10,8 @@ const states: Record<string, string> = {
   rented: 'Сдано',
 };
 
-export const listingStatusLabel = (status: string) => states[status] ?? status;
+export const listingStatusLabel = (status: string) =>
+  listingStates[status] ?? status;
 
 export default function ListingEditorStatus({
   status,

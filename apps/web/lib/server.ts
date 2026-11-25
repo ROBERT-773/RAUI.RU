@@ -13,6 +13,25 @@ export const site = publicOrigin(
   process.env.SITE_URL,
   process.env.DEPLOYMENT_ENV === 'production',
 );
+export async function canManagePublicListing(id: string, incoming: Headers) {
+  const session = incoming
+    .get('cookie')
+    ?.match(/(?:^|;\s*)(raui_session=[A-Za-z0-9_-]{43})(?:;|$)/)?.[1];
+  if (!session || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))
+    return false;
+  try {
+    const response = await backendFetch(
+      '/v1/listings/' + id + '/manage',
+      incoming,
+      {
+        headers: { cookie: session },
+      },
+    );
+    return response.status === 204;
+  } catch {
+    return false;
+  }
+}
 export type ProfessionalSummary = {
   id: string;
   name: string;

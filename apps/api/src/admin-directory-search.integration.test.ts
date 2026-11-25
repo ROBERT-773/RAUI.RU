@@ -240,6 +240,21 @@ test('administrators search users and all listing states with scoped results and
     );
   }
   const hidden = await listing('published', buyer.id, 'Тоже квартира');
+  const otherAgent = await user('agent', 'Другой агент');
+  for (const [secret, status] of [
+    [target.secret, 204],
+    [otherAgent.secret, 403],
+    [buyer.secret, 403],
+    [undefined, 401],
+  ] as const) {
+    const access = await fetch(
+      (await app.getUrl()) + '/v1/listings/' + published + '/manage',
+      {
+        headers: secret ? { Authorization: 'Bearer ' + secret } : {},
+      },
+    );
+    assert.equal(access.status, status);
+  }
   const sellerMatches = await request(
     'listings',
     { query: target.publicId, by: 'seller' },
@@ -267,6 +282,9 @@ test('administrators search users and all listing states with scoped results and
   );
   const expectedListing = {
     id: published,
+    price: '100.00',
+    area: null,
+    floor: null,
     sellerPublicId: target.publicId,
     title: 'Светлая квартира',
     address: 'Москва, улица 70%_Парк',
@@ -274,6 +292,32 @@ test('administrators search users and all listing states with scoped results and
     dealType: 'long_rent',
     publiclyVisible: true,
   };
+  const cabinet = await fetch((await app.getUrl()) + '/v1/listings?limit=20', {
+    headers: { Authorization: 'Bearer ' + target.secret },
+  });
+  assert.equal(cabinet.status, 200);
+  const ownRows = (await cabinet.json()) as {
+    id: string;
+    address: string;
+    floor: string | null;
+  }[];
+  assert.equal(
+    ownRows.find((row) => row.id === published)?.address,
+    expectedListing.address,
+  );
+  assert.equal(ownRows.find((row) => row.id === published)?.floor, null);
+  assert.ok(!ownRows.some((row) => row.id === hidden));
+  const filtered = await fetch(
+    (await app.getUrl()) + '/v1/listings?status=archived&deal=rent&q=70%25_',
+    {
+      headers: { Authorization: 'Bearer ' + target.secret },
+    },
+  );
+  assert.equal(filtered.status, 200);
+  assert.deepEqual(
+    ((await filtered.json()) as { status: string }[]).map((row) => row.status),
+    ['archived'],
+  );
   for (const query of [published.toUpperCase(), 'ВЕТлая'])
     assert.deepEqual(await search('listings', query), {
       items: [expectedListing],
