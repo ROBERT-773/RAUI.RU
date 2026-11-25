@@ -12,13 +12,16 @@ import type { SearchDefinition } from '@raui/types/product';
 test.beforeEach(() => {
   execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
 });
-async function login(page: Page) {
-  await page.goto('/account');
+async function enterBuyerCredentials(page: Page) {
   await continueWithIdentifier(page, 'buyer@e2e.test');
   await page
     .getByLabel('Пароль', { exact: true })
     .fill('E2E-only-password-42!');
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
+}
+async function login(page: Page) {
+  await page.goto('/account');
+  await enterBuyerCredentials(page);
   await expect(
     page.getByRole('heading', { name: 'Кабинет покупателя', exact: true }),
   ).toBeVisible();
@@ -288,8 +291,9 @@ async function savedArticle(page: Page, id: string): Promise<Locator | null> {
   throw new Error('Saved-search fixture pagination did not terminate');
 }
 
-test('search → filter → detail → favorite and comparison', async ({ page }) => {
-  await login(page);
+test('guest opens a result from its cover and signs in on the listing to save it', async ({
+  page,
+}) => {
   await page.goto('/');
   await page.getByRole('link', { name: 'Все объявления', exact: true }).click();
   await expect(
@@ -311,14 +315,34 @@ test('search → filter → detail → favorite and comparison', async ({ page }
   await expect(
     page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
   ).toHaveCount(0);
-  await page
-    .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
-    .click();
+  const searchUrl = page.url();
+  const card = page.getByRole('article').filter({
+    has: page.getByRole('heading', { name: 'Квартира 2 комнаты', exact: true }),
+  });
+  const resultFavorite = card.getByRole('button', {
+    name: 'В избранное',
+    exact: true,
+  });
+  const dialog = page.getByRole('dialog');
+  await resultFavorite.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(resultFavorite).toBeFocused();
+  await expect(page).toHaveURL(searchUrl);
+  await card.locator('img, .photo-placeholder').first().click();
   await expect(
     page.getByRole('heading', { name: 'Описание', exact: true }),
   ).toBeVisible();
+  const detailUrl = page.url();
   await page.getByRole('button', { name: 'В избранное', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Добавлено в избранное');
+  await expect(dialog).toBeVisible();
+  await enterBuyerCredentials(page);
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(detailUrl);
+  await expect(
+    page.getByText('Добавлено в избранное.', { exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Сравнить', exact: true }).click();
   await page
     .getByRole('link', { name: 'Открыть аккаунт', exact: true })
@@ -427,10 +451,9 @@ test('map viewport, zoom and keyboard selection synchronize the list', async ({
   for (const name of ['Квартира 2 комнаты', 'Квартира 3 комнаты'])
     await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
 });
-test('saved search create, rename, reopen and delete persist', async ({
+test('a guest signs in to save the active search once, then renames, reopens and deletes it', async ({
   page,
 }, info) => {
-  await login(page);
   await page.goto('/search');
   await page.getByLabel('Цена до', { exact: true }).fill('15000000');
   await page.getByRole('button', { name: 'Найти', exact: true }).click();
@@ -440,15 +463,37 @@ test('saved search create, rename, reopen and delete persist', async ({
   await expect(
     page.getByRole('heading', { name: 'Квартира 3 комнаты' }),
   ).toHaveCount(0);
-  const pending = page.waitForResponse((response) =>
-    endpoint(response, 'POST', '/api/v1/account/saved-searches'),
-  );
-  await page
-    .getByRole('button', { name: 'Сохранить поиск', exact: true })
-    .click();
-  const create = await pending;
-  expect(create.status()).toBe(201);
-  const created = (await create.json()) as SavedRow;
+  const searchUrl = page.url();
+  const save = page.getByRole('button', {
+    name: 'Сохранить поиск',
+    exact: true,
+  });
+  const dialog = page.getByRole('dialog');
+  let successfulCreateCount = 0;
+  const successfulCreates = (response: PlaywrightResponse) =>
+    endpoint(response, 'POST', '/api/v1/account/saved-searches') &&
+    response.status() === 201;
+  page.on('response', (response) => {
+    if (successfulCreates(response)) successfulCreateCount++;
+  });
+  await save.click();
+  await expect(dialog).toBeVisible();
+  await page.goBack();
+  await expect(dialog).toBeHidden();
+  await expect(save).toBeFocused();
+  await expect(page).toHaveURL(searchUrl);
+  expect(successfulCreateCount).toBe(0);
+  await save.click();
+  await expect(dialog).toBeVisible();
+  const pending = page.waitForResponse(successfulCreates);
+  await enterBuyerCredentials(page);
+  const created = (await (await pending).json()) as SavedRow;
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(searchUrl);
+  await expect(
+    page.getByText('Поиск сохранён в аккаунте.', { exact: true }),
+  ).toBeVisible();
+  expect(created.definition).toMatchObject({ price: { max: 15000000 } });
   const article = await savedArticle(page, created.id);
   expect(article).not.toBeNull();
   await expect(
@@ -505,6 +550,7 @@ test('saved search create, rename, reopen and delete persist', async ({
   expect(await removed.json()).toEqual({ ok: true });
   expect((await removeRefresh).status()).toBe(200);
   expect(await savedArticle(page, created.id)).toBeNull();
+  expect(successfulCreateCount).toBe(1);
 });
 test('inquiry and account messages', async ({ page }, testInfo) => {
   const text = 'Можно посмотреть квартиру? ' + testInfo.project.name;

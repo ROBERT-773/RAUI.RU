@@ -731,3 +731,35 @@ test('empty short rental results clear only the stay dates', async () => {
   });
   expect(definition.attributes).toEqual({ guest_capacity: { min: 3 } });
 });
+
+test('opens login for a guest saving the applied definition and keeps the current price draft on cancel', async () => {
+  const submitted: unknown[] = [];
+  stubFetch('fetch', async (url, init) => {
+    if (url === '/api/v1/account/saved-searches') {
+      submitted.push(JSON.parse(String(init?.body)));
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    return {
+      ok: true,
+      json: async () =>
+        url.includes('/attributes') ? [] : { items: [], total: 0 },
+    };
+  });
+  const definition = { dealType: 'sale', price: { max: 4000000 } } as const;
+  render(<SearchProduct initialDefinition={definition} />);
+  const trigger = screen.getByRole('button', { name: 'Сохранить поиск' });
+  await vi.waitFor(() => expect(trigger).toHaveProperty('disabled', false));
+  const price = screen.getByLabelText<HTMLInputElement>('Цена до', {
+    exact: true,
+  });
+  fireEvent.change(price, { target: { value: '5700000' } });
+  fireEvent.click(trigger);
+  await screen.findByRole('dialog', { name: 'Войдите, чтобы сохранить поиск' });
+  expect(submitted).toEqual([{ name: 'Мой поиск', definition }]);
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+  await vi.waitFor(() =>
+    expect(history.state?.rauiAccountAction).toBeUndefined(),
+  );
+  expect(price.value).toBe('5700000');
+  expect(document.activeElement).toBe(trigger);
+});
