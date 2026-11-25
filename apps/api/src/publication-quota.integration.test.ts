@@ -10,7 +10,10 @@ import { migrate } from './modules/database/migrate';
 import { hash, token, type Actor } from './common/security';
 import { Audit } from './modules/audit/audit';
 import { readLastPublicPriceSnapshot } from './modules/listings/public-price-history';
-import { PublicationQuotas } from './modules/listings/publication-quota';
+import {
+  PublicationQuotas,
+  type PublicationQuota,
+} from './modules/listings/publication-quota';
 import { listingSubscriptionConsentVersion } from './modules/product/subscription-contract';
 
 type Account = { id: string; secret: string };
@@ -108,15 +111,27 @@ test(
       for (let i = 0; i < n; i++) offers.push(await offer(actor, 'published'));
       return offers;
     }
-    async function snapshot(actor: Account, n: number) {
+    async function snapshot(actor: Account, n: number, used?: number) {
       const response = await call('/account/publication-quota', actor);
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), {
+      const { monthly, ...active } =
+        (await response.json()) as PublicationQuota;
+      assert.ok(monthly);
+      assert.deepEqual(active, {
         applies: true,
         limit: 1,
         publishedObjects: n,
         remaining: Math.max(0, 1 - n),
       });
+      const moscow = new Date(Date.now() + 3 * 3600_000);
+      const reset = new Date(
+        Date.UTC(moscow.getUTCFullYear(), moscow.getUTCMonth() + 1, 1, -3),
+      );
+      assert.equal(monthly.resetsAt, reset.toISOString());
+      assert.equal(monthly.limit, 3);
+      assert.ok(Number.isSafeInteger(monthly.used) && monthly.used >= 0);
+      assert.equal(monthly.remaining, Math.max(0, 3 - monthly.used));
+      if (used !== undefined) assert.equal(monthly.used, used);
     }
     const admin = await account('admin');
     const approve = (item: Offer, key = randomUUID(), reviewer = admin) =>
@@ -222,6 +237,7 @@ test(
               limit: null,
               publishedObjects: null,
               remaining: null,
+              monthly: null,
             });
           }
         },
@@ -649,14 +665,16 @@ test(
         'three real publications exhaust monthly limit even after pause; replay consumes no extra',
         async () => {
           const owner = await account();
+          await snapshot(owner, 0, 0);
           for (let index = 0; index < 3; index++) {
             const item = await offer(owner),
               key = randomUUID();
             assert.equal((await approve(item, key)).status, 201);
+            await snapshot(owner, 1, index + 1);
             await pause(owner, item);
             assert.equal((await approve(item, key)).status, 201);
+            await snapshot(owner, 0, index + 1);
           }
-          await snapshot(owner, 0);
           const fourth = await offer(owner),
             before = await state(fourth);
           const response = await approve(fourth);
@@ -666,6 +684,44 @@ test(
             'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED',
           );
           assert.deepEqual(await state(fourth), before);
+          await snapshot(owner, 0, 3);
+        },
+      );
+      await t.test(
+        'cabinet counts only its owner’s publication transitions in the current Moscow month',
+        async () => {
+          const owner = await account(),
+            other = await account();
+          const item = await offer(owner),
+            foreign = await offer(other);
+          const now = new Date(Date.now() + 3 * 3600_000);
+          const start = Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            1,
+            -3,
+          );
+          const end = Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth() + 1,
+            1,
+            -3,
+          );
+          for (const [listing, actor, before, at] of [
+            [item.listing, owner.id, 'moderation', start - 1],
+            [item.listing, owner.id, 'moderation', start],
+            [item.listing, owner.id, 'published', start],
+            [foreign.listing, other.id, 'moderation', start],
+            [item.listing, owner.id, 'moderation', end],
+          ] as const) {
+            await pool.query(
+              `INSERT INTO listing_history(listing_id,actor_id,event,before_data,after_data,created_at)
+              VALUES($1,$2,'moderation.decided',jsonb_build_object('status',$3::text),'{"status":"published"}',$4)`,
+              [listing, actor, before, new Date(at)],
+            );
+          }
+          await snapshot(owner, 0, 1);
+          await snapshot(other, 0, 1);
         },
       );
       await t.test(
@@ -814,6 +870,7 @@ test(
             limit: null,
             publishedObjects: null,
             remaining: null,
+            monthly: null,
           });
           await pool.query(
             "UPDATE users SET registration_approval_state='rejected' WHERE id=$1",

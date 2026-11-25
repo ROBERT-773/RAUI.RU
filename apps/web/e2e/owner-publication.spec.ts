@@ -47,16 +47,28 @@ async function prepareDraftPreview(
   await expect(
     page.getByRole('button', { name: 'Отправить на модерацию', exact: true }),
   ).toHaveCount(0);
-  await draft
-    .getByLabel('Описание', { exact: true })
-    .fill('Тестовое объявление для проверки публикации и поиска.');
+  const savedDescription =
+    'Тестовое объявление для проверки публикации и поиска.';
+  const descriptionField = draft.getByRole('textbox', {
+    name: 'Описание',
+    exact: true,
+  });
+  await expect(descriptionField).toBeEnabled();
+  await descriptionField.fill(savedDescription);
   const descriptionSaved = page.waitForResponse((value) =>
     endpoint(value, 'PATCH', `/api/v1/listings/${listingId}`),
   );
   await draft
     .getByRole('button', { name: 'Сохранить изменения', exact: true })
     .click();
-  expect((await descriptionSaved).status()).toBe(200);
+  const persistedDescription = await descriptionSaved;
+  expect(persistedDescription.status()).toBe(200);
+  expect((await persistedDescription.json()).description).toBe(
+    savedDescription,
+  );
+  await expect(
+    page.getByText('Изменения сохранены.', { exact: true }),
+  ).toBeVisible();
   for (let number = 1; number <= 5; number++) {
     await expect(photoInput).toBeEnabled();
     const uploaded = page.waitForResponse((value) =>
@@ -111,9 +123,22 @@ async function prepareDraftPreview(
   await draft
     .getByRole('button', { name: 'Обновить состояние', exact: true })
     .click();
-  await draft
-    .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
-    .click();
+  await expect(
+    page.getByText('Состояние обновлено.', { exact: true }),
+  ).toBeVisible();
+  const openPreview = draft.getByRole('button', {
+    name: 'Перейти к предпросмотру',
+    exact: true,
+  });
+  await expect(descriptionField).toHaveValue(savedDescription);
+  await expect(
+    draft.locator('p').filter({
+      hasText:
+        /Для отправки нужно|Сохраните изменения перед отправкой|Перед отправкой сохраните описание|Заполните обязательные характеристики/,
+    }),
+  ).toHaveText([]);
+  await expect(openPreview).toBeEnabled();
+  await openPreview.click();
   const preview = page.getByRole('region', {
     name: 'Сохранённые данные объявления',
     exact: true,
@@ -260,9 +285,21 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       limit: number;
       publishedObjects: number;
       remaining: number;
+      monthly: {
+        limit: number;
+        used: number;
+        remaining: number;
+        resetsAt: string;
+      };
     };
     expect(baseline.applies).toBe(true);
     expect(baseline.limit).toBe(1);
+    expect(baseline.monthly.limit).toBe(3);
+    const afterPublication = {
+      ...baseline.monthly,
+      used: baseline.monthly.used + 1,
+      remaining: baseline.monthly.remaining - 1,
+    };
     expect(baseline.publishedObjects).toBeLessThan(baseline.limit);
     const quotaPanel = page.getByRole('region', {
       name: 'Лимит публикации объектов',
@@ -414,8 +451,12 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       ...baseline,
       publishedObjects: baseline.publishedObjects + 1,
       remaining: baseline.remaining - 1,
+      monthly: afterPublication,
     });
     await page.reload();
+    await expect(quotaPanel).toContainText(
+      `Публикаций за месяц: ${afterPublication.used} из 3. Осталось: ${afterPublication.remaining}.`,
+    );
     await expect(quotaPanel).toContainText(
       `Активных объявлений: ${baseline.publishedObjects + 1} из 1. Свободных мест: ${baseline.remaining - 1}.`,
     );
@@ -444,7 +485,10 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       '/api/v1/account/publication-quota',
     );
     expect(releasedQuota.status()).toBe(200);
-    expect(await releasedQuota.json()).toEqual(baseline);
+    expect(await releasedQuota.json()).toEqual({
+      ...baseline,
+      monthly: afterPublication,
+    });
     await quotaPanel
       .getByRole('button', { name: 'Обновить лимит публикации', exact: true })
       .click();
@@ -495,7 +539,13 @@ test('owner saves a draft, uploads five photos and publishes only after staff ap
       '/api/v1/account/publication-quota',
     );
     expect(finalQuota.status()).toBe(200);
-    expect(await finalQuota.json()).toEqual(baseline);
+    expect(await finalQuota.json()).toEqual({
+      ...baseline,
+      monthly: afterPublication,
+    });
+    await expect(quotaPanel).toContainText(
+      `Публикаций за месяц: ${afterPublication.used} из 3. Осталось: ${afterPublication.remaining}.`,
+    );
     await expect(quotaPanel).toContainText(
       `Активных объявлений: ${baseline.publishedObjects} из 1. Свободных мест: ${baseline.remaining}.`,
     );
