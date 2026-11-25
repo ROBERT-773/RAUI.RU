@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { Card } from '../../../components/card';
 import { publicProfessional, publicRegions } from '../../../lib/server';
+import { ProfessionalIdentity } from '../../../components/professional-identity';
 
 export default async function Page({
   params,
@@ -47,12 +48,7 @@ export default async function Page({
       >
         Агенты и агентства
       </Link>
-      <h1>{profile.name}</h1>
-      <p>
-        {profile.kind === 'agent'
-          ? 'Агент по недвижимости'
-          : 'Агентство недвижимости'}
-      </p>
+      <ProfessionalIdentity profile={profile} heading />
       <h2>Регионы работы</h2>
       <ul>
         {workRegions.map(({ code, name }) => (

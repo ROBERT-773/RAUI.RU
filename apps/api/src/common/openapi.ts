@@ -58,6 +58,7 @@ import {
 } from '../modules/auth/contact-settings';
 import { listingContactSelectionSchema } from '../modules/listings/contact-settings';
 import { feedbackInput } from '../modules/product/feedback';
+import { professionalImageInput } from '../modules/professional/profile-image';
 import {
   staffTotpCodeInput,
   staffTotpEnrollmentInput,
@@ -160,6 +161,9 @@ const contactResponses: Record<string, z.ZodType> = {
   'get /v1/listings/{id}/public/contact': publicContact,
 };
 const bodyContracts: Record<string, z.ZodType> = {
+  'put /v1/search/professional-profile/image': professionalImageInput,
+  'put /v1/search/professional-profile/agency/{id}/image':
+    professionalImageInput,
   'post /v1/account/feedback': feedbackInput,
   'patch /v1/account/contact-settings': contactSettingsPatchSchema,
   'post /v1/account/contact-phones/request': contactPhoneRequestSchema,
@@ -400,6 +404,7 @@ get /v1/search/recent
 get /v1/search/region-counts
 get /v1/search/professionals
 get /v1/search/professionals/{id}
+get /v1/search/professionals/{id}/image/{imageId}
 post /v1/search
 post /v1/search/selection
 post /v1/search/map
@@ -765,16 +770,27 @@ export function enrichOpenApi(document: OpenAPIObject) {
                 type: 'object',
                 properties: {
                   contact: z.toJSONSchema(publicContact) as SchemaObject,
+                  sellerType: {
+                    type: 'string',
+                    enum: ['owner', 'agent', 'agency', 'developer', 'other'],
+                    description:
+                      'Public advertiser type, including when no public profile is visible.',
+                  },
                   professionals: {
                     type: 'array',
                     maxItems: 2,
                     items: {
                       type: 'object',
-                      required: ['id', 'name', 'kind'],
+                      required: ['id', 'name', 'kind', 'imageId'],
                       properties: {
                         id: { type: 'string', format: 'uuid' },
                         name: { type: 'string' },
                         kind: { type: 'string', enum: ['agent', 'agency'] },
+                        imageId: {
+                          type: 'string',
+                          format: 'uuid',
+                          nullable: true,
+                        },
                       },
                     },
                   },
@@ -1376,6 +1392,76 @@ export function enrichOpenApi(document: OpenAPIObject) {
           },
         };
       }
+      if (
+        [
+          '/v1/search/professional-profile',
+          '/v1/search/professional-profile/agency/{id}',
+        ].includes(path) &&
+        (method === 'get' || method === 'patch')
+      ) {
+        const profile = object({
+          id: uuid,
+          imageId: uuid.nullable(),
+          name: z.string(),
+          regionCodes: z.array(z.string()),
+          published: z.boolean(),
+        });
+        operation.responses['200'] = {
+          description:
+            method === 'get'
+              ? 'Current editable profile, if created.'
+              : 'Saved profile.',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                method === 'get'
+                  ? object({ profile: profile.nullable() })
+                  : profile,
+              ) as SchemaObject,
+            },
+          },
+        };
+      }
+      if (
+        path.startsWith('/v1/search/professional') &&
+        path.includes('/image')
+      ) {
+        if (method === 'get') {
+          operation.responses['200'] = {
+            description: 'Current profile picture; private, no-store.',
+            content: {
+              'image/webp': { schema: { type: 'string', format: 'binary' } },
+            },
+          };
+        } else {
+          operation.responses['200'] = {
+            description:
+              method === 'put' ? 'Saved picture version.' : 'Picture removed.',
+            content: {
+              'application/json': {
+                schema: z.toJSONSchema(
+                  object({ imageId: method === 'put' ? uuid : z.null() }),
+                ) as SchemaObject,
+              },
+            },
+          };
+          operation.responses['409'] = {
+            description:
+              'The picture has changed. Reload the profile before editing again.',
+          };
+        }
+        if (method === 'put')
+          operation.responses['400'] = {
+            description: 'Invalid image or upload parameters.',
+          };
+        if (path.startsWith('/v1/search/professional-profile/'))
+          operation.responses['403'] = {
+            description: 'Profile editing permission is required.',
+          };
+        operation.responses['404'] = {
+          description: 'Requested profile or image version is unavailable.',
+        };
+      }
       if (operationId === 'get /v1/search/professionals/{id}') {
         operation.parameters = [
           ...(operation.parameters ?? []),
@@ -1402,6 +1488,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
                   'name',
                   'kind',
                   'regionCodes',
+                  'imageId',
                   'listings',
                   'listingCount',
                   'listingPageCount',
@@ -1412,6 +1499,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
                   name: { type: 'string' },
                   kind: { type: 'string', enum: ['agent', 'agency'] },
                   regionCodes: { type: 'array', items: { type: 'string' } },
+                  imageId: { type: 'string', format: 'uuid', nullable: true },
                   listingCount: { type: 'integer', minimum: 0 },
                   listingPageCount: { type: 'integer', minimum: 0 },
                   listingCountsByRegion: {

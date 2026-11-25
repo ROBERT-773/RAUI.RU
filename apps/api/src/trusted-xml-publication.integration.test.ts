@@ -249,6 +249,8 @@ test(
         );
         assert.ok(row && photo);
         const card = await listings.published(id);
+        assert.equal(card.sellerType, 'agent');
+        assert.deepEqual(card.professionals, []);
         assert.equal(card.media.length, 1);
         assert.equal(card.media[0]!.id, photo.id);
         assert.equal(card.price, row.price);
@@ -467,6 +469,7 @@ test(
               assert.equal(response.status, 200);
               const card = (await response.json()) as {
                 id: string;
+                sellerType: string;
                 media: {
                   id: string;
                   kind: string;
@@ -474,6 +477,7 @@ test(
                 }[];
               };
               assert.equal(card.id, id);
+              assert.equal(card.sellerType, role);
               const kinds = {
                 domclick: ['photo', 'floor_plan'],
                 yandex: ['photo', 'photo'],

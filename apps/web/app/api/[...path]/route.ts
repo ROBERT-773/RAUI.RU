@@ -130,9 +130,35 @@ async function proxy(
     feedback &&
     path.length === 3 &&
     request.method === (path[1] === 'admin' ? 'GET' : 'POST');
+  const profilePictures =
+    path[1] === 'search' &&
+    ['professional-profile', 'professionals'].includes(path[2] ?? '') &&
+    path.includes('image', 3);
+  const myProfile = path[2] === 'professional-profile';
+  const imageIndex = myProfile && path[3] === 'agency' ? 5 : myProfile ? 3 : 4;
+  const validProfile = myProfile
+    ? imageIndex === 3 || isUuid(path[4])
+    : isUuid(path[3]);
+  const uploadPicture =
+    profilePictures &&
+    validProfile &&
+    myProfile &&
+    path[imageIndex] === 'image' &&
+    path.length === imageIndex + 1 &&
+    request.method === 'PUT';
+  const versionedPicture =
+    validProfile &&
+    path[imageIndex] === 'image' &&
+    path.length === imageIndex + 2 &&
+    isUuid(path[imageIndex + 1]) &&
+    (request.method === 'GET' || (myProfile && request.method === 'DELETE'));
   if (
     path[0] !== 'v1' ||
-    (request.method === 'PUT' && !saveFormDraft && !listingContactsRoute) ||
+    (request.method === 'PUT' &&
+      !saveFormDraft &&
+      !listingContactsRoute &&
+      !uploadPicture) ||
+    (profilePictures && !uploadPicture && !versionedPicture) ||
     (listingContacts && !listingContactsRoute) ||
     (accountContacts && !accountContactsRoute) ||
     (formDrafts &&
@@ -196,10 +222,17 @@ async function proxy(
     );
   try {
     const target = '/' + path.join('/') + request.nextUrl.search;
+    // Stream the image to the API, where the JSON and decoded image limits are enforced.
+    const body =
+      uploadPicture && request.body
+        ? { body: request.body, duplex: 'half' as const }
+        : mutation
+          ? { body: await request.arrayBuffer() }
+          : {};
     const response = await backendFetch(target, request.headers, {
       method: request.method,
       headers,
-      ...(mutation ? { body: await request.arrayBuffer() } : {}),
+      ...body,
       cache: 'no-store',
       redirect: 'error',
       signal: AbortSignal.timeout(15000),

@@ -1,0 +1,68 @@
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-block: 0.7rem;
+  min-width: 0;
+}
+.portrait,
+.logo {
+  width: 4.5rem;
+  height: 4.5rem;
+  flex: none;
+  object-fit: contain;
+  background: white;
+  border-radius: 0.6rem;
+}
+.portrait {
+  border-radius: 0.85rem;
+}
+.caption {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.caption a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 650;
+}
+.caption p,
+.caption h1 {
+  margin: 0;
+}
+.caption p {
+  color: #465c6b;
+}
+.authors {
+  padding: 0;
+  list-style: none;
+}
+.authors li + li {
+  border-top: 1px solid #d7e1e7;
+}
+.imageEditor {
+  margin-block: 1rem;
+}
+.imageEditor label {
+  margin-block: 0.5rem;
+}
+.imageEditor input[type='file'] {
+  max-width: 100%;
+}
+.imageEditor input::file-selector-button {
+  margin-inline-end: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: #eef5fb;
+  color: #17384b;
+  font: inherit;
+  font-weight: 600;
+}
+.imageActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.65rem;
+}

@@ -1,13 +1,15 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api } from '../lib/client';
+import { api, ApiError } from '../lib/client';
+import ProfileImageEditor from './profile-image-editor';
 
 type Profile = {
   id: string;
   name: string;
   regionCodes: string[];
   published: boolean;
+  imageId?: string | null;
 };
 
 export default function AgentPublicProfile({
@@ -18,13 +20,27 @@ export default function AgentPublicProfile({
   const path = agencyId
     ? 'v1/search/professional-profile/agency/' + encodeURIComponent(agencyId)
     : 'v1/search/professional-profile';
+  return <ProfileEditor key={path} path={path} agency={Boolean(agencyId)} />;
+}
+
+function ProfileEditor({ path, agency }: { path: string; agency: boolean }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [regions, setRegions] = useState<{ code: string; name: string }[]>([]);
   const [status, setStatus] = useState('Загружаем профиль…');
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const mounted = useRef(false);
+  function denyAccess() {
+    setProfile(null);
+    setReady(false);
+    setSaving(false);
+    setStatus(
+      'Доступ к изменению этого профиля закрыт. Проверьте аккаунт и права в кабинете.',
+    );
+  }
   useEffect(() => {
     let active = true;
+    mounted.current = true;
     Promise.all([
       api<{ profile: Profile | null }>(path),
       api<{ items: { code: string; name: string }[] }>('v1/regions'),
@@ -36,17 +52,21 @@ export default function AgentPublicProfile({
         setReady(true);
         setStatus('');
       })
-      .catch(() => {
-        if (active) setStatus('Не удалось загрузить настройки профиля.');
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof ApiError && [401, 403].includes(error.status))
+          denyAccess();
+        else setStatus('Не удалось загрузить настройки профиля.');
       });
     return () => {
       active = false;
+      mounted.current = false;
     };
   }, [path]);
   return (
     <details>
       <summary>
-        {agencyId ? 'Публичный профиль агентства' : 'Публичный профиль агента'}
+        {agency ? 'Публичный профиль агентства' : 'Публичный профиль агента'}
       </summary>
       {ready && (
         <form
@@ -62,12 +82,19 @@ export default function AgentPublicProfile({
                 regionCodes: data.getAll('regions').map(String),
                 published: data.has('published'),
               });
+              if (!mounted.current) return;
               setProfile(saved);
               setStatus('Профиль сохранён.');
             } catch (error) {
-              setStatus((error as Error).message);
+              if (!mounted.current) return;
+              if (
+                error instanceof ApiError &&
+                [401, 403].includes(error.status)
+              )
+                denyAccess();
+              else setStatus((error as Error).message);
             } finally {
-              setSaving(false);
+              if (mounted.current) setSaving(false);
             }
           }}
         >
@@ -113,6 +140,34 @@ export default function AgentPublicProfile({
           )}
         </form>
       )}
+      {ready &&
+        (profile ? (
+          <ProfileImageEditor
+            key={profile.id}
+            path={path}
+            agency={agency}
+            imageId={profile.imageId ?? null}
+            disabled={saving}
+            onBusy={setSaving}
+            onImage={(imageId) =>
+              setProfile((current) =>
+                current ? { ...current, imageId } : current,
+              )
+            }
+            onDenied={denyAccess}
+            onNoProfile={() => {
+              setProfile(null);
+              setSaving(false);
+              setStatus('Профиль больше не доступен. Сохраните его заново.');
+            }}
+          />
+        ) : (
+          <p>
+            {agency
+              ? 'Сохраните профиль, чтобы добавить логотип агентства.'
+              : 'Сохраните профиль, чтобы добавить фото агента.'}
+          </p>
+        ))}
       <p role="status">{status}</p>
     </details>
   );

@@ -7,6 +7,7 @@ import {
 } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { checkProfessionalImage } from './professional-image';
 
 const password = 'E2E-only-password-42!';
 const png = Buffer.from(
@@ -657,6 +658,7 @@ test('agency creates its first organization and publishes a listing after modera
     await expect(
       visitor.getByRole('heading', { name: title, exact: true }),
     ).toBeVisible();
+    await checkProfessionalImage(page, visitor, draft.id, agencyId);
     const searchPath =
       '/search?' +
       new URLSearchParams({
@@ -1002,6 +1004,7 @@ test('independent agent reopens an apartment sale draft, revises its preview and
     expect(east).toBeGreaterThan(37.62);
     expect(south).toBeLessThan(55.76);
     expect(north).toBeGreaterThan(55.76);
+    await checkProfessionalImage(page, visitor, draft.id);
     const searchPath =
       '/search?' +
       new URLSearchParams({

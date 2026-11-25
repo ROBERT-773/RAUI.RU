@@ -677,6 +677,59 @@ test('seller contact proxy forwards precisely the supported routes and keeps CSR
   expect(fetcher).toHaveBeenCalledTimes(7);
 });
 
+test('profile pictures are written through the owner routes and read without caching at their versioned URLs', async () => {
+  const origin = 'https://staging.raui.ru';
+  vi.stubEnv('DEPLOYMENT_ENV', 'local');
+  vi.stubEnv('WEB_ORIGIN', origin);
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  const uploads: string[] = [];
+  const fetcher = vi.fn(async (_url: string, options: RequestInit) => {
+    if (options.method === 'PUT') {
+      expect(options.body).toBeInstanceOf(ReadableStream);
+      uploads.push(await new Response(options.body).text());
+    }
+    return new Response(null, { headers: { 'content-type': 'image/webp' } });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const handlers = await import('../app/api/[...path]/route');
+  const profileId = '948ea4f3-be85-4418-8c80-0ea363fdbfe4';
+  const imageId = '84b4f885-87b6-42c1-9e5e-4ec4105b04ad';
+  const agent = 'v1/search/professional-profile/image';
+  const agency =
+    'v1/search/professional-profile/agency/' + profileId + '/image';
+  const publicImage =
+    'v1/search/professionals/' + profileId + '/image/' + imageId;
+  const cases = [
+    ['PUT', agent, 200],
+    ['PUT', agency, 200],
+    ['GET', agent + '/' + imageId, 200],
+    ['DELETE', agency + '/' + imageId, 200],
+    ['GET', publicImage, 200],
+    ['DELETE', publicImage, 404],
+    ['GET', agent, 404],
+    ['GET', agency + '/invalid', 404],
+    ['PUT', agent + '/' + imageId, 404],
+    ['GET', publicImage + '/extra', 404],
+  ] as const;
+  for (const [method, route, status] of cases) {
+    const response = await handlers[method](
+      new NextRequest(origin + '/api/' + route, {
+        method,
+        headers: { origin, 'x-csrf-token': 'test-token' },
+        ...(method === 'PUT' ? { body: '{}' } : {}),
+      }),
+      { params: Promise.resolve({ path: route.split('/') }) },
+    );
+    expect(response.status, method + ' ' + route).toBe(status);
+    if (method === 'GET' && status === 200) {
+      expect(response.headers.get('content-type')).toBe('image/webp');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+  }
+  expect(fetcher).toHaveBeenCalledTimes(5);
+  expect(uploads).toEqual(['{}', '{}']);
+});
+
 test('phone OTP proxy accepts only exact methods and forwards idempotency without caching', async () => {
   vi.stubEnv('DEPLOYMENT_ENV', 'local');
   vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
