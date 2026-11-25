@@ -28,6 +28,14 @@ test('email verification creates one ordinary session and guards account and cre
   });
   const sent = new Map<string, string>();
   let deliveries = 0;
+  let notifyDeliveryStarted!: () => void;
+  let finishDelivery!: () => void;
+  const deliveryStarted = new Promise<void>((resolve) => {
+    notifyDeliveryStarted = resolve;
+  });
+  const deliveryCanFinish = new Promise<void>((resolve) => {
+    finishDelivery = resolve;
+  });
   const m = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(EmailSignInDelivery)
     .useValue({
@@ -35,8 +43,11 @@ test('email verification creates one ordinary session and guards account and cre
         assert.match(code, /^\d{6}$/);
         sent.set(to, code);
         deliveries++;
-        if (to === 'global-failure@example.test')
+        if (to === 'global-failure@example.test') {
+          notifyDeliveryStarted();
+          await deliveryCanFinish;
           throw new SmtpServiceUnavailable();
+        }
         if (to === 'uncertain@example.test')
           throw new Error('synthetic lost response');
       },
@@ -386,11 +397,23 @@ test('email verification creates one ordinary session and guards account and cre
   const outage = 'global-failure@example.test',
     attempt = randomUUID(),
     countBefore = deliveries;
-  for (let i = 0; i < 2; i++)
-    assert.equal(
-      (await post('', { email: outage, browserKey }, attempt)).status,
-      503,
+  const initialRequest = post('', { email: outage, browserKey }, attempt);
+  await deliveryStarted;
+  const overlap = post('', { email: outage, browserKey }, attempt);
+  const release = setTimeout(finishDelivery, 300);
+  try {
+    const statuses = (await Promise.all([initialRequest, overlap])).map(
+      (response) => response.status,
     );
+    assert.deepEqual(statuses, [503, 503]);
+  } finally {
+    clearTimeout(release);
+    finishDelivery();
+  }
+  assert.equal(
+    (await post('', { email: outage, browserKey }, attempt)).status,
+    503,
+  );
   assert.equal(deliveries, countBefore + 1);
   const uncertain = 'uncertain@example.test',
     uncertainKey = randomUUID();

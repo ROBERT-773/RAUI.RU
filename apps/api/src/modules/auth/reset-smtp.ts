@@ -13,6 +13,7 @@ export class SmtpServiceUnavailable extends ServiceUnavailableException {
   }
 }
 const sender = 'noreply@raui.ru';
+export const SMTP_DEADLINE_MS = 5000;
 const recipient = z
   .email()
   .max(254)
@@ -93,9 +94,9 @@ async function sendSmtpText(
     debug: false,
     disableFileAccess: true,
     disableUrlAccess: true,
-    connectionTimeout: 5000,
-    greetingTimeout: 5000,
-    socketTimeout: 5000,
+    connectionTimeout: SMTP_DEADLINE_MS,
+    greetingTimeout: SMTP_DEADLINE_MS,
+    socketTimeout: SMTP_DEADLINE_MS,
     tls: {
       servername: 'mail.nic.ru',
       rejectUnauthorized: true,
@@ -158,7 +159,7 @@ async function sendSmtpText(
           );
         } else resolve();
       };
-      timer = setTimeout(() => finish(unavailable()), 5000);
+      timer = setTimeout(() => finish(unavailable()), SMTP_DEADLINE_MS);
       transport.sendMail(
         {
           from: sender,

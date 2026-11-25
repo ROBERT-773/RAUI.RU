@@ -13,6 +13,7 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { z } from 'zod';
+import { setTimeout as delay } from 'node:timers/promises';
 import { hash, parse, passwordHash, token, uuid } from '../../common/security';
 import { loadConfig } from '../../config';
 import { Database, type Sql } from '../database/database';
@@ -22,7 +23,7 @@ import {
   EmailSignInDelivery,
 } from './email-sign-in-delivery';
 import { phoneOtpKeySchema } from './phone-otp';
-import { SmtpServiceUnavailable } from './reset-smtp';
+import { SMTP_DEADLINE_MS, SmtpServiceUnavailable } from './reset-smtp';
 
 export const emailSignInRequestSchema = z.strictObject({
   email: z
@@ -47,7 +48,7 @@ export const emailSignInRequestResultSchema = z.strictObject({
 });
 type RequestResult = z.infer<typeof emailSignInRequestResultSchema>;
 interface Challenge {
-  dispatch_unavailable: boolean;
+  dispatch_state: 'sending' | 'receipt' | 'unavailable';
   id: string;
   destination_digest: string;
   created_at: Date;
@@ -103,6 +104,28 @@ export class EmailSignInService {
     private readonly mail: EmailSignInDelivery,
     private readonly audit: Audit,
   ) {}
+  private async replay(row: Challenge) {
+    // The allocating request commits before SMTP, so a replay can arrive while
+    // mail is in flight. Hold no database connection during the bounded wait.
+    const maxWait = SMTP_DEADLINE_MS + 1000;
+    const age = Math.max(0, Date.now() - row.created_at.getTime());
+    const until = performance.now() + Math.max(0, maxWait - age);
+    let state = row.dispatch_state;
+    for (let wait = 100; state === 'sending' && performance.now() < until;) {
+      await delay(Math.min(wait, until - performance.now()));
+      const [latest] = await this.db.rows<Pick<Challenge, 'dispatch_state'>>(
+        'SELECT dispatch_state FROM email_sign_in_challenges WHERE id=$1',
+        [row.id],
+      );
+      state = latest?.dispatch_state ?? 'receipt';
+      wait = Math.min(wait * 2, 800);
+    }
+    if (state === 'unavailable')
+      throw new ServiceUnavailableException('Email sign-in unavailable');
+    // If the sender stopped before recording an outcome, SMTP might already
+    // have accepted the message. The old receipt is safe to return and reuse.
+    return receipt(row);
+  }
   async request(body: unknown, key: unknown) {
     const { email, browserKey } = parse(emailSignInRequestSchema, body),
       request = hash(parse(phoneOtpKeySchema, key));
@@ -115,7 +138,7 @@ export class EmailSignInService {
       ]);
       await lockDestination(sql, dest);
       const [prior] = await this.db.rows<Challenge>(
-        'SELECT id,destination_digest,created_at,expires_at,dispatch_unavailable FROM email_sign_in_challenges WHERE browser_digest=$1 AND request_digest=$2',
+        'SELECT id,destination_digest,created_at,expires_at,dispatch_state FROM email_sign_in_challenges WHERE browser_digest=$1 AND request_digest=$2',
         [browser, request],
         sql,
       );
@@ -124,8 +147,6 @@ export class EmailSignInService {
           throw new ConflictException(
             'Idempotency key reused with another payload',
           );
-        if (prior.dispatch_unavailable)
-          throw new ServiceUnavailableException('Email sign-in unavailable');
         return { row: prior, code: null };
       }
       const retryAfterSeconds = await retryDelay(sql, dest);
@@ -158,7 +179,7 @@ export class EmailSignInService {
         code = randomInt(1000000).toString().padStart(6, '0');
       const [row] = await this.db.rows<Challenge>(
         `INSERT INTO email_sign_in_challenges(id,user_id,destination_digest,browser_digest,request_digest,code_digest,eligible_at_request,created_at,expires_at)
-        SELECT $1,$2,$3,$4,$5,$6,$7,t,t+interval '1 hour' FROM (SELECT clock_timestamp() t) stamp RETURNING id,destination_digest,created_at,expires_at,dispatch_unavailable`,
+        SELECT $1,$2,$3,$4,$5,$6,$7,t,t+interval '1 hour' FROM (SELECT clock_timestamp() t) stamp RETURNING id,destination_digest,created_at,expires_at,dispatch_state`,
         [
           id,
           user?.id ?? null,
@@ -172,22 +193,24 @@ export class EmailSignInService {
       );
       return { row: row!, code };
     });
-    if (allocation.code !== null) {
-      try {
-        await this.mail.send(email, allocation.code);
-      } catch (error) {
-        if (error instanceof SmtpServiceUnavailable) {
-          await this.db.pool.query(
-            'UPDATE email_sign_in_challenges SET dispatch_unavailable=true,used_at=coalesce(used_at,clock_timestamp()) WHERE id=$1',
-            [allocation.row.id],
-          );
-          this.logger.warn('email_sign_in_smtp_unavailable');
-          throw new ServiceUnavailableException('Email sign-in unavailable');
-        }
-        // A lost SMTP acknowledgement can follow acceptance. The same receipt
-        // is returned for every address; no mail content is sent to telemetry.
+    if (allocation.code === null) return this.replay(allocation.row);
+    try {
+      await this.mail.send(email, allocation.code);
+    } catch (error) {
+      if (error instanceof SmtpServiceUnavailable) {
+        await this.db.pool.query(
+          "UPDATE email_sign_in_challenges SET dispatch_state='unavailable', used_at=coalesce(used_at,clock_timestamp()) WHERE id=$1",
+          [allocation.row.id],
+        );
+        this.logger.warn('email_sign_in_smtp_unavailable');
+        throw new ServiceUnavailableException('Email sign-in unavailable');
       }
+      // A lost DATA acknowledgement can follow acceptance.
     }
+    await this.db.pool.query(
+      "UPDATE email_sign_in_challenges SET dispatch_state='receipt' WHERE id=$1",
+      [allocation.row.id],
+    );
     return receipt(allocation.row);
   }
   async confirm<T>(

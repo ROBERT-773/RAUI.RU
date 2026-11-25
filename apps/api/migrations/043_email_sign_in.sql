@@ -6,7 +6,7 @@ CREATE TABLE email_sign_in_challenges (
   request_digest text NOT NULL CHECK(request_digest ~ '^[0-9a-f]{64}$'),
   code_digest text NOT NULL CHECK(code_digest ~ '^[0-9a-f]{64}$'),
   eligible_at_request boolean NOT NULL,
-  dispatch_unavailable boolean NOT NULL DEFAULT false,
+  dispatch_state text NOT NULL DEFAULT 'sending' CHECK(dispatch_state IN ('sending','receipt','unavailable')),
   created_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL CHECK(expires_at > created_at),
   attempts smallint NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5),
