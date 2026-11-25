@@ -43,6 +43,9 @@ const listingRow = z.object({
   id: uuid,
   title: z.string(),
   address: z.string(),
+  price: z.string().nullable(),
+  area: z.string().nullable(),
+  floor: z.string().nullable(),
   status: z.enum([
     'draft',
     'processing',
@@ -142,6 +145,7 @@ export class AdminDirectorySearch {
           : '(strpos(lower(l.title),lower($2))>0 OR strpos(lower(a.formatted),lower($2))>0)';
     const rows = await this.db.rows<z.infer<typeof listingRow>>(
       `SELECT l.id,l.title,a.formatted AS address,l.status,l.deal_type AS "dealType",
+              l.price::text AS price,p.attributes->>'area' AS area,p.attributes->>'floor' AS floor,
               u.public_id::text AS "sellerPublicId", (${publicEligibility}) AS "publiclyVisible"
        FROM listings l JOIN properties p ON p.id=l.property_id JOIN addresses a ON a.id=p.address_id
        JOIN users u ON u.id=l.seller_id

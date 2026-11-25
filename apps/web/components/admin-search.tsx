@@ -4,8 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../lib/client';
 import { feedbackIdentityEvent } from '../lib/feedback-draft';
-import { dealLabel } from '../lib/labels';
-import { listingStatusLabel } from './listing-editor-status';
+import CabinetListingsTable from './cabinet-listings-table';
 import styles from './admin-search.module.css';
 
 type Kind = 'users' | 'listings';
@@ -24,6 +23,9 @@ type ListingMatch = {
   address: string;
   status: string;
   dealType: string;
+  price: string | null;
+  area: string | null;
+  floor: string | null;
   sellerPublicId: string;
   publiclyVisible: boolean;
 };
@@ -321,11 +323,12 @@ function SearchWorkspace({
             <p role="status" className={styles.count}>
               Показано результатов: {result.items.length}.
             </p>
-            <ul className={styles.results}>
-              {result.items.map((item) => (
-                <li className="panel" key={item.id}>
-                  {'publicId' in item ? (
-                    <>
+            {users ? (
+              <ul className={styles.results}>
+                {result.items
+                  .filter((item): item is UserMatch => 'publicId' in item)
+                  .map((item) => (
+                    <li className="panel" key={item.id}>
                       <h3>{item.name}</h3>
                       <dl className={styles.facts}>
                         <dt>ID пользователя</dt>
@@ -354,35 +357,46 @@ function SearchWorkspace({
                       >
                         Объявления пользователя
                       </button>
-                    </>
-                  ) : (
-                    <>
-                      <h3>{item.title}</h3>
-                      <dl className={styles.facts}>
-                        <dt>Адрес</dt>
-                        <dd>{item.address}</dd>
-                        <dt>Сделка</dt>
-                        <dd>{dealLabel(item.dealType) ?? item.dealType}</dd>
-                        <dt>Статус</dt>
-                        <dd>{listingStatusLabel(item.status)}</dd>
-                        <dt>ID автора</dt>
-                        <dd>{item.sellerPublicId}</dd>
-                        <dt>UUID объявления</dt>
-                        <dd>{item.id}</dd>
-                      </dl>
-                      {item.publiclyVisible && (
-                        <Link
-                          href={'/listings/' + encodeURIComponent(item.id)}
-                          prefetch={false}
-                        >
-                          Открыть объявление
-                        </Link>
-                      )}
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
+                    </li>
+                  ))}
+              </ul>
+            ) : (
+              <CabinetListingsTable
+                label={
+                  sellerId ? 'Объявления пользователя' : 'Найденные объявления'
+                }
+                rows={result.items
+                  .filter(
+                    (item): item is ListingMatch => 'sellerPublicId' in item,
+                  )
+                  .map((item) => ({
+                    ...item,
+                    object: (
+                      <>
+                        <h3>{item.title}</h3>
+                        <p>{item.address}</p>
+                        <details>
+                          <summary>Идентификаторы</summary>
+                          <dl className={styles.facts}>
+                            <dt>ID автора</dt>
+                            <dd>{item.sellerPublicId}</dd>
+                            <dt>UUID объявления</dt>
+                            <dd>{item.id}</dd>
+                          </dl>
+                        </details>
+                        {item.publiclyVisible && (
+                          <Link
+                            href={'/listings/' + encodeURIComponent(item.id)}
+                            prefetch={false}
+                          >
+                            Открыть объявление
+                          </Link>
+                        )}
+                      </>
+                    ),
+                  }))}
+              />
+            )}
           </>
         )}
         {status === 'ready' && result?.nextCursor && (

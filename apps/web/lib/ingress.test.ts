@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from '../app/api/[...path]/route';
 import { verifyIdentity } from '@raui/config/ingress';
-import { detail } from './server';
+import { detail, canManagePublicListing } from './server';
 import { GET as sitemap } from '../app/sitemap.xml/route';
 import { sitemapPage, sitemapIndex } from './sitemap';
 vi.mock('server-only', () => ({}));
@@ -12,6 +12,28 @@ vi.mock('next/headers', () => ({
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+});
+test('public listing management uses the private listing permission only for signed-in visitors', async () => {
+  vi.stubEnv('API_INTERNAL_URL', 'http://127.0.0.1:3001');
+  vi.stubEnv('DEPLOYMENT_ENV', 'development');
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 403 }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  vi.stubGlobal('fetch', fetcher);
+  const id = '11111111-1111-4111-8111-111111111111';
+  expect(await canManagePublicListing(id, new Headers())).toBe(false);
+  expect(fetcher).not.toHaveBeenCalled();
+  const session = 'raui_session=' + 'x'.repeat(43);
+  const headers = new Headers({ cookie: 'unrelated=private; ' + session });
+  expect(await canManagePublicListing(id, headers)).toBe(false);
+  expect(await canManagePublicListing(id, headers)).toBe(true);
+  expect(fetcher.mock.calls[0]?.[0]).toBe(
+    'http://127.0.0.1:3001/v1/listings/' + id + '/manage',
+  );
+  expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get('cookie')).toBe(
+    session,
+  );
 });
 test('personal drafts can be listed and saved through the authenticated web proxy', async () => {
   const origin = 'https://staging.raui.ru';

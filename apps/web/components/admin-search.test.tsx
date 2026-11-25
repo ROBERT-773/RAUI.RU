@@ -74,6 +74,9 @@ test('opens a matched user’s listings and clears the seller filter for a new l
     await screen.findByRole('button', { name: 'Объявления пользователя' }),
   );
   await screen.findByRole('heading', { name: flat.title });
+  expect(
+    screen.getByRole('table', { name: 'Объявления пользователя' }),
+  ).toBeTruthy();
   expect(api).toHaveBeenCalledWith('v1/admin/search/listings', 'POST', {
     query: person.publicId,
     by: 'seller',

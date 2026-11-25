@@ -112,7 +112,7 @@ test('administrator finds the same account by phone and public ID and opens a pu
       name: 'Объявления пользователя №' + user.publicId,
     }),
   ).toBeVisible();
-  await expect(results.getByRole('listitem')).toHaveCount(
+  await expect(results.locator('tbody tr')).toHaveCount(
     sellerPage.items.length,
   );
   await page
@@ -132,7 +132,7 @@ test('administrator finds the same account by phone and public ID and opens a pu
   }[];
   const match = items.find((item) => item.title === apartment);
   expect(match?.publiclyVisible).toBe(true);
-  const row = results.getByRole('listitem').filter({
+  const row = results.getByRole('row').filter({
     has: page.getByRole('heading', { name: apartment, exact: true }),
   });
   await expect(row).toContainText(address);
