@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10283c" />
+    <meta
+      name="description"
+      content="Портал недвижимости по всей России возвращается. Зарегистрируйтесь до открытия, чтобы получить бесплатное размещение и стартовые бонусы."
+    />
+    <title>Мы возвращаемся — портал недвижимости РАУИ</title>
+    <link rel="stylesheet" href="/start.css" />
+    <script src="/registration.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#registration">Перейти к регистрации</a>
+    <main class="page">
+      <div class="top">
+        <div class="brand">
+          <span class="wordmark"
+            ><img
+              src="/assets/raui-logo.png"
+              width="116"
+              height="49"
+              alt="РАУИ" /></span
+          ><span class="caption">Портал недвижимости</span>
+        </div>
+        <a href="#registration"
+          >Стать участником <span aria-hidden="true">↗</span></a
+        >
+      </div>
+      <div class="content">
+        <section class="hero" aria-labelledby="return-heading">
+          <img
+            class="photo"
+            src="/assets/raui-moscow-evening.webp"
+            width="1600"
+            height="819"
+            alt=""
+            fetchpriority="high"
+          />
+          <div class="intro">
+            <p class="kicker">Портал недвижимости по всей России</p>
+            <h1 id="return-heading">
+              Мы возвращаемся на рынок недвижимости<span aria-hidden="true"
+                >.</span
+              >
+            </h1>
+            <a class="offer" href="#launch-email"
+              ><span class="offerLead"
+                >Зарегистрируйтесь до открытия и получите</span
+              ><strong class="offerReward"
+                >Бесплатное размещение
+                <span class="offerBonus"
+                  ><span class="plus">+</span> стартовые бонусы</span
+                ></strong
+              ></a
+            >
+          </div>
+        </section>
+        <section
+          class="signup"
+          id="registration"
+          aria-labelledby="registration-heading"
+          tabindex="-1"
+        >
+          <h2 id="registration-heading">Станьте участником нашего проекта</h2>
+          <p class="instructions" id="instructions">
+            Оставьте email и телефон. Когда портал откроется, мы пришлём
+            приглашение с кодом для входа в кабинет.
+          </p>
+          <form
+            id="launch-form"
+            class="form"
+            method="post"
+            action="/api/v1/launch-interest"
+            aria-label="Ранняя регистрация"
+            hidden
+          >
+            <label for="launch-email">Электронная почта</label>
+            <input
+              id="launch-email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              placeholder="name@example.ru"
+              maxlength="254"
+              required
+            />
+            <label for="launch-phone">Телефон</label>
+            <div class="phone">
+              <span id="launch-prefix">+7</span
+              ><input
+                id="launch-phone"
+                name="phone"
+                type="tel"
+                inputmode="tel"
+                autocomplete="tel-national"
+                aria-describedby="launch-prefix"
+                placeholder="999 123-45-67"
+                maxlength="32"
+                required
+              />
+            </div>
+            <label class="consent"
+              ><input
+                id="launch-consent"
+                type="checkbox"
+                name="consent"
+                required
+              /><span
+                >Согласен на обработку моей почты и телефона для ранней
+                регистрации и уведомления об открытии портала.</span
+              ></label
+            >
+            <p id="form-error" class="error" role="alert" hidden></p>
+            <button class="submit" id="submit" type="submit">
+              Зарегистрироваться до открытия
+            </button>
+          </form>
+          <noscript
+            ><p>
+              Для отправки заявки включите JavaScript в браузере и обновите
+              страницу.
+            </p></noscript
+          >
+          <div id="success" class="success" role="status" tabindex="-1" hidden>
+            <span aria-hidden="true">✓</span>
+            <h3>Заявка принята</h3>
+            <p>Контакты сохранены. При открытии портала пришлём приглашение.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
