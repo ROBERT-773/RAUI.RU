@@ -26,6 +26,25 @@ async function request() {
   });
   fireEvent.click(screen.getByRole('button', { name: 'Запросить SMS-код' }));
 }
+
+test('prefills the Russian code and canonicalizes a pasted domestic number', async () => {
+  vi.mocked(api).mockResolvedValue(allocation());
+  render(<PhoneOtpForm onConfirmed={vi.fn()} />);
+  const input = screen.getByLabelText<HTMLInputElement>(
+    'Номер телефона для SMS',
+  );
+  expect(input.value).toBe('+7');
+  fireEvent.change(input, { target: { value: '8 (999) 123-45-67' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Запросить SMS-код' }));
+  await screen.findByText(/Запрос на отправку SMS принят/);
+  expect(input.value).toBe('+79991234567');
+  expect(api).toHaveBeenCalledWith(
+    'v1/auth/verification/phone/otp',
+    'POST',
+    { phone: '+79991234567' },
+    { idempotencyKey: expect.any(String) },
+  );
+});
 for (const [delivery, copy] of [
   ['accepted', 'Запрос на отправку SMS принят. Доставка не подтверждена.'],
   [
@@ -197,7 +216,7 @@ test('old identity allocation cannot leak into remounted phone form', async () =
   await act(async () => finish(allocation()));
   expect(
     (screen.getByLabelText('Номер телефона для SMS') as HTMLInputElement).value,
-  ).toBe('');
+  ).toBe('+7');
   expect(screen.queryByLabelText('SMS-код из 6 цифр')).toBeNull();
   expect(screen.queryByText(/Запрос на отправку SMS принят/)).toBeNull();
 });
