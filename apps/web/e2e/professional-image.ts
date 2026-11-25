@@ -37,6 +37,14 @@ async function uploadSample(page: Page, input: Locator, kind: Sample) {
 async function checkPixels(image: Locator, kind: Sample) {
   await expect(image).toBeVisible();
   await image.scrollIntoViewIfNeeded();
+  // Firefox can scroll a lazy image into view before its request has started.
+  await expect
+    .poll(() =>
+      image.evaluate(
+        (el: HTMLImageElement) => el.complete && el.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
   const pixels = await image.evaluate(async (el: HTMLImageElement) => {
     await el.decode();
     const canvas = document.createElement('canvas');
