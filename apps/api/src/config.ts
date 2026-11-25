@@ -143,6 +143,12 @@ export const envSchema = z
       .optional(),
     PHONE_OTP_ENABLED: z.enum(['true', 'false']).default('false'),
     PHONE_SIGN_IN_ENABLED: z.enum(['true', 'false']).default('false'),
+    EMAIL_SIGN_IN_ENABLED: z.enum(['true', 'false']).default('false'),
+    EMAIL_SIGN_IN_PEPPER: z
+      .string()
+      .max(1024)
+      .refine(validPhoneOtpPepper)
+      .optional(),
     STAFF_TOTP_REQUIRED: z.enum(['true', 'false']).default('false'),
     STAFF_TOTP_ENCRYPTION_KEY: z
       .string()

@@ -32,7 +32,7 @@ export default async function Layout({ children }: { children: ReactNode }) {
             <Link href="/account/listings#new-listing">
               Разместить объявление
             </Link>
-            <Link href="/account">Мой аккаунт</Link>
+            <Link href="/account">Войти в кабинет</Link>
           </nav>
         </header>
         <div className="site-sections">

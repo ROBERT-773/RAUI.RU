@@ -22,6 +22,7 @@ for (const testFile of [
   'publication-quota.integration.test.js',
   'listing-contacts.integration.test.js',
   'phone-otp.integration.test.js',
+  'email-sign-in.integration.test.js',
   'contact-settings.integration.test.js',
   'feedback.integration.test.js',
   'professional-profile-image.integration.test.js',

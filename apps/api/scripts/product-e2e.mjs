@@ -21,6 +21,7 @@ import {
   summarizeLoadSpans,
 } from './e2e-runtime.mjs';
 import { resolve } from 'node:path';
+import { openCodeTestOrigin } from './e2e-code-https.mjs';
 let stage = 'initialization';
 async function run() {
   const source = new URL(process.env.DATABASE_URL ?? '');
@@ -43,12 +44,18 @@ async function run() {
   const onboardingOnly = process.argv.includes('--onboarding-only');
   const staffTotpOnly = process.argv.includes('--staff-totp-only');
   const smsOnly = process.argv.includes('--sms-only');
+  const emailCodeOnly = process.argv.includes('--email-code-only');
   const feedsOnly = process.argv.includes('--feeds-only');
   const trustedFeeds = staffTotpOnly || feedsOnly;
   if (
-    [publicationOnly, onboardingOnly, staffTotpOnly, smsOnly, feedsOnly].filter(
-      Boolean,
-    ).length > 1
+    [
+      publicationOnly,
+      onboardingOnly,
+      staffTotpOnly,
+      smsOnly,
+      emailCodeOnly,
+      feedsOnly,
+    ].filter(Boolean).length > 1
   )
     throw new Error('Select one focused E2E scenario');
   const focusedSpecs = publicationOnly
@@ -62,12 +69,14 @@ async function run() {
           ]
         : smsOnly
           ? ['e2e/phone-sign-in.spec.ts']
-          : feedsOnly
-            ? [
-                'e2e/professional-feeds.spec.ts',
-                'e2e/professional-feed-trust.spec.ts',
-              ]
-            : [];
+          : emailCodeOnly
+            ? ['e2e/email-code-sign-in.spec.ts']
+            : feedsOnly
+              ? [
+                  'e2e/professional-feeds.spec.ts',
+                  'e2e/professional-feed-trust.spec.ts',
+                ]
+              : [];
   const runFeeds = trustedFeeds || !focusedSpecs.length;
   if (
     precreated !== undefined &&
@@ -109,6 +118,8 @@ async function run() {
       ? randomBytes(32).toString('hex')
       : undefined,
     E2E_SMS: smsOnly ? 'true' : 'false',
+    E2E_EMAIL_CODE: emailCodeOnly ? 'true' : 'false',
+    EMAIL_SIGN_IN_ENABLED: emailCodeOnly ? 'true' : 'false',
     ...(runFeeds
       ? {
           E2E_XML_FEEDS: 'true',
@@ -130,6 +141,7 @@ async function run() {
   stage = 'fixtures';
   let databaseCreated = false;
   let privateDirectory;
+  let codeOrigin;
   const started = Date.now();
   function start(args, cwd, label) {
     const child = spawn(process.execPath, args, {
@@ -160,7 +172,13 @@ async function run() {
     env.LOCAL_PRIVATE_DIR = privateDirectory;
     env.VERIFICATION_GATEWAY_URL = undefined;
     env.VERIFICATION_GATEWAY_TOKEN = undefined;
-    env.RESET_SMTP_ENABLED = 'false';
+    env.RESET_SMTP_ENABLED = emailCodeOnly ? 'true' : 'false';
+    if (emailCodeOnly) {
+      codeOrigin = await openCodeTestOrigin(privateDirectory);
+      env.WEB_ORIGIN = env.SITE_URL = env.E2E_BASE_URL = codeOrigin.origin;
+      env.RESET_SMTP_PASSWORD = randomBytes(24).toString('hex');
+      env.EMAIL_SIGN_IN_PEPPER = randomBytes(32).toString('base64url');
+    }
     env.PHONE_OTP_ENABLED = smsOnly ? 'true' : 'false';
     env.PHONE_SIGN_IN_ENABLED = smsOnly ? 'true' : 'false';
     // Resource allocation must settle before cleanup can decide ownership.
@@ -202,6 +220,9 @@ async function run() {
         [randomUUID(), `quota-${project}@e2e.test`, 'owner'],
         [randomUUID(), `agency-${project}@e2e.test`, 'agency'],
         [randomUUID(), `agent-${project}@e2e.test`, 'agent'],
+        ...(emailCodeOnly
+          ? [[randomUUID(), `code-recovery-${project}@e2e.test`, 'agent']]
+          : []),
         ...(runFeeds
           ? [[randomUUID(), `developer-${project}@e2e.test`, 'developer']]
           : []),
@@ -297,7 +318,13 @@ async function run() {
     );
     stage = 'fixture-services';
     start(
-      [smsOnly ? 'scripts/e2e-sms-server.mjs' : 'dist/main.js'],
+      [
+        emailCodeOnly
+          ? 'scripts/e2e-email-code-server.mjs'
+          : smsOnly
+            ? 'scripts/e2e-sms-server.mjs'
+            : 'dist/main.js',
+      ],
       process.cwd(),
       'e2e-api',
     );
@@ -380,11 +407,12 @@ async function run() {
       }
     }
     stage = 'browser-regression';
-    const projects = smsOnly
-      ? env.CHROMIUM_EXECUTABLE
-        ? ['chromium', 'android-chromium']
-        : ['chromium', 'firefox', 'webkit', 'ios-webkit', 'android-chromium']
-      : [null];
+    const projects =
+      smsOnly || emailCodeOnly
+        ? env.CHROMIUM_EXECUTABLE
+          ? ['chromium', 'android-chromium']
+          : ['chromium', 'firefox', 'webkit', 'ios-webkit', 'android-chromium']
+        : [null];
     const services = children.slice();
     for (const project of projects) {
       if (project) {
@@ -481,6 +509,11 @@ async function run() {
       cleanupFailed = true;
     }
     try {
+      if (codeOrigin) await codeOrigin.close();
+    } catch {
+      cleanupFailed = true;
+    }
+    try {
       if (privateDirectory)
         await rm(privateDirectory, { recursive: true, force: true });
     } catch {
@@ -497,9 +530,11 @@ async function run() {
               ? 'staff-totp-e2e-summary.json'
               : smsOnly
                 ? 'sms-e2e-summary.json'
-                : feedsOnly
-                  ? 'feeds-e2e-summary.json'
-                  : 'phase4d-e2e-summary.json',
+                : emailCodeOnly
+                  ? 'email-code-e2e-summary.json'
+                  : feedsOnly
+                    ? 'feeds-e2e-summary.json'
+                    : 'phase4d-e2e-summary.json',
       ),
       JSON.stringify(
         {

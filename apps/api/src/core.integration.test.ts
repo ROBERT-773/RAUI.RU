@@ -210,7 +210,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
         assert.equal(
           (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
             .count,
-          '42',
+          '43',
         );
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
@@ -2188,6 +2188,9 @@ post /v1/commerce/webhook
 post /v1/auth/register
 post /v1/auth/login
 get /v1/auth/phone-sign-in/capabilities
+get /v1/auth/email-sign-in/capabilities
+post /v1/auth/email-sign-in
+post /v1/auth/email-sign-in/confirm
 post /v1/auth/phone-sign-in
 post /v1/auth/phone-sign-in/confirm
 post /v1/auth/phone-sign-in/register
@@ -2203,6 +2206,7 @@ post /v1/partner/listings/bulk-pause`.split('\n'),
       const keys = new Set(
         `post /v1/auth/verification/phone/otp
 post /v1/auth/phone-sign-in
+post /v1/auth/email-sign-in
 post /v1/organizations
 post /v1/properties
 post /v1/listings

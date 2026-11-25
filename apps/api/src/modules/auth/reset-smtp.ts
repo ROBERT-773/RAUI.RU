@@ -6,7 +6,14 @@ import { z } from 'zod';
 
 const unavailable = () =>
   new ServiceUnavailableException('Verification delivery unavailable');
+/** The failure occurred before any recipient-specific exchange could take place. */
+export class SmtpServiceUnavailable extends ServiceUnavailableException {
+  constructor() {
+    super('Verification delivery unavailable');
+  }
+}
 const sender = 'noreply@raui.ru';
+export const SMTP_DEADLINE_MS = 5000;
 const recipient = z
   .email()
   .max(254)
@@ -39,7 +46,41 @@ export async function sendResetSmtp(
     origin.password
   )
     throw unavailable();
+  await sendSmtpText(
+    message.destination,
+    config.RESET_SMTP_PASSWORD,
+    'Восстановление пароля RAUI.RU',
+    `Для восстановления пароля откройте ссылку:\n${origin.origin}/account/reset-password#token=${message.token}\n\nСсылка действует 15 минут. Если вы не запрашивали восстановление, проигнорируйте письмо.`,
+    connector,
+  );
+}
+
+export async function sendEmailSignInSmtp(
+  destination: string,
+  code: string,
+  password: string,
+  connector: TlsConnector = connect,
+) {
+  if (!recipient.safeParse(destination).success || !/^[0-9]{6}$/.test(code))
+    throw unavailable();
+  await sendSmtpText(
+    destination,
+    password,
+    'Код входа в RAUI.RU',
+    `Ваш код входа: ${code}. Он действует один час. Введите его в том браузере, где запросили. Если вы не запрашивали код, проигнорируйте это письмо.`,
+    connector,
+  );
+}
+
+async function sendSmtpText(
+  destination: string,
+  password: string,
+  subject: string,
+  text: string,
+  connector: TlsConnector,
+) {
   let socket: TLSSocket | undefined;
+  let tlsEstablished = false;
   let settled = false;
   let timer: NodeJS.Timeout | undefined;
   const options: SMTPTransport.Options = {
@@ -47,15 +88,15 @@ export async function sendResetSmtp(
     port: 465,
     secure: true,
     pool: false,
-    auth: { user: sender, pass: config.RESET_SMTP_PASSWORD },
+    auth: { user: sender, pass: password },
     authMethod: 'LOGIN',
     logger: false,
     debug: false,
     disableFileAccess: true,
     disableUrlAccess: true,
-    connectionTimeout: 5000,
-    greetingTimeout: 5000,
-    socketTimeout: 5000,
+    connectionTimeout: SMTP_DEADLINE_MS,
+    greetingTimeout: SMTP_DEADLINE_MS,
+    socketTimeout: SMTP_DEADLINE_MS,
     tls: {
       servername: 'mail.nic.ru',
       rejectUnauthorized: true,
@@ -73,7 +114,10 @@ export async function sendResetSmtp(
         if (settled || error) {
           socket?.destroy();
           callback(unavailable(), {});
-        } else callback(null, { connection: socket, secured: true });
+        } else {
+          tlsEstablished = true;
+          callback(null, { connection: socket, secured: true });
+        }
       };
       try {
         socket = connector({
@@ -99,24 +143,37 @@ export async function sendResetSmtp(
         clearTimeout(timer);
         socket?.destroy();
         transport.close();
-        if (error) reject(unavailable());
-        else resolve();
+        if (error) {
+          const rejectedAuth =
+            typeof error === 'object' &&
+            error !== null &&
+            'code' in error &&
+            error.code === 'EAUTH' &&
+            'command' in error &&
+            typeof error.command === 'string' &&
+            /^AUTH(?: |$)/i.test(error.command);
+          reject(
+            !tlsEstablished || rejectedAuth
+              ? new SmtpServiceUnavailable()
+              : unavailable(),
+          );
+        } else resolve();
       };
-      timer = setTimeout(() => finish(unavailable()), 5000);
+      timer = setTimeout(() => finish(unavailable()), SMTP_DEADLINE_MS);
       transport.sendMail(
         {
           from: sender,
-          to: message.destination,
-          envelope: { from: sender, to: [message.destination] },
-          subject: 'Восстановление пароля RAUI.RU',
-          text: `Для восстановления пароля откройте ссылку:\n${origin.origin}/account/reset-password#token=${message.token}\n\nСсылка действует 15 минут. Если вы не запрашивали восстановление, проигнорируйте письмо.`,
+          to: destination,
+          envelope: { from: sender, to: [destination] },
+          subject,
+          text,
           textEncoding: 'base64',
         },
         (error) => finish(error),
       );
     });
-  } catch {
-    throw unavailable();
+  } catch (error) {
+    throw error instanceof SmtpServiceUnavailable ? error : unavailable();
   } finally {
     settled = true;
     clearTimeout(timer);

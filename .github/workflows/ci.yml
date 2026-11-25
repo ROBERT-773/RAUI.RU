@@ -54,6 +54,8 @@ jobs:
         run: pnpm --filter @raui/api test:e2e --staff-totp-only
       - name: SMS sign-in and registration browser acceptance
         run: pnpm --filter @raui/api test:e2e --sms-only
+      - name: Email code sign-in and registration browser acceptance
+        run: pnpm --filter @raui/api test:e2e --email-code-only
       - run: pnpm db:migrate && pnpm db:migrate
       - run: pnpm recovery:drill
       - name: Production smoke
