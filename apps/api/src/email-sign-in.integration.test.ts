@@ -398,7 +398,15 @@ test('email verification creates one ordinary session and guards account and cre
     attempt = randomUUID(),
     countBefore = deliveries;
   const initialRequest = post('', { email: outage, browserKey }, attempt);
-  await deliveryStarted;
+  await Promise.race([
+    deliveryStarted,
+    initialRequest.then((response) => {
+      throw new Error(
+        'Initial request returned before SMTP delivery started: ' +
+          response.status,
+      );
+    }),
+  ]);
   const overlap = post('', { email: outage, browserKey }, attempt);
   const release = setTimeout(finishDelivery, 300);
   try {
