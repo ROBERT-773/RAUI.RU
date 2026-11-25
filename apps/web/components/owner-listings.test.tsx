@@ -1584,7 +1584,7 @@ test.each([
   },
 );
 
-function quotaSetup(count = 0, role = 'owner') {
+function quotaSetup(count = 0, role = 'owner', used = 0) {
   setup();
   const base = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async (path, method, body, options) => {
@@ -1601,6 +1601,15 @@ function quotaSetup(count = 0, role = 'owner') {
         limit: role === 'owner' ? 1 : null,
         publishedObjects: role === 'owner' ? count : null,
         remaining: role === 'owner' ? Math.max(0, 1 - count) : null,
+        monthly:
+          role === 'owner'
+            ? {
+                limit: 3,
+                used,
+                remaining: Math.max(0, 3 - used),
+                resetsAt: '2029-12-31T21:00:00.000Z',
+              }
+            : null,
       };
     return base(path, method, body, options);
   });
@@ -1623,6 +1632,25 @@ test.each([
         .mocked(api)
         .mock.calls.filter(([path]) => path === 'v1/account/publication-quota'),
     ).toHaveLength(1);
+  },
+);
+test.each([0, 2, 3, 4])(
+  'shows %i monthly publications and the Moscow reset independently of active slots',
+  async (used) => {
+    quotaSetup(0, 'owner', used);
+    render(<OwnerListings />);
+    const panel = await screen.findByRole('region', {
+      name: 'Лимит публикации объектов',
+    });
+    await within(panel).findByText(
+      `Публикаций за месяц: ${used} из 3. Осталось: ${Math.max(0, 3 - used)}.`,
+    );
+    expect(
+      within(panel).getByText('1 января 2030 г.').getAttribute('datetime'),
+    ).toBe('2029-12-31T21:00:00.000Z');
+    expect(
+      within(panel).queryByText(/Для следующей публикации дождитесь/) !== null,
+    ).toBe(used >= 3);
   },
 );
 test('non-owner has no owner quota panel or request', async () => {

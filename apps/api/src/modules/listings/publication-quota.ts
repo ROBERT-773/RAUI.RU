@@ -13,6 +13,12 @@ export type PublicationQuota = {
   limit: number | null;
   publishedObjects: number | null;
   remaining: number | null;
+  monthly: {
+    limit: number;
+    used: number;
+    remaining: number;
+    resetsAt: string;
+  } | null;
 };
 export type PublicationSeller = Pick<
   Actor,
@@ -22,6 +28,20 @@ export type PublicationSeller = Pick<
   registration_approval_state: 'pending' | 'approved' | 'rejected';
 };
 const limit = 1;
+const monthlyLimit = 3;
+
+function monthlyUsage(at: 'statement_timestamp()' | '$3::timestamptz') {
+  const month = `date_trunc('month', ${at} AT TIME ZONE 'Europe/Moscow')`;
+  const resetsAt = `((${month} + interval '1 month') AT TIME ZONE 'Europe/Moscow')`;
+  const count = `(SELECT COUNT(*) FROM listing_history h
+    JOIN listings historical ON historical.id=h.listing_id
+    WHERE historical.seller_id=$1
+      AND h.after_data->>'status'='published'
+      AND h.before_data->>'status' IS DISTINCT FROM 'published'
+      AND h.created_at >= (${month} AT TIME ZONE 'Europe/Moscow')
+      AND h.created_at < ${resetsAt})`;
+  return { count, resetsAt };
+}
 
 @Injectable()
 export class PublicationQuotas {
@@ -29,14 +49,21 @@ export class PublicationQuotas {
 
   async own(actor: Actor): Promise<PublicationQuota> {
     // Account eligibility and the informational count share one fresh snapshot.
+    const month = monthlyUsage('statement_timestamp()');
     const [current] = await this.db.rows<
-      PublicationSeller & { published_objects: string | null }
+      PublicationSeller & {
+        published_objects: string | null;
+        monthly_publications: string | null;
+        resets_at: Date;
+      }
     >(
       `SELECT u.id,u.role,u.active,u.registration_approval_state,
         CASE WHEN u.role='owner' THEN
           (SELECT COUNT(*) FROM listings l
            WHERE l.seller_id=u.id AND l.status='published')
-        ELSE NULL END AS published_objects
+        ELSE NULL END AS published_objects,
+        CASE WHEN u.role='owner' THEN ${month.count} END AS monthly_publications,
+        ${month.resetsAt} AS resets_at
        FROM users u WHERE u.id=$1`,
       [actor.id],
     );
@@ -49,13 +76,21 @@ export class PublicationQuotas {
         limit: null,
         publishedObjects: null,
         remaining: null,
+        monthly: null,
       };
     const publishedObjects = Number(current.published_objects);
+    const used = Number(current.monthly_publications);
     return {
       applies: true,
       limit,
       publishedObjects,
       remaining: Math.max(0, limit - publishedObjects),
+      monthly: {
+        limit: monthlyLimit,
+        used,
+        remaining: Math.max(0, monthlyLimit - used),
+        resetsAt: current.resets_at.toISOString(),
+      },
     };
   }
 
@@ -89,14 +124,7 @@ export class PublicationQuotas {
     }>(
       `SELECT COUNT(*) AS published_objects,
         COALESCE(bool_or(id=$2::uuid),false) AS already_published,
-        (SELECT COUNT(*) FROM listing_history h
-         JOIN listings historical ON historical.id=h.listing_id
-         WHERE historical.seller_id=$1
-           AND h.after_data->>'status'='published'
-           AND h.before_data->>'status' IS DISTINCT FROM 'published'
-           AND h.created_at >= (date_trunc('month',$3::timestamptz AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow')
-           AND h.created_at < (date_trunc('month',$3::timestamptz AT TIME ZONE 'Europe/Moscow') + interval '1 month') AT TIME ZONE 'Europe/Moscow'
-        ) AS monthly_publications
+        ${monthlyUsage('$3::timestamptz').count} AS monthly_publications
        FROM listings WHERE seller_id=$1 AND status='published'`,
       [current.id, listingId, decisionAt],
       sql,
@@ -109,7 +137,7 @@ export class PublicationQuotas {
         message:
           'Разрешено одно активное объявление. Приостановите действующее объявление перед новой публикацией.',
       });
-    if (Number(count!.monthly_publications) >= 3)
+    if (Number(count!.monthly_publications) >= monthlyLimit)
       throw new ConflictException({
         statusCode: 409,
         code: 'OWNER_MONTHLY_PUBLICATION_QUOTA_EXCEEDED',

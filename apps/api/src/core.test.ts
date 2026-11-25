@@ -737,6 +737,7 @@ test('owner quota OpenAPI distinguishes owner capacity from nonowner null fields
       'limit',
       'publishedObjects',
       'remaining',
+      'monthly',
     ]);
   }
   assert.deepEqual(read.security, [{ bearer: [] }, { cookie: [] }]);

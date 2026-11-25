@@ -89,7 +89,19 @@ interface PublicationQuota {
   limit: number | null;
   publishedObjects: number | null;
   remaining: number | null;
+  monthly?: {
+    limit: number;
+    used: number;
+    remaining: number;
+    resetsAt: string;
+  } | null;
 }
+const quotaDate = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+});
 interface Media {
   id: string;
   kind: string;
@@ -853,8 +865,26 @@ export default function OwnerListings({
               {quota?.applies && quota.publishedObjects! >= quota.limit! && (
                 <p>
                   Лимит новых объектов достигнут. Уже опубликованные объявления
-                  сохраняются.
+                  сохраняются. Чтобы освободить место, приостановите действующее
+                  объявление.
                 </p>
+              )}
+              {quota?.applies && quota.monthly && (
+                <>
+                  <p>
+                    Публикаций за месяц: {quota.monthly.used} из{' '}
+                    {quota.monthly.limit}. Осталось: {quota.monthly.remaining}.
+                  </p>
+                  <p>
+                    {quota.monthly.remaining === 0
+                      ? 'Для следующей публикации дождитесь обновления лимита'
+                      : 'Лимит обновится'}{' '}
+                    <time dateTime={quota.monthly.resetsAt}>
+                      {quotaDate.format(new Date(quota.monthly.resetsAt))}
+                    </time>{' '}
+                    в 00:00 по Москве.
+                  </p>
+                </>
               )}
               {quotaError && (
                 <p role="alert">
@@ -863,8 +893,7 @@ export default function OwnerListings({
               )}
               <p>
                 Разрешено одно активное объявление и три публикации в
-                календарный месяц. Чтобы освободить место, приостановите
-                действующее объявление.
+                календарный месяц.
               </p>
               <p>
                 Приостановка не уменьшает число публикаций за месяц. Повторная
@@ -873,8 +902,8 @@ export default function OwnerListings({
               </p>
               <p>
                 Если одобрение не прошло из-за лимита, заявка остаётся на
-                модерации. После освобождения места сотрудник может повторить
-                одобрение той же заявки. Отправлять её заново не нужно.
+                модерации. Сотрудник может повторить одобрение, когда оба лимита
+                позволяют опубликовать объявление.
               </p>
               <p>
                 Создавать и редактировать черновики, добавлять фотографии и

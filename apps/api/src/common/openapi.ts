@@ -1256,7 +1256,13 @@ export function enrichOpenApi(document: OpenAPIObject) {
         operation.description =
           'Organization owner/admin membership management. Deactivation preserves the stored role, removes organization access and permanently revokes active partner clients created by that member. Reactivation does not restore prior credentials; reactivation or any role change revokes legacy active clients. Create a new partner client explicitly after the membership change.';
       if (operationId === 'get /v1/account/publication-quota') {
-        const required = ['applies', 'limit', 'publishedObjects', 'remaining'];
+        const required = [
+          'applies',
+          'limit',
+          'publishedObjects',
+          'remaining',
+          'monthly',
+        ];
         operation.description =
           'Own-account informational capacity. Owners may have one published listing across all sources; drafts and nonpublic offers consume no active slot. Each transition into publication counts toward three publications per Moscow calendar month. Existing over-limit publications are preserved. This snapshot does not reserve publication capacity.';
         operation.responses['200'] = {
@@ -1275,6 +1281,26 @@ export function enrichOpenApi(document: OpenAPIObject) {
                       limit: { type: 'integer', enum: [1] },
                       publishedObjects: { type: 'integer', minimum: 0 },
                       remaining: { type: 'integer', minimum: 0, maximum: 1 },
+                      monthly: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['limit', 'used', 'remaining', 'resetsAt'],
+                        properties: {
+                          limit: { type: 'integer', enum: [3] },
+                          used: { type: 'integer', minimum: 0 },
+                          remaining: {
+                            type: 'integer',
+                            minimum: 0,
+                            maximum: 3,
+                          },
+                          resetsAt: {
+                            type: 'string',
+                            format: 'date-time',
+                            description:
+                              'First instant of the next Moscow calendar month, in UTC.',
+                          },
+                        },
+                      },
                     },
                   },
                   {
@@ -1294,6 +1320,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
                         nullable: true,
                         enum: [null],
                       },
+                      monthly: { type: 'object', nullable: true, enum: [null] },
                     },
                   },
                 ],
