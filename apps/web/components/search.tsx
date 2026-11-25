@@ -3,6 +3,7 @@ import { Button } from '@raui/ui';
 import { useEffect, useState, useTransition } from 'react';
 import dynamic from 'next/dynamic';
 import { AccountEntryLink } from './account-entry-link';
+import { useAccountAction } from './use-account-action';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
@@ -66,6 +67,7 @@ function SearchView({
     [filterCategory, setFilterCategory] = useState(
       definition.category ?? 'apartment',
     );
+  const { run, dialog } = useAccountAction(setNotice);
   const [regions, setRegions] = useState<{ code: string; name: string }[]>([]);
   const [regionalCounts, setRegionalCounts] = useState<Record<string, number>>(
     {},
@@ -140,18 +142,20 @@ function SearchView({
     track({ type: 'filter_changed', fields: Object.keys(d) });
   }
   async function save() {
-    try {
-      await api('v1/account/saved-searches', 'POST', {
-        name: definition.q || 'Мой поиск',
-        definition,
-      });
-      setNotice('Поиск сохранён в аккаунте.');
-    } catch (e) {
-      setNotice((e as Error).message);
-    }
+    await api('v1/account/saved-searches', 'POST', {
+      name: definition.q || 'Мой поиск',
+      definition,
+    });
+    setNotice('Поиск сохранён в аккаунте.');
+  }
+  async function favorite(listingId: string) {
+    await api('v1/account/collections/favorite', 'POST', { listingId });
+    track({ type: 'favorite_added', listingId });
+    setNotice('Добавлено в избранное.');
   }
   return (
     <>
+      {dialog}
       <h1>{title}</h1>
       <form
         className="filters search-filters"
@@ -451,7 +455,12 @@ function SearchView({
         >
           Карта
         </Button>
-        <Button onClick={save} disabled={loading || navigationPending}>
+        <Button
+          onClick={(event) =>
+            run(event, 'Войдите, чтобы сохранить поиск', save)
+          }
+          disabled={loading || navigationPending}
+        >
           Сохранить поиск
         </Button>
         <AccountEntryLink href="/account?tab=favorite">
@@ -529,22 +538,13 @@ function SearchView({
                     }}
                     actions={
                       <Button
-                        onClick={async () => {
-                          try {
-                            await api(
-                              'v1/account/collections/favorite',
-                              'POST',
-                              { listingId: item.id },
-                            );
-                            track({
-                              type: 'favorite_added',
-                              listingId: item.id,
-                            });
-                            setNotice('Добавлено в избранное.');
-                          } catch (e) {
-                            setNotice((e as Error).message);
-                          }
-                        }}
+                        onClick={(event) =>
+                          run(
+                            event,
+                            'Войдите, чтобы добавить в избранное',
+                            () => favorite(item.id),
+                          )
+                        }
                       >
                         В избранное
                       </Button>

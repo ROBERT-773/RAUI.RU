@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import DetailActions from './detail-actions';
-import { api } from '../lib/client';
+import { api, ApiError } from '../lib/client';
 
-vi.mock('../lib/client', () => ({ api: vi.fn(), track: vi.fn() }));
+vi.mock('../lib/client', async (original) => ({
+  ...(await original<object>()),
+  api: vi.fn(),
+  track: vi.fn(),
+}));
 beforeEach(() => vi.mocked(api).mockResolvedValue({}));
 afterEach(() => {
   cleanup();
@@ -42,3 +46,37 @@ test('when calls were disabled after opening the card, reveal offers the current
   expect(screen.queryByRole('link', { name: /Телефон/ })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Показать телефон' })).toBeNull();
 });
+
+test.each([
+  ['В избранное', 'favorite', 'Войдите, чтобы добавить в избранное'],
+  ['Сравнить', 'compare', 'Войдите, чтобы добавить в сравнение'],
+])(
+  'opens sign-in for the selected listing action %s only after a 401',
+  async (button, kind, heading) => {
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === 'v1/account/collections/' + kind)
+        throw new ApiError('Гость', 401);
+      return {};
+    });
+    render(
+      <DetailActions
+        id="listing-target"
+        messagesAllowed={false}
+        callsAllowed={false}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: button });
+    expect(api).not.toHaveBeenCalledWith('v1/auth/me');
+    fireEvent.click(trigger);
+    await screen.findByRole('dialog', { name: heading });
+    expect(api).toHaveBeenCalledWith('v1/account/collections/' + kind, 'POST', {
+      listingId: 'listing-target',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    await vi.waitFor(() =>
+      expect(history.state?.rauiAccountAction).toBeUndefined(),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  },
+);

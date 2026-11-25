@@ -1,6 +1,7 @@
 'use client';
 import { Button } from '@raui/ui';
 import ListingSubscription from './listing-subscription';
+import { useAccountAction } from './use-account-action';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, track } from '../lib/client';
@@ -18,6 +19,7 @@ export default function DetailActions({
 }) {
   const [notice, setNotice] = useState(''),
     [sending, setSending] = useState(false);
+  const { run, dialog } = useAccountAction(setNotice);
   const [contact, setContact] = useState<PublicContact | null>(null);
   const [revealing, setRevealing] = useState(false);
   useEffect(() => {
@@ -27,17 +29,11 @@ export default function DetailActions({
     );
   }, [id]);
   async function collect(kind: 'favorite' | 'compare') {
-    try {
-      await api('v1/account/collections/' + kind, 'POST', { listingId: id });
-      setNotice(
-        kind === 'favorite'
-          ? 'Добавлено в избранное.'
-          : 'Добавлено в сравнение.',
-      );
-      if (kind === 'favorite') track({ type: 'favorite_added', listingId: id });
-    } catch (e) {
-      setNotice((e as Error).message);
-    }
+    await api('v1/account/collections/' + kind, 'POST', { listingId: id });
+    setNotice(
+      kind === 'favorite' ? 'Добавлено в избранное.' : 'Добавлено в сравнение.',
+    );
+    if (kind === 'favorite') track({ type: 'favorite_added', listingId: id });
   }
   async function revealPhones() {
     setRevealing(true);
@@ -59,6 +55,7 @@ export default function DetailActions({
   }
   return (
     <section className="panel" aria-label="Действия с объявлением">
+      {dialog}
       <h2>Связаться с продавцом</h2>
       {callsAllowed && !contact && (
         <Button onClick={revealPhones} disabled={revealing}>
@@ -117,8 +114,24 @@ export default function DetailActions({
       )}
       {notice && <p role="status">{notice}</p>}
       <div className="actions">
-        <Button onClick={() => collect('favorite')}>В избранное</Button>
-        <Button onClick={() => collect('compare')}>Сравнить</Button>
+        <Button
+          onClick={(event) =>
+            run(event, 'Войдите, чтобы добавить в избранное', () =>
+              collect('favorite'),
+            )
+          }
+        >
+          В избранное
+        </Button>
+        <Button
+          onClick={(event) =>
+            run(event, 'Войдите, чтобы добавить в сравнение', () =>
+              collect('compare'),
+            )
+          }
+        >
+          Сравнить
+        </Button>
         <Link href="/account">Открыть аккаунт</Link>
       </div>
       <ListingSubscription key={id} id={id} />
