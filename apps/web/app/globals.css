@@ -596,6 +596,12 @@ dd {
 .account-form {
   max-width: 480px;
 }
+.password-form-notice {
+  border-inline-start: 3px solid #a63226;
+  padding: 0.5rem 0.75rem;
+  background: #fff4f1;
+  color: #78271e;
+}
 .feed-import {
   margin-block: 1rem;
   max-width: 48rem;

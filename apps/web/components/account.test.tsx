@@ -125,6 +125,67 @@ test('submits a user ID as the password login identifier', async () => {
   );
 });
 
+test.each([
+  ['Email', 'agent@example.test', 'адрес почты'],
+  ['ID пользователя', '303', 'ID пользователя'],
+])(
+  'explains a rejected %s login inside the form and clears it when corrected',
+  async (label, identifier, hint) => {
+    stubFetch('fetch', async () => ({ ok: false, status: 401 }));
+    render(<Account />);
+    const password = await screen.findByLabelText<HTMLInputElement>('Пароль');
+    if (label === 'ID пользователя')
+      fireEvent.click(screen.getByRole('button', { name: 'Войти по ID' }));
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { value: identifier },
+    });
+    fireEvent.change(password, { target: { value: 'short' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Войти$/ }));
+    const alert = await screen.findByRole('alert');
+    expect(password.form?.contains(alert)).toBe(true);
+    expect(document.activeElement).toBe(alert);
+    expect(alert.textContent).toContain('Проверьте ' + hint + ' и пароль');
+    expect(password.getAttribute('aria-describedby')).toBe(alert.id);
+    expect(password.minLength).toBeLessThanOrEqual(1);
+    fireEvent.change(password, { target: { value: 'corrected' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Регистрация' }));
+    expect(screen.getByLabelText<HTMLInputElement>('Пароль').minLength).toBe(
+      12,
+    );
+  },
+);
+
+test('shows that a password is being checked and allows another attempt after a refusal', async () => {
+  let finish!: () => void;
+  stubFetch('fetch', async (url) => {
+    if (url.endsWith('/auth/login'))
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    return { ok: false, status: 401 };
+  });
+  render(<Account />);
+  fireEvent.change(await screen.findByLabelText('Email'), {
+    target: { value: 'agent@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Пароль'), {
+    target: { value: 'fixture-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /^Войти$/ }));
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Проверяем данные…' })
+      .disabled,
+  ).toBe(true);
+  await act(async () => finish());
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', {
+      name: /^Войти$/,
+    }).disabled,
+  ).toBe(false);
+});
+
 test('both recovery channels lead to code entry while the password fallback stays available', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
   stubFetch('fetch', fetch);
