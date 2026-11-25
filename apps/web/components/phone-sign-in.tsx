@@ -57,6 +57,13 @@ export function SignInByCode<T>(
   const [destination, setDestination] = useState(
     email ? '' : (props.enrollmentPhone ?? '+7'),
   );
+  const normalized = email
+    ? destination.trim().toLowerCase()
+    : normalizePhoneInput(destination);
+  const [retryWindows, setRetryWindows] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const retryUntil = normalized ? retryWindows.get(normalized) : undefined;
   const [registrationRole, setRegistrationRole] = useState('buyer');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signupToken, setSignupToken] = useState('');
@@ -81,6 +88,30 @@ export function SignInByCode<T>(
     replaces: string | null;
     key: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (!normalized || !retryUntil) return;
+    const expire = () => {
+      if (Date.now() < retryUntil) return;
+      setRetryWindows((previous) => {
+        if (previous.get(normalized) !== retryUntil) return previous;
+        const next = new Map(previous);
+        next.delete(normalized);
+        return next;
+      });
+    };
+    const timer = window.setTimeout(
+      expire,
+      Math.max(0, retryUntil - Date.now()),
+    );
+    window.addEventListener('focus', expire);
+    document.addEventListener('visibilitychange', expire);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', expire);
+      document.removeEventListener('visibilitychange', expire);
+    };
+  }, [normalized, retryUntil]);
 
   useEffect(() => {
     const generation = epoch;
@@ -113,13 +144,11 @@ export function SignInByCode<T>(
 
   async function execute(action: Operation, form?: FormData, code?: string) {
     if (lock.current) return;
-    const normalized = email
-      ? destination.trim()
-      : normalizePhoneInput(destination);
     if (!normalized) {
       setError(email ? 'Введите адрес электронной почты.' : invalidPhoneInput);
       return;
     }
+    if (action === 'request' && retryUntil && Date.now() < retryUntil) return;
     if (
       action === 'resend' &&
       (!challenge ||
@@ -263,13 +292,24 @@ export function SignInByCode<T>(
               ? 'Срок регистрации истёк. Запросите новый код.'
               : 'Код неверный или истёк.',
         );
-      else if (failure instanceof ApiError && failure.status === 429)
-        setError('Слишком много запросов. Попробуйте позже.');
-      else if (
+      else if (failure instanceof ApiError && failure.status === 429) {
+        if (action === 'request' && failure.retryAfterSeconds) {
+          const now = Date.now(),
+            until = now + failure.retryAfterSeconds * 1000;
+          setRetryWindows((previous) => {
+            const next = new Map(
+              [...previous].filter(([, deadline]) => deadline > now),
+            );
+            next.set(normalized, until);
+            return next;
+          });
+        } else setError('Слишком много запросов. Попробуйте позже.');
+      } else if (
         failure instanceof ApiError &&
         failure.status === 503 &&
         (action === 'request' || action === 'resend')
       ) {
+        lastSend.current = null;
         setError('Сейчас не удалось отправить код. Попробуйте позже.');
       } else if (failure instanceof TypeError)
         setError(
@@ -428,7 +468,12 @@ export function SignInByCode<T>(
           </>
         )}
         {!codeDialog && (
-          <Button type="submit" disabled={busy}>
+          <Button
+            type="submit"
+            disabled={
+              busy || (!signupToken && !challenge && Boolean(retryUntil))
+            }
+          >
             {signupToken
               ? 'Создать аккаунт'
               : challenge
@@ -457,6 +502,15 @@ export function SignInByCode<T>(
           {props.enrollmentPhone ? 'Отмена' : 'Другой способ'}
         </Button>
         {notice && <p role="status">{notice}</p>}
+        {retryUntil && !challenge && !signupToken && (
+          <p role="status">
+            Слишком много запросов. Новый код можно запросить в{' '}
+            <time dateTime={new Date(retryUntil).toISOString()}>
+              {new Date(retryUntil).toLocaleTimeString('ru-RU')}
+            </time>
+            .
+          </p>
+        )}
         {!codeDialog && error && <p role="alert">{error}</p>}
       </form>
       {codeDialog && challenge && (

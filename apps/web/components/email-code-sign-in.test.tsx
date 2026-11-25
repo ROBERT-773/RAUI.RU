@@ -109,6 +109,81 @@ test('recovery requests an existing account and never offers a registration role
   expect(done).toHaveBeenCalledOnce();
 });
 
+test('a rate-limited first request waits until the server deadline only for the matching address', async () => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.parse('2026-01-02T09:00:00Z');
+    vi.setSystemTime(start);
+    vi.mocked(api)
+      .mockRejectedValueOnce(new ApiError('limited', 429, 3600))
+      .mockResolvedValueOnce(challenge);
+    render(<EmailCodeSignIn onSession={vi.fn()} onOther={vi.fn()} />);
+    const field = screen.getByLabelText('Email') as HTMLInputElement;
+    const send = screen.getByRole('button', {
+      name: 'Получить код',
+    }) as HTMLButtonElement;
+    fireEvent.change(field, { target: { value: 'guest@example.test' } });
+    await act(async () => fireEvent.click(send));
+    expect(send.disabled).toBe(true);
+    expect(screen.getByRole('status').querySelector('time')?.dateTime).toBe(
+      new Date(start + 3600000).toISOString(),
+    );
+    expect(field.disabled).toBe(false);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Другой способ',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    fireEvent.submit(field.closest('form')!);
+    expect(api).toHaveBeenCalledTimes(1);
+    fireEvent.change(field, { target: { value: 'other@example.test' } });
+    expect(send.disabled).toBe(false);
+    fireEvent.change(field, { target: { value: 'GUEST@example.test' } });
+    expect(send.disabled).toBe(true);
+    await act(async () => vi.advanceTimersByTime(3600000));
+    expect(send.disabled).toBe(false);
+    await act(async () => fireEvent.click(send));
+    expect(api).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test.each(['first', 'resend'])(
+  'a definite outage creates a fresh key on the next %s send, but a lost response reuses it',
+  async (step) => {
+    const ready = {
+      ...challenge,
+      resendAfter: new Date(Date.now() - 10000).toISOString(),
+    };
+    if (step === 'resend') vi.mocked(api).mockResolvedValueOnce(ready);
+    vi.mocked(api)
+      .mockRejectedValueOnce(new ApiError('unavailable', 503))
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce({ ...challenge, challengeId: 'replacement' });
+    render(<EmailCodeSignIn onSession={vi.fn()} onOther={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'guest@example.test' },
+    });
+    const click = async (name: string) =>
+      act(async () => fireEvent.click(screen.getByRole('button', { name })));
+    if (step === 'resend') await click('Получить код');
+    const send = step === 'resend' ? 'Отправить новый код' : 'Получить код';
+    await click(send);
+    await click(send);
+    await click(step === 'resend' ? 'Проверить отправку' : send);
+    const keys = vi
+      .mocked(api)
+      .mock.calls.slice(-3)
+      .map((call) => call[3]?.idempotencyKey);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(keys[2]).toBe(keys[1]);
+  },
+);
+
 test('on return from the mailbox an expired code is never submitted and a new one can be requested', async () => {
   vi.useFakeTimers();
   try {

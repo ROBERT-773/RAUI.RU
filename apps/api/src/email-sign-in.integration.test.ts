@@ -35,8 +35,10 @@ test('email verification creates one ordinary session and guards account and cre
         assert.match(code, /^\d{6}$/);
         sent.set(to, code);
         deliveries++;
-        if (to==='global-failure@example.test') throw new SmtpServiceUnavailable();
-        if (to==='uncertain@example.test') throw new Error('synthetic lost response');
+        if (to === 'global-failure@example.test')
+          throw new SmtpServiceUnavailable();
+        if (to === 'uncertain@example.test')
+          throw new Error('synthetic lost response');
       },
     })
     .compile();
@@ -381,12 +383,22 @@ test('email verification creates one ordinary session and guards account and cre
     );
   assert.equal((await post('', { email: quota, browserKey })).status, 429);
   await noFlood();
-  const outage='global-failure@example.test', attempt=randomUUID(), countBefore=deliveries;
-  for(let i=0;i<2;i++) assert.equal((await post('',{email:outage,browserKey},attempt)).status,503);
-  assert.equal(deliveries,countBefore+1);
-  const uncertain='uncertain@example.test', uncertainKey=randomUUID();
-  const possiblyDelivered=await begin(uncertain,uncertainKey);
-  assert.deepEqual(await begin(uncertain,uncertainKey),possiblyDelivered);
-  assert.equal(deliveries,countBefore+2);
-  assert.equal((await confirm(uncertain,possiblyDelivered.challengeId)).status,201);
+  const outage = 'global-failure@example.test',
+    attempt = randomUUID(),
+    countBefore = deliveries;
+  for (let i = 0; i < 2; i++)
+    assert.equal(
+      (await post('', { email: outage, browserKey }, attempt)).status,
+      503,
+    );
+  assert.equal(deliveries, countBefore + 1);
+  const uncertain = 'uncertain@example.test',
+    uncertainKey = randomUUID();
+  const possiblyDelivered = await begin(uncertain, uncertainKey);
+  assert.deepEqual(await begin(uncertain, uncertainKey), possiblyDelivered);
+  assert.equal(deliveries, countBefore + 2);
+  assert.equal(
+    (await confirm(uncertain, possiblyDelivered.challengeId)).status,
+    201,
+  );
 });

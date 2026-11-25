@@ -8,7 +8,9 @@ const unavailable = () =>
   new ServiceUnavailableException('Verification delivery unavailable');
 /** The failure occurred before any recipient-specific exchange could take place. */
 export class SmtpServiceUnavailable extends ServiceUnavailableException {
-  constructor() { super('Verification delivery unavailable'); }
+  constructor() {
+    super('Verification delivery unavailable');
+  }
 }
 const sender = 'noreply@raui.ru';
 const recipient = z
@@ -77,6 +79,7 @@ async function sendSmtpText(
   connector: TlsConnector,
 ) {
   let socket: TLSSocket | undefined;
+  let tlsEstablished = false;
   let settled = false;
   let timer: NodeJS.Timeout | undefined;
   const options: SMTPTransport.Options = {
@@ -110,7 +113,10 @@ async function sendSmtpText(
         if (settled || error) {
           socket?.destroy();
           callback(unavailable(), {});
-        } else callback(null, { connection: socket, secured: true });
+        } else {
+          tlsEstablished = true;
+          callback(null, { connection: socket, secured: true });
+        }
       };
       try {
         socket = connector({
@@ -136,8 +142,21 @@ async function sendSmtpText(
         clearTimeout(timer);
         socket?.destroy();
         transport.close();
-        if (error) reject(unavailable());
-        else resolve();
+        if (error) {
+          const rejectedAuth =
+            typeof error === 'object' &&
+            error !== null &&
+            'code' in error &&
+            error.code === 'EAUTH' &&
+            'command' in error &&
+            typeof error.command === 'string' &&
+            /^AUTH(?: |$)/i.test(error.command);
+          reject(
+            !tlsEstablished || rejectedAuth
+              ? new SmtpServiceUnavailable()
+              : unavailable(),
+          );
+        } else resolve();
       };
       timer = setTimeout(() => finish(unavailable()), 5000);
       transport.sendMail(
@@ -152,8 +171,8 @@ async function sendSmtpText(
         (error) => finish(error),
       );
     });
-  } catch {
-    throw unavailable();
+  } catch (error) {
+    throw error instanceof SmtpServiceUnavailable ? error : unavailable();
   } finally {
     settled = true;
     clearTimeout(timer);

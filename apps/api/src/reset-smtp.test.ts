@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sendResetSmtp, sendEmailSignInSmtp,SmtpServiceUnavailable } from './modules/auth/reset-smtp';
+import {
+  sendResetSmtp,
+  sendEmailSignInSmtp,
+  SmtpServiceUnavailable,
+} from './modules/auth/reset-smtp';
 
 test('Reset SMTP rejects header injection and malformed tokens before connecting', async () => {
   for (const message of [
@@ -239,14 +243,28 @@ test('Authentication and recipient rejections expose only a sanitized delivery e
     }
   }
 });
-test('email OTP distinguishes a global SMTP AUTH rejection from recipient and lost DATA replies',async()=>{
- for(const stage of ['auth','recipient','data']){
-   const server=await smtpServer(stage==='data'?'data':undefined,stage);
-   try{
-     await assert.rejects(sendEmailSignInSmtp(message.destination,'123456',config.RESET_SMTP_PASSWORD,server.connector),
-       (err:Error)=>(err instanceof SmtpServiceUnavailable)===(stage==='auth') && err.message==='Verification delivery unavailable');
-   }finally{await server.close()}
- }
+test('email OTP distinguishes a global SMTP AUTH rejection from recipient and lost DATA replies', async () => {
+  for (const stage of ['auth', 'recipient', 'data']) {
+    const server = await smtpServer(
+      stage === 'data' ? 'data' : undefined,
+      stage,
+    );
+    try {
+      await assert.rejects(
+        sendEmailSignInSmtp(
+          message.destination,
+          '123456',
+          config.RESET_SMTP_PASSWORD,
+          server.connector,
+        ),
+        (err: Error) =>
+          err instanceof SmtpServiceUnavailable === (stage === 'auth') &&
+          err.message === 'Verification delivery unavailable',
+      );
+    } finally {
+      await server.close();
+    }
+  }
 });
 test('Untrusted TLS certificates prevent AUTH and all SMTP commands', async () => {
   const server = await smtpServer();

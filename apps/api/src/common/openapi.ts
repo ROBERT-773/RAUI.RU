@@ -592,6 +592,9 @@ export function enrichOpenApi(document: OpenAPIObject) {
           },
         };
         if (request) {
+          operation.responses['409'] = {
+            description: 'Idempotency key already used for another address',
+          };
           operation.responses['429'] = {
             description: 'Address or IP request budget exhausted',
             headers: {
@@ -602,7 +605,8 @@ export function enrichOpenApi(document: OpenAPIObject) {
             },
           };
           operation.responses['503'] = {
-            description: 'Email sign-in disabled or unconfigured',
+            description:
+              'Email sign-in disabled, unconfigured, or unavailable before recipient delivery. A retry with the same key preserves a known delivery failure.',
           };
         }
       }

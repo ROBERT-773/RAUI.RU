@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +13,10 @@ test.use({
   trace: 'off',
   screenshot: 'off',
   video: 'off',
+});
+test.beforeEach(() => {
+  // Independent users share the same loopback IP in the disposable browser database.
+  execFileSync(process.execPath, ['../api/scripts/e2e-reset-limits.mjs']);
 });
 test.afterEach(async ({ page }, info) => {
   if (info.status !== info.expectedStatus && !page.isClosed())
@@ -127,7 +132,8 @@ test('forgotten password opens the existing agent cabinet with email code and pr
     const user = await response.json();
     expect(user.role).toBe('agent');
     expect(typeof user.id).toBe('string');
-    return user.id as string;
+    expect(user.public_id).toMatch(/^[1-9][0-9]*$/);
+    return { id: user.id as string, publicId: user.public_id as string };
   }
   async function signOut() {
     const loggedOut = page.waitForResponse(
@@ -140,7 +146,7 @@ test('forgotten password opens the existing agent cabinet with email code and pr
     await expect(cabinet).toBeHidden();
   }
   await openEmailSignIn(page);
-  const originalId = await passwordSignIn();
+  const original = await passwordSignIn();
   await signOut();
   await openEmailSignIn(page);
   await page
@@ -154,8 +160,15 @@ test('forgotten password opens the existing agent cabinet with email code and pr
   await expect(cabinet).toBeVisible();
   const recovered = await page.request.get('/api/v1/auth/me');
   expect(recovered.status()).toBe(200);
-  expect((await recovered.json()).id).toBe(originalId);
+  expect(await recovered.json()).toMatchObject({
+    id: original.id,
+    public_id: original.publicId,
+    role: 'agent',
+  });
+  await expect(
+    page.getByText('ID: ' + original.publicId, { exact: true }),
+  ).toBeVisible();
   await signOut();
   await openEmailSignIn(page);
-  expect(await passwordSignIn()).toBe(originalId);
+  expect(await passwordSignIn()).toEqual(original);
 });

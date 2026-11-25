@@ -2,6 +2,7 @@ import {
   ConflictException,
   HttpException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
   EmailSignInDelivery,
 } from './email-sign-in-delivery';
 import { phoneOtpKeySchema } from './phone-otp';
+import { SmtpServiceUnavailable } from './reset-smtp';
 
 export const emailSignInRequestSchema = z.strictObject({
   email: z
@@ -45,6 +47,7 @@ export const emailSignInRequestResultSchema = z.strictObject({
 });
 type RequestResult = z.infer<typeof emailSignInRequestResultSchema>;
 interface Challenge {
+  dispatch_unavailable: boolean;
   id: string;
   destination_digest: string;
   created_at: Date;
@@ -94,6 +97,7 @@ async function retryDelay(sql: Sql, dest: string) {
 }
 @Injectable()
 export class EmailSignInService {
+  private readonly logger = new Logger(EmailSignInService.name);
   constructor(
     private readonly db: Database,
     private readonly mail: EmailSignInDelivery,
@@ -111,7 +115,7 @@ export class EmailSignInService {
       ]);
       await lockDestination(sql, dest);
       const [prior] = await this.db.rows<Challenge>(
-        'SELECT id,destination_digest,created_at,expires_at FROM email_sign_in_challenges WHERE browser_digest=$1 AND request_digest=$2',
+        'SELECT id,destination_digest,created_at,expires_at,dispatch_unavailable FROM email_sign_in_challenges WHERE browser_digest=$1 AND request_digest=$2',
         [browser, request],
         sql,
       );
@@ -120,6 +124,8 @@ export class EmailSignInService {
           throw new ConflictException(
             'Idempotency key reused with another payload',
           );
+        if (prior.dispatch_unavailable)
+          throw new ServiceUnavailableException('Email sign-in unavailable');
         return { row: prior, code: null };
       }
       const retryAfterSeconds = await retryDelay(sql, dest);
@@ -139,13 +145,11 @@ export class EmailSignInService {
         [email],
         sql,
       );
-      const [identity] = user
-        ? await this.db.rows<{ allowed: boolean }>(
-            `SELECT ${eligible} AS allowed FROM users u WHERE u.id=$1`,
-            [user.id],
-            sql,
-          )
-        : [];
+      const [identity] = await this.db.rows<{ allowed: boolean }>(
+        `SELECT ${eligible} AS allowed FROM users u WHERE u.id=$1`,
+        [user?.id ?? null],
+        sql,
+      );
       await sql.query(
         'UPDATE email_sign_in_challenges SET used_at=clock_timestamp() WHERE browser_digest=$1 AND destination_digest=$2 AND used_at IS NULL',
         [browser, dest],
@@ -154,7 +158,7 @@ export class EmailSignInService {
         code = randomInt(1000000).toString().padStart(6, '0');
       const [row] = await this.db.rows<Challenge>(
         `INSERT INTO email_sign_in_challenges(id,user_id,destination_digest,browser_digest,request_digest,code_digest,eligible_at_request,created_at,expires_at)
-        SELECT $1,$2,$3,$4,$5,$6,$7,t,t+interval '1 hour' FROM (SELECT clock_timestamp() t) stamp RETURNING id,destination_digest,created_at,expires_at`,
+        SELECT $1,$2,$3,$4,$5,$6,$7,t,t+interval '1 hour' FROM (SELECT clock_timestamp() t) stamp RETURNING id,destination_digest,created_at,expires_at,dispatch_unavailable`,
         [
           id,
           user?.id ?? null,
@@ -171,7 +175,15 @@ export class EmailSignInService {
     if (allocation.code !== null) {
       try {
         await this.mail.send(email, allocation.code);
-      } catch {
+      } catch (error) {
+        if (error instanceof SmtpServiceUnavailable) {
+          await this.db.pool.query(
+            'UPDATE email_sign_in_challenges SET dispatch_unavailable=true,used_at=coalesce(used_at,clock_timestamp()) WHERE id=$1',
+            [allocation.row.id],
+          );
+          this.logger.warn('email_sign_in_smtp_unavailable');
+          throw new ServiceUnavailableException('Email sign-in unavailable');
+        }
         // A lost SMTP acknowledgement can follow acceptance. The same receipt
         // is returned for every address; no mail content is sent to telemetry.
       }
