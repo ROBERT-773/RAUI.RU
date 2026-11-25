@@ -1,3 +1,4 @@
+import { continueWithIdentifier, openSignInOptions } from './sign-in';
 import {
   test,
   expect,
@@ -13,7 +14,7 @@ test.beforeEach(() => {
 });
 async function login(page: Page) {
   await page.goto('/account');
-  await page.getByLabel('Email', { exact: true }).fill('buyer@e2e.test');
+  await continueWithIdentifier(page, 'buyer@e2e.test');
   await page
     .getByLabel('Пароль', { exact: true })
     .fill('E2E-only-password-42!');
@@ -604,11 +605,11 @@ for (const delayed of [false, true]) {
     try {
       await page.getByRole('button', { name: 'Выйти', exact: true }).click();
       await expect(
-        page.getByRole('heading', { name: 'Войти в аккаунт' }),
+        page.getByRole('dialog', { name: 'Вход или регистрация' }),
       ).toBeVisible();
       expect((await page.request.get(messagesPath)).status()).toBe(401);
       // Stay in the mounted account component: navigation/reload would hide the regression.
-      await page.getByLabel('Email', { exact: true }).fill('outsider@e2e.test');
+      await continueWithIdentifier(page, 'outsider@e2e.test');
       await page
         .getByLabel('Пароль', { exact: true })
         .fill('E2E-only-password-42!');
@@ -797,7 +798,7 @@ test('Cookie session survives a fresh tab without CSRF storage and permits searc
     await restored.getByRole('button', { name: 'Выйти', exact: true }).click();
     expect((await logoutResponse).status()).toBe(201);
     await expect(
-      restored.getByRole('heading', { name: 'Войти в аккаунт' }),
+      restored.getByRole('dialog', { name: 'Вход или регистрация' }),
     ).toBeVisible();
     expect((await page.request.get('/api/v1/auth/me')).status()).toBe(401);
   } finally {
@@ -809,6 +810,7 @@ test('Password recovery explains disabled delivery and removes invalid reset fra
   page,
 }) => {
   await page.goto('/account');
+  await openSignInOptions(page);
   await page.getByRole('link', { name: 'Забыли пароль?' }).click();
   await expect(
     page.getByRole('heading', { name: 'Восстановить доступ' }),
@@ -823,7 +825,7 @@ test('Password recovery explains disabled delivery and removes invalid reset fra
     page.getByRole('button', { name: 'Отправить ссылку' }),
   ).toHaveCount(0);
   await page.getByRole('link', { name: 'Вернуться ко входу' }).click();
-  await expect(page.getByLabel('Пароль', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Email или ID', { exact: true })).toBeVisible();
   await page.goto('/account/reset-password#token=invalid');
   await expect(
     page.getByRole('alert').filter({ hasText: 'Ссылка недействительна' }),

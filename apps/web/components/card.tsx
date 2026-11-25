@@ -31,9 +31,7 @@ export function Card({
           unoptimized
         />
       ) : (
-        <div className="photo-placeholder" aria-label="Фото пока нет">
-          RAUI
-        </div>
+        <div className="photo-placeholder">Фото пока нет</div>
       )}
       <div className="card-body">
         {deal && <p className="deal-type">{deal}</p>}

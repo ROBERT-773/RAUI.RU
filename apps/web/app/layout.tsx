@@ -3,7 +3,8 @@ import 'leaflet/dist/leaflet.css';
 import './globals.css';
 import './site-header.css';
 import Link from 'next/link';
-import Image from 'next/image';
+import BrandLogo from '../components/brand-logo';
+import { AccountEntryLink } from '../components/account-entry-link';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { catalogNavigation } from '../lib/catalog-links';
@@ -22,17 +23,26 @@ export default async function Layout({ children }: { children: ReactNode }) {
         <header className="site-header">
           {/* Use native fragment navigation when returning from the homepage map. */}
           <a href="/#page-top" aria-label="RAUI.RU — главная">
-            <Image src="/raui-logo.png" alt="" width={116} height={49} />
+            <BrandLogo />
           </a>
           <nav aria-label="Основная навигация">
             <Link href="/search">Недвижимость</Link>
-            <Link href="/account?tab=favorite">Избранное</Link>
-            <Link href="/account?tab=messages">Сообщения</Link>
-            <Link href="/account?tab=notifications">Уведомления</Link>
-            <Link href="/account/listings#new-listing">
+            <AccountEntryLink href="/account?tab=favorite">
+              Избранное
+            </AccountEntryLink>
+            <AccountEntryLink href="/account?tab=messages">
+              Сообщения
+            </AccountEntryLink>
+            <AccountEntryLink href="/account?tab=notifications">
+              Уведомления
+            </AccountEntryLink>
+            <AccountEntryLink
+              href="/account/listings#new-listing"
+              intent="publish"
+            >
               Разместить объявление
-            </Link>
-            <Link href="/account">Войти в кабинет</Link>
+            </AccountEntryLink>
+            <AccountEntryLink href="/account">Войти в кабинет</AccountEntryLink>
           </nav>
         </header>
         <div className="site-sections">
@@ -45,7 +55,9 @@ export default async function Layout({ children }: { children: ReactNode }) {
           </nav>
         </div>
         {children}
-        <footer>RAUI.RU · Недвижимость</footer>
+        <footer>
+          <Link href="/support">Служба поддержки</Link>
+        </footer>
       </body>
     </html>
   );

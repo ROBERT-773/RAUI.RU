@@ -1,3 +1,4 @@
+import { continueWithIdentifier } from './sign-in';
 import { expect, test, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ test.beforeEach(() => {
 });
 
 async function signIn(page: Page, email: string) {
-  await page.getByLabel('Email', { exact: true }).fill(email);
+  await continueWithIdentifier(page, email);
   await page
     .getByLabel('Пароль', { exact: true })
     .fill('E2E-only-password-42!');
@@ -24,7 +25,9 @@ test('a guest can dismiss the beta invitation and return to feedback after a rel
   page,
 }) => {
   await page.goto('/');
-  const banner = page.getByRole('region', { name: 'Бесплатная бета RAUI' });
+  const banner = page.getByRole('region', {
+    name: 'Бесплатное размещение объявлений',
+  });
   const publish = banner.getByRole('link', { name: 'Разместить объявление' });
   await expect(banner).toContainText(/бесплатн/i);
   await expect(publish).toHaveAttribute(
@@ -32,12 +35,16 @@ test('a guest can dismiss the beta invitation and return to feedback after a rel
     '/account/listings#new-listing',
   );
   await publish.click();
-  await expect(page).toHaveURL(/\/account\/listings#new-listing$/);
-  await expect(
-    page.getByRole('link', { name: 'Войти или зарегистрироваться' }),
-  ).toBeVisible();
+  const prompt = page.getByRole('dialog', {
+    name: 'Войдите, чтобы разместить объявление',
+    exact: true,
+  });
+  await expect(prompt).toBeVisible();
+  await expect(page).toHaveURL('/');
+  await prompt.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  await expect(prompt).toBeHidden();
+  await expect(publish).toBeFocused();
 
-  await page.goto('/');
   await banner.getByRole('button', { name: 'Закрыть приглашение' }).click();
   await expect(publish).toBeHidden();
   await page.reload();
@@ -94,7 +101,7 @@ test('a proposal survives login and is visible only to the administrator', async
     requestId: expect.stringMatching(/^[a-f\d-]{36}$/i),
   });
   await expect(
-    page.getByText('Спасибо! Ваше предложение отправлено команде RAUI.', {
+    page.getByText('Спасибо! Ваше предложение отправлено.', {
       exact: true,
     }),
   ).toBeVisible();
@@ -128,21 +135,18 @@ test('the beta publication link returns a guest owner to the manual listing form
 }, info) => {
   await page.goto('/');
   await page
-    .getByRole('region', { name: 'Бесплатная бета RAUI' })
+    .getByRole('region', { name: 'Бесплатное размещение объявлений' })
     .getByRole('link', { name: 'Разместить объявление', exact: true })
     .click();
-  await page
-    .getByRole('link', { name: 'Войти или зарегистрироваться', exact: true })
-    .click();
-  await expect(page).toHaveURL(/\/account\?action=publish$/);
+  await expect(
+    page.getByRole('dialog', {
+      name: 'Войдите, чтобы разместить объявление',
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page).toHaveURL('/');
 
   await signIn(page, `quota-${info.project.name}@e2e.test`);
-  const resume = page.getByRole('link', {
-    name: 'Продолжить подачу объявления',
-    exact: true,
-  });
-  await expect(resume).toHaveAttribute('href', '/account/listings#new-listing');
-  await resume.click();
   await expect(page).toHaveURL(/\/account\/listings#new-listing$/);
   const form = page.locator('form#new-listing');
   await expect(

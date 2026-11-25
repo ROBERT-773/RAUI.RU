@@ -1,7 +1,7 @@
 'use client';
 import { useRef, useState } from 'react';
 import { Button } from '@raui/ui';
-import Link from 'next/link';
+import { AccountEntryLink } from './account-entry-link';
 import { api, ApiError } from '../lib/client';
 
 type SubscriptionSettings = {
@@ -55,7 +55,7 @@ export default function ListingSubscription({ id }: { id: string }) {
         (busy ? (
           <p role="status">Загружаем настройки подписки…</p>
         ) : needsLogin ? (
-          <Link href="/account">Войти в кабинет</Link>
+          <AccountEntryLink href="/account">Войти в кабинет</AccountEntryLink>
         ) : (
           <Button onClick={() => void loadSettings()}>
             Обновить настройки

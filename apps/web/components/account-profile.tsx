@@ -2,6 +2,7 @@
 import { Button } from '@raui/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/client';
+import { invalidPhoneInput, normalizePhoneInput } from '../lib/phone-input';
 import PhoneOtpForm from './phone-otp-form';
 import PhoneSignIn from './phone-sign-in';
 import AccountContactSettings from './account-contact-settings';
@@ -232,9 +233,15 @@ export default function AccountProfile({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void action('v1/auth/verification/phone', {
-                    phone: new FormData(e.currentTarget).get('phone'),
-                  });
+                  const value = new FormData(e.currentTarget).get('phone');
+                  const phone =
+                    typeof value === 'string' && normalizePhoneInput(value);
+                  if (!phone) {
+                    setNotice('');
+                    setError(invalidPhoneInput);
+                    return;
+                  }
+                  void action('v1/auth/verification/phone', { phone });
                 }}
               >
                 <label>
@@ -243,13 +250,12 @@ export default function AccountProfile({
                     name="phone"
                     type="tel"
                     autoComplete="tel"
-                    placeholder="+79991234567"
-                    pattern="\+[1-9][0-9]{7,14}"
+                    defaultValue="+7"
                     required
                     disabled={busy || otpBusy}
                   />
                 </label>
-                <p>Международный формат: + и от 8 до 15 цифр.</p>
+                <p>Российский номер можно ввести с +7 или 8.</p>
                 <Button type="submit" disabled={busy || otpBusy}>
                   Запросить подтверждение телефона
                 </Button>

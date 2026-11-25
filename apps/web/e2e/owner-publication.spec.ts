@@ -1,3 +1,4 @@
+import { continueWithIdentifier } from './sign-in';
 import {
   test,
   expect,
@@ -30,7 +31,7 @@ async function login(
   heading = 'Кабинет собственника',
 ) {
   await page.goto('/account');
-  await page.getByLabel('Email', { exact: true }).fill(email);
+  await continueWithIdentifier(page, email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(
