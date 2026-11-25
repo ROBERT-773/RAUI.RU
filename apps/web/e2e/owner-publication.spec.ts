@@ -49,8 +49,12 @@ async function prepareDraftPreview(
   ).toHaveCount(0);
   const savedDescription =
     'Тестовое объявление для проверки публикации и поиска.';
-  await expect(draft.getByLabel('Описание', { exact: true })).toBeEnabled();
-  await draft.getByLabel('Описание', { exact: true }).fill(savedDescription);
+  const descriptionField = draft.getByRole('textbox', {
+    name: 'Описание',
+    exact: true,
+  });
+  await expect(descriptionField).toBeEnabled();
+  await descriptionField.fill(savedDescription);
   const descriptionSaved = page.waitForResponse((value) =>
     endpoint(value, 'PATCH', `/api/v1/listings/${listingId}`),
   );
@@ -126,9 +130,7 @@ async function prepareDraftPreview(
     name: 'Перейти к предпросмотру',
     exact: true,
   });
-  await expect(draft.getByLabel('Описание', { exact: true })).toHaveValue(
-    savedDescription,
-  );
+  await expect(descriptionField).toHaveValue(savedDescription);
   await expect(
     draft.locator('p').filter({
       hasText:
