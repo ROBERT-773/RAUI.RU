@@ -74,6 +74,51 @@ test('empty ranges and navigation metadata do not appear as filters', () => {
   ).toBe('Все объекты · Все сделки');
 });
 
+test('shows the dates and guest count entered for a short stay across New Year', () => {
+  expect(
+    savedSearchSummary({
+      dealType: 'short_rent',
+      price: { max: 5000 },
+      attributes: {
+        rental_available_from: { max: 20261230 },
+        rental_available_until: { min: 20270102 },
+        rental_minimum_nights: { max: 3 },
+        guest_capacity: { min: 2 },
+      },
+    }),
+  ).toBe(
+    'Сделка: Посуточно · Цена: до 5 000 ₽ / сутки · Заезд: 30.12.2026 · Выезд: 02.01.2027 · Число гостей: 2',
+  );
+});
+
+test('shows each independently saved rental condition, including zero deposit and excluded utilities', () => {
+  expect(
+    savedSearchSummary({
+      dealType: 'long_rent',
+      price: { min: 20000 },
+      attributes: {
+        rent_deposit: { max: 0 },
+        rent_commission: { max: 5 },
+        utilities_included: false,
+      },
+    }),
+  ).toBe(
+    'Сделка: Снять надолго · Цена: от 20 000 ₽ / мес. · Залог, ₽: до 0 · Комиссия, %: до 5 · Коммунальные платежи включены: Нет',
+  );
+  expect(
+    savedSearchSummary({
+      dealType: 'short_rent',
+      attributes: {
+        rental_available_from: { min: 20280229, max: 20280301 },
+        rental_minimum_nights: { max: 2 },
+        guest_capacity: { min: 2, max: 4 },
+      },
+    }),
+  ).toContain(
+    'Начало доступности: от 29.02.2028 до 01.03.2028 · Минимальный срок аренды, ночей: до 2 · Вместимость, человек: от 2 до 4',
+  );
+});
+
 test('future category and attribute values remain visible', () => {
   expect(
     savedSearchSummary({
@@ -81,6 +126,26 @@ test('future category and attribute values remain visible', () => {
       attributes: { future: 'значение' },
     }),
   ).toBe('Объект: future · future: значение');
+});
+
+test('preserves a separate restriction on minimum stay and never turns an invalid date into another day', () => {
+  const definition = {
+    dealType: 'short_rent' as const,
+    attributes: {
+      rental_available_from: { max: 20260430 },
+      rental_available_until: { min: 20260505 },
+      rental_minimum_nights: { max: 2 },
+    },
+  };
+  expect(savedSearchSummary(definition)).toContain(
+    'Заезд: 30.04.2026 · Выезд: 05.05.2026 · Минимальный срок аренды, ночей: до 2',
+  );
+  expect(definition.attributes.rental_minimum_nights).toEqual({ max: 2 });
+  expect(
+    savedSearchSummary({
+      attributes: { rental_available_from: { max: 20260230 } },
+    }),
+  ).toBe('Начало доступности: до 20260230');
 });
 
 test('saved region scope distinguishes otherwise identical searches without inventing catalogue names', () => {

@@ -42,6 +42,13 @@ export const attributeLabels: Record<string, string> = {
   commercial_finish: 'Отделка помещения',
   automatic_gates: 'Автоматические ворота',
   separate_entrance: 'Отдельный вход',
+  rent_deposit: 'Залог, ₽',
+  rent_commission: 'Комиссия, %',
+  utilities_included: 'Коммунальные платежи включены',
+  guest_capacity: 'Вместимость, человек',
+  rental_available_from: 'Начало доступности',
+  rental_available_until: 'Конец доступности',
+  rental_minimum_nights: 'Минимальный срок аренды, ночей',
 };
 export const attributeValue = (value: unknown) =>
   typeof value === 'boolean' ? (value ? 'Да' : 'Нет') : String(value ?? '—');
