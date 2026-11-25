@@ -129,6 +129,20 @@ for (const [status, code] of [
     });
   });
 
+test.each([
+  ['v1/auth/phone-sign-in', 'phone_otp_rate_limited'],
+  ['v1/auth/email-sign-in', 'email_sign_in_rate_limited'],
+])('uses the retry time from %s without a session', async (path, code) => {
+  const fetch = vi.fn(async () => reply({ code, retryAfterSeconds: 60 }, 429));
+  vi.stubGlobal('fetch', fetch);
+  const { api } = await import('./client');
+  await expect(api(path, 'POST', {})).rejects.toMatchObject({
+    status: 429,
+    retryAfterSeconds: 60,
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 test('restored session without storage bootstraps before mutation', async () => {
   const fetch = vi.fn<TestFetch>(async (url) =>
     reply(url.endsWith('/csrf') ? { csrfToken: 'restored' } : { ok: true }),

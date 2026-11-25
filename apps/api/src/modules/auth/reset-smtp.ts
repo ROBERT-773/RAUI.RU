@@ -6,6 +6,10 @@ import { z } from 'zod';
 
 const unavailable = () =>
   new ServiceUnavailableException('Verification delivery unavailable');
+/** The failure occurred before any recipient-specific exchange could take place. */
+export class SmtpServiceUnavailable extends ServiceUnavailableException {
+  constructor() { super('Verification delivery unavailable'); }
+}
 const sender = 'noreply@raui.ru';
 const recipient = z
   .email()
@@ -39,6 +43,39 @@ export async function sendResetSmtp(
     origin.password
   )
     throw unavailable();
+  await sendSmtpText(
+    message.destination,
+    config.RESET_SMTP_PASSWORD,
+    'Восстановление пароля RAUI.RU',
+    `Для восстановления пароля откройте ссылку:\n${origin.origin}/account/reset-password#token=${message.token}\n\nСсылка действует 15 минут. Если вы не запрашивали восстановление, проигнорируйте письмо.`,
+    connector,
+  );
+}
+
+export async function sendEmailSignInSmtp(
+  destination: string,
+  code: string,
+  password: string,
+  connector: TlsConnector = connect,
+) {
+  if (!recipient.safeParse(destination).success || !/^[0-9]{6}$/.test(code))
+    throw unavailable();
+  await sendSmtpText(
+    destination,
+    password,
+    'Код входа в RAUI.RU',
+    `Ваш код входа: ${code}. Он действует один час. Введите его в том браузере, где запросили. Если вы не запрашивали код, проигнорируйте это письмо.`,
+    connector,
+  );
+}
+
+async function sendSmtpText(
+  destination: string,
+  password: string,
+  subject: string,
+  text: string,
+  connector: TlsConnector,
+) {
   let socket: TLSSocket | undefined;
   let settled = false;
   let timer: NodeJS.Timeout | undefined;
@@ -47,7 +84,7 @@ export async function sendResetSmtp(
     port: 465,
     secure: true,
     pool: false,
-    auth: { user: sender, pass: config.RESET_SMTP_PASSWORD },
+    auth: { user: sender, pass: password },
     authMethod: 'LOGIN',
     logger: false,
     debug: false,
@@ -106,10 +143,10 @@ export async function sendResetSmtp(
       transport.sendMail(
         {
           from: sender,
-          to: message.destination,
-          envelope: { from: sender, to: [message.destination] },
-          subject: 'Восстановление пароля RAUI.RU',
-          text: `Для восстановления пароля откройте ссылку:\n${origin.origin}/account/reset-password#token=${message.token}\n\nСсылка действует 15 минут. Если вы не запрашивали восстановление, проигнорируйте письмо.`,
+          to: destination,
+          envelope: { from: sender, to: [destination] },
+          subject,
+          text,
           textEncoding: 'base64',
         },
         (error) => finish(error),

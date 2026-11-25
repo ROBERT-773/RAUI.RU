@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sendResetSmtp } from './modules/auth/reset-smtp';
+import { sendResetSmtp, sendEmailSignInSmtp,SmtpServiceUnavailable } from './modules/auth/reset-smtp';
 
 test('Reset SMTP rejects header injection and malformed tokens before connecting', async () => {
   for (const message of [
@@ -176,6 +176,29 @@ const config = {
   RESET_SMTP_PASSWORD: 'synthetic-password',
 };
 const message = { destination: 'recipient@example.org', token: 'a'.repeat(43) };
+test('email sign-in delivers a six-digit code and separate instructions over local authenticated TLS', async () => {
+  const server = await smtpServer();
+  try {
+    await sendEmailSignInSmtp(
+      message.destination,
+      '012345',
+      config.RESET_SMTP_PASSWORD,
+      server.connector,
+    );
+    assert.ok(server.encrypted && server.commands.includes('AUTH LOGIN'));
+    const text = Buffer.from(
+      server.data.split('\r\n\r\n')[1]!,
+      'base64',
+    ).toString('utf8');
+    assert.ok(text.includes('012345') && text.includes('один час'));
+    assert.ok(
+      !text.includes('reset-password') &&
+        !text.includes(config.RESET_SMTP_PASSWORD),
+    );
+  } finally {
+    await server.close();
+  }
+});
 test('Verified implicit TLS authenticates with LOGIN and delivers an exact fragment reset link', async () => {
   const server = await smtpServer();
   try {
@@ -215,6 +238,15 @@ test('Authentication and recipient rejections expose only a sanitized delivery e
       await server.close();
     }
   }
+});
+test('email OTP distinguishes a global SMTP AUTH rejection from recipient and lost DATA replies',async()=>{
+ for(const stage of ['auth','recipient','data']){
+   const server=await smtpServer(stage==='data'?'data':undefined,stage);
+   try{
+     await assert.rejects(sendEmailSignInSmtp(message.destination,'123456',config.RESET_SMTP_PASSWORD,server.connector),
+       (err:Error)=>(err instanceof SmtpServiceUnavailable)===(stage==='auth') && err.message==='Verification delivery unavailable');
+   }finally{await server.close()}
+ }
 });
 test('Untrusted TLS certificates prevent AUTH and all SMTP commands', async () => {
   const server = await smtpServer();

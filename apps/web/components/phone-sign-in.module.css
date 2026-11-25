@@ -1,0 +1,66 @@
+.destination {
+  overflow-wrap: anywhere;
+}
+.codeBox {
+  --cell: clamp(2rem, 9vw, 2.9rem);
+  --gap: clamp(0.22rem, 1.5vw, 0.45rem);
+  position: relative;
+  display: table;
+  margin: 0.4rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.cells {
+  display: grid;
+  grid-template-columns: repeat(6, var(--cell));
+  gap: var(--gap);
+}
+.cells > span {
+  height: 3.2rem;
+  border: 1px solid #748592;
+  border-radius: 0.5rem;
+  background: white;
+}
+.codeBox:focus-within .cells > [data-active] {
+  border: 2px solid #07537b;
+}
+.codeBox:focus-within {
+  outline: 2px solid #07537b;
+  outline-offset: 3px;
+}
+.codeBox .codeInput {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(100% + var(--cell));
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  outline: 0;
+  background: transparent;
+  color: #17384b;
+  border: 0;
+  border-radius: 0;
+  font: 600 1.65rem/1 monospace;
+  font-variant-numeric: tabular-nums;
+  text-indent: calc((var(--cell) - 1ch) / 2);
+  letter-spacing: calc(var(--cell) + var(--gap) - 1ch);
+}
+.resend {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem 0.65rem;
+  flex-wrap: wrap;
+}
+.resend [role='timer'] {
+  font-variant-numeric: tabular-nums;
+  color: #345369;
+}
+@media (forced-colors: active) {
+  .codeBox:focus-within,
+  .cells > span {
+    outline-color: Highlight;
+  }
+  .codeBox:focus-within .cells > [data-active] {
+    border-color: Highlight;
+  }
+}

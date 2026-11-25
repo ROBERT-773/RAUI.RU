@@ -125,6 +125,25 @@ test('submits a user ID as the password login identifier', async () => {
   );
 });
 
+test('both recovery channels lead to code entry while the password fallback stays available', async () => {
+  const fetch = vi.fn(async () => ({ ok: false, status: 401 }));
+  stubFetch('fetch', fetch);
+  render(<Account smsAvailable emailAvailable recoverAccess />);
+  await screen.findByRole('heading', { name: 'Восстановить доступ' });
+  expect(
+    screen
+      .getByRole('link', { name: 'Сменить пароль по ссылке' })
+      .getAttribute('href'),
+  ).toBe('/account/forgot-password?mode=password');
+  fireEvent.click(screen.getByRole('button', { name: 'На телефон' }));
+  expect(screen.getByLabelText('Мобильный телефон')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Другой способ' }));
+  fireEvent.click(screen.getByRole('button', { name: 'На почту' }));
+  expect(screen.getByLabelText('Email')).toBeTruthy();
+  expect(screen.queryByText('Роль при регистрации')).toBeNull();
+  expect(fetch.mock.calls).toHaveLength(1);
+});
+
 test('SMS registration opens the pending cabinet after completing the profile', async () => {
   const fetch = vi.fn(async (url: string) => {
     if (url.endsWith('/auth/me')) return { ok: false, status: 401 };
@@ -150,10 +169,9 @@ test('SMS registration opens the pending cabinet after completing the profile', 
   const phone = await screen.findByLabelText('Мобильный телефон');
   fireEvent.change(phone, { target: { value: '8 (999) 123-45-67' } });
   fireEvent.click(screen.getByRole('button', { name: 'Получить код' }));
-  fireEvent.change(await screen.findByLabelText('Код из SMS'), {
+  fireEvent.change(await screen.findByLabelText('Код подтверждения'), {
     target: { value: '012345' },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить код' }));
   fireEvent.change(await screen.findByLabelText('Кто вы?'), {
     target: { value: 'owner' },
   });
@@ -167,7 +185,10 @@ test('SMS registration opens the pending cabinet after completing the profile', 
     target: { value: 'synthetic-password' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Создать аккаунт' }));
-  await screen.findByRole('heading', { name: 'Кабинет собственника' });
+  const cabinet = await screen.findByRole('heading', {
+    name: 'Кабинет собственника',
+  });
+  expect(document.activeElement).toBe(cabinet);
   expect(sessionStorage.getItem('raui_csrf')).toBe('sms-csrf');
   expect(fetch.mock.calls.map(([path]) => path)).toEqual([
     '/api/v1/auth/me',

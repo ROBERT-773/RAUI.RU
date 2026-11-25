@@ -1,22 +1,10 @@
 import type { Metadata } from 'next';
-import { headers } from 'next/headers';
 import Account from '../../components/account';
-import { backendFetch } from '../../lib/backend';
+import { signInCapabilities } from '../../lib/sign-in-capabilities';
 export const metadata: Metadata = {
   title: 'Аккаунт — RAUI.RU',
   robots: { index: false, follow: false },
 };
-async function smsAvailable() {
-  try {
-    const response = await backendFetch(
-      '/v1/auth/phone-sign-in/capabilities',
-      await headers(),
-    );
-    return response.ok && (await response.json()).available === true;
-  } catch {
-    return false;
-  }
-}
 export default async function Page({
   searchParams,
 }: {
@@ -32,10 +20,13 @@ export default async function Page({
   return (
     <main id="content">
       <Account
-        key={section === 'contacts' ? initialTab + '-contacts' : initialTab}
+        key={[initialTab, section === 'contacts', action === 'recover'].join(
+          '-',
+        )}
         initialContacts={section === 'contacts'}
         initialTab={initialTab}
-        smsAvailable={await smsAvailable()}
+        {...await signInCapabilities()}
+        recoverAccess={action === 'recover'}
         continueListing={action === 'publish'}
         continueFeedback={action === 'feedback'}
       />

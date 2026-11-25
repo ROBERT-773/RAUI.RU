@@ -6,6 +6,11 @@ import { aiRequest, flagRequest } from '../modules/ai/contracts';
 import { trustDecision, duplicateDecision } from '../modules/trust/trust';
 import { analyticsEvent } from '../modules/analytics/analytics';
 import {
+  emailSignInRequestSchema,
+  emailSignInConfirmSchema,
+  emailSignInRequestResultSchema,
+} from '../modules/auth/email-sign-in';
+import {
   phoneSignInConfirmSchema,
   phoneSignInRequestSchema,
 } from '../modules/auth/phone-sign-in';
@@ -277,6 +282,8 @@ const bodyContracts: Record<string, z.ZodType> = {
   'post /v1/auth/register': registerSchema,
   'post /v1/auth/login': loginSchema,
   'post /v1/auth/phone-sign-in': phoneSignInRequestSchema,
+  'post /v1/auth/email-sign-in': emailSignInRequestSchema,
+  'post /v1/auth/email-sign-in/confirm': emailSignInConfirmSchema,
   'post /v1/auth/phone-sign-in/confirm': phoneSignInConfirmSchema,
   'post /v1/auth/phone-sign-in/register': registerWithPhoneSchema,
   'post /v1/auth/phone-sign-in/enroll': phoneSignInEnrollmentSchema,
@@ -413,6 +420,9 @@ post /v1/commerce/webhook
 post /v1/auth/register
 post /v1/auth/login
 get /v1/auth/phone-sign-in/capabilities
+get /v1/auth/email-sign-in/capabilities
+post /v1/auth/email-sign-in
+post /v1/auth/email-sign-in/confirm
 post /v1/auth/phone-sign-in
 post /v1/auth/phone-sign-in/confirm
 post /v1/auth/phone-sign-in/register
@@ -428,6 +438,7 @@ post /v1/partner/listings/bulk-pause`.split('\n'),
 const idempotentOperations = new Set(
   `post /v1/auth/verification/phone/otp
 post /v1/auth/phone-sign-in
+post /v1/auth/email-sign-in
 post /v1/organizations
 post /v1/properties
 post /v1/listings
@@ -561,6 +572,40 @@ export function enrichOpenApi(document: OpenAPIObject) {
           description: 'Dependency unavailable or commercial feature disabled',
         },
       };
+      if (
+        operationId === 'post /v1/auth/email-sign-in' ||
+        operationId === 'get /v1/auth/email-sign-in/capabilities'
+      ) {
+        const request = operationId.startsWith('post');
+        operation.responses[request ? '201' : '200'] = {
+          description: request
+            ? 'Uniform receipt for an address, including idempotent retries'
+            : 'Availability of email-code login',
+          content: {
+            'application/json': {
+              schema: z.toJSONSchema(
+                request
+                  ? emailSignInRequestResultSchema
+                  : z.strictObject({ available: z.boolean() }),
+              ) as SchemaObject,
+            },
+          },
+        };
+        if (request) {
+          operation.responses['429'] = {
+            description: 'Address or IP request budget exhausted',
+            headers: {
+              'Retry-After': {
+                description: 'Seconds until next address attempt, when present',
+                schema: { type: 'integer' },
+              },
+            },
+          };
+          operation.responses['503'] = {
+            description: 'Email sign-in disabled or unconfigured',
+          };
+        }
+      }
       if (contactResponses[operationId]) {
         operation.responses[method === 'post' ? '201' : '200'] = {
           description: path.endsWith('/public/contact')
@@ -1147,6 +1192,7 @@ export function enrichOpenApi(document: OpenAPIObject) {
         [
           'post /v1/auth/register',
           'post /v1/auth/login',
+          'post /v1/auth/email-sign-in/confirm',
           'get /v1/auth/me',
         ].includes(operationId)
       ) {
@@ -1215,17 +1261,22 @@ export function enrichOpenApi(document: OpenAPIObject) {
           content: {
             'application/json': {
               schema:
-                operationId === 'post /v1/auth/login'
+                operationId === 'post /v1/auth/login' ||
+                operationId === 'post /v1/auth/email-sign-in/confirm'
                   ? {
                       type: 'object',
                       required: ['user', 'csrfToken'],
                       properties: {
                         user: userSchema,
                         csrfToken: { type: 'string' },
-                        sessionToken: {
-                          type: 'string',
-                          description: 'Bearer transport only',
-                        },
+                        ...(operationId === 'post /v1/auth/login'
+                          ? {
+                              sessionToken: {
+                                type: 'string',
+                                description: 'Bearer transport only',
+                              },
+                            }
+                          : {}),
                       },
                     }
                   : userSchema,

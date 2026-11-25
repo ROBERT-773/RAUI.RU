@@ -35,6 +35,12 @@ import {
   uuid,
 } from '../../common/security';
 import { isProduction, loadConfig } from '../../config';
+import { EmailSignInService } from './email-sign-in';
+import {
+  ConfiguredEmailSignInDelivery,
+  EmailSignInDelivery,
+  emailSignInAvailable,
+} from './email-sign-in-delivery';
 import { StaffTotpController } from './staff-totp-controller';
 import { guardLoginPhoneChange } from './contact-guards';
 import {
@@ -559,7 +565,36 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly otp: PhoneOtpService,
     private readonly phoneSignIn: PhoneSignInService,
+    private readonly emailSignIn: EmailSignInService,
   ) {}
+  @Public() @Get('email-sign-in/capabilities') emailSignInCapabilities() {
+    return { available: emailSignInAvailable() };
+  }
+  @Public() @Post('email-sign-in') async requestEmailSignIn(
+    @Body() body: unknown,
+    @Headers('idempotency-key') key: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    try {
+      return await this.emailSignIn.request(body, key);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const result = error.getResponse() as { retryAfterSeconds?: number };
+        if (result.retryAfterSeconds)
+          res.setHeader('Retry-After', result.retryAfterSeconds);
+      }
+      throw error;
+    }
+  }
+  @Public() @Post('email-sign-in/confirm') async confirmEmailSignIn(
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const session = await this.emailSignIn.confirm(body, (sql, id) =>
+      this.auth.issueSession(sql, id),
+    );
+    return this.auth.respondSession(res, session);
+  }
   @Public() @Post('register') register(@Body() body: unknown) {
     return this.auth.register(body);
   }
@@ -730,6 +765,8 @@ export class AuthController {
     ContactSettingsService,
     PhoneOtpService,
     PhoneSignInService,
+    EmailSignInService,
+    { provide: EmailSignInDelivery, useClass: ConfiguredEmailSignInDelivery },
     { provide: PhoneOtpDelivery, useClass: ConfiguredPhoneOtpDelivery },
     { provide: VerificationDelivery, useClass: ConfiguredDelivery },
   ],

@@ -122,6 +122,10 @@ export default function AccountProfile({
               ? 'Контакт подтверждён.'
               : 'Запрос обработан. Проверьте статус контакта в профиле.',
         );
+      } else if (path === 'v1/auth/password-reset') {
+        setNotice(
+          'Проверьте почту. Откройте письмо для смены пароля и задайте новый пароль по ссылке.',
+        );
       } else
         setNotice(
           'Запрос принят. Дождитесь сообщения; принятие запроса не подтверждает доставку.',
@@ -281,6 +285,25 @@ export default function AccountProfile({
                 </Button>
               </form>
             ))}
+          {profile.email_verified_at && (
+            <>
+              <h3>Пароль</h3>
+              <p>
+                Для установки или смены пароля запросите письмо на{' '}
+                {profile.email}.
+              </p>
+              <Button
+                disabled={busy || otpBusy}
+                onClick={() =>
+                  void action('v1/auth/password-reset', {
+                    email: profile.email,
+                  })
+                }
+              >
+                Установить или сменить пароль
+              </Button>
+            </>
+          )}
           {profile.registration_approval_state === 'approved' &&
             profile.email_verified_at &&
             profile.phone_verified_at &&

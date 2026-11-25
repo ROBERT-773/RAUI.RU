@@ -17,6 +17,7 @@ import AgentPublicProfile from './agent-public-profile';
 import AccountProfile from './account-profile';
 import AccountSubscriptions from './account-subscriptions';
 import PhoneSignIn from './phone-sign-in';
+import EmailCodeSignIn from './email-code-sign-in';
 import ListingSummary from './listing-summary';
 import {
   announceFeedbackIdentityChange,
@@ -77,12 +78,16 @@ export default function Account({
   initialTab = 'favorite',
   initialContacts = false,
   smsAvailable = false,
+  emailAvailable = false,
+  recoverAccess = false,
 }: {
   continueListing?: boolean;
   continueFeedback?: boolean;
   initialTab?: 'favorite' | 'messages' | 'notifications';
   initialContacts?: boolean;
   smsAvailable?: boolean;
+  emailAvailable?: boolean;
+  recoverAccess?: boolean;
 } = {}) {
   const [user, setUser] = useState<AccountUser | null>(null),
     [profileOpen, setProfileOpen] = useState(initialContacts),
@@ -91,7 +96,17 @@ export default function Account({
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
     [loginById, setLoginById] = useState(false),
-    [smsSelected, setSmsSelected] = useState(smsAvailable),
+    [signInMethod, setSignInMethod] = useState<
+      'phone' | 'email' | 'password' | 'recovery'
+    >(
+      recoverAccess && smsAvailable && emailAvailable
+        ? 'recovery'
+        : smsAvailable
+          ? 'phone'
+          : emailAvailable
+            ? 'email'
+            : 'password',
+    ),
     [passwordVisible, setPasswordVisible] = useState(false),
     [items, setItems] = useState<ListingCard[]>([]),
     [saved, setSaved] = useState<Saved[]>([]),
@@ -102,6 +117,7 @@ export default function Account({
     [cursor, setCursor] = useState<string | null>(null),
     [messageCursor, setMessageCursor] = useState<string | null>(null),
     [notificationEnabled, setNotificationEnabled] = useState(true);
+  const focusAfterCode = useRef(false);
   const identityEpoch = useRef(0);
   const collectionRequest = useRef(0);
   const navigationEpoch = useRef(0);
@@ -301,13 +317,45 @@ export default function Account({
   }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
   if (feedbackUser) return <p role="status">Возвращаемся к предложению…</p>;
-  if (!user && smsAvailable && smsSelected)
+  if (!user && signInMethod === 'recovery')
     return (
-      <PhoneSignIn<AccountUser>
-        onOther={() => setSmsSelected(false)}
-        onSession={({ user: next, csrfToken, verificationDelivery }) => {
+      <section className="panel">
+        <h1>Восстановить доступ</h1>
+        <p>Куда отправить код для входа в ваш кабинет?</p>
+        <div className="actions">
+          {emailAvailable && (
+            <Button onClick={() => setSignInMethod('email')}>На почту</Button>
+          )}
+          {smsAvailable && (
+            <Button onClick={() => setSignInMethod('phone')}>На телефон</Button>
+          )}
+          <Link href="/account/forgot-password?mode=password">
+            Сменить пароль по ссылке
+          </Link>
+        </div>
+      </section>
+    );
+  if (!user && (signInMethod === 'phone' || signInMethod === 'email')) {
+    const CodeSignIn =
+      signInMethod === 'phone'
+        ? PhoneSignIn<AccountUser>
+        : EmailCodeSignIn<AccountUser>;
+    return (
+      <CodeSignIn
+        recoveryMode={recoverAccess}
+        onOther={() => setSignInMethod(recoverAccess ? 'recovery' : 'password')}
+        onSession={({
+          user: next,
+          csrfToken,
+          verificationDelivery,
+        }: {
+          user: AccountUser;
+          csrfToken: string;
+          verificationDelivery?: 'accepted' | 'unavailable';
+        }) => {
           clearPrivateState();
           setCsrf(csrfToken);
+          focusAfterCode.current = !continueFeedback;
           setUser(next);
           announceFeedbackIdentityChange();
           if (verificationDelivery === 'unavailable')
@@ -318,6 +366,7 @@ export default function Account({
         }}
       />
     );
+  }
   if (!user)
     return (
       <>
@@ -444,7 +493,15 @@ export default function Account({
         </form>
         {!register && (
           <p>
-            <Link href="/account/forgot-password">Забыли пароль?</Link>
+            <Link
+              href={
+                smsAvailable || emailAvailable
+                  ? '/account?action=recover'
+                  : '/account/forgot-password'
+              }
+            >
+              Забыли пароль?
+            </Link>
           </p>
         )}
         {!register && (
@@ -473,10 +530,21 @@ export default function Account({
             onClick={() => {
               setNotice('');
               setPasswordVisible(false);
-              setSmsSelected(true);
+              setSignInMethod('phone');
             }}
           >
             Войти по SMS
+          </Button>
+        )}
+        {emailAvailable && (
+          <Button
+            onClick={() => {
+              setNotice('');
+              setPasswordVisible(false);
+              setSignInMethod('email');
+            }}
+          >
+            Получить код на почту
           </Button>
         )}
       </>
@@ -504,7 +572,19 @@ export default function Account({
     </Button>
   );
   const profileEpoch = identityEpoch.current;
-  const heading = cabinetTitles.get(user.role) ?? 'Мой аккаунт';
+  const heading = (
+    <h1
+      tabIndex={-1}
+      ref={(element) => {
+        if (element && focusAfterCode.current) {
+          focusAfterCode.current = false;
+          element.focus();
+        }
+      }}
+    >
+      {cabinetTitles.get(user.role) ?? 'Мой аккаунт'}
+    </h1>
+  );
   const canList = ['owner', 'agent', 'agency', 'developer', 'admin'].includes(
     user.role,
   );
@@ -514,7 +594,7 @@ export default function Account({
   if (!approved(user) || profileOpen)
     return (
       <>
-        <h1>{heading}</h1>
+        {heading}
         <p>{user.display_name}</p>
         <p>ID: {user.public_id}</p>
         {logoutButton}
@@ -535,7 +615,7 @@ export default function Account({
     );
   return (
     <>
-      <h1>{heading}</h1>
+      {heading}
       <p>{user.display_name}</p>
       <p>ID: {user.public_id}</p>
       {continueListing &&

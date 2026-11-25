@@ -1,12 +1,15 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../lib/client';
 import { invalidPhoneInput, normalizePhoneInput } from '../lib/phone-input';
+import { CodeDialog } from './sign-in-code-dialog';
 
 interface Challenge {
   challengeId: string;
-  delivery: 'accepted' | 'unknown' | 'unavailable';
+  resendAfter: string;
+  expiresAt: string;
+  delivery?: 'accepted' | 'unknown' | 'unavailable';
 }
 type Verification<T> =
   | { kind: 'session'; user: T; csrfToken: string }
@@ -16,7 +19,6 @@ interface Session<T> {
   csrfToken: string;
   verificationDelivery?: 'accepted' | 'unavailable';
 }
-const path = 'v1/auth/phone-sign-in';
 
 function browserKey() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -26,7 +28,7 @@ function browserKey() {
     .replace(/=+$/, '');
 }
 
-type PhoneSignInProps<T> = { onOther: () => void } & (
+type PhoneSignInProps<T> = { onOther: () => void; recoveryMode?: boolean } & (
   | { enrollmentPhone: string; onEnrolled: () => void; onSession?: never }
   | {
       enrollmentPhone?: never;
@@ -35,49 +37,120 @@ type PhoneSignInProps<T> = { onOther: () => void } & (
     }
 );
 
+type Operation = 'request' | 'resend' | 'confirm' | 'register' | 'enroll';
+export type SessionSignInProps<T> = Extract<
+  PhoneSignInProps<T>,
+  { onSession: unknown }
+>;
+
 export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
-  const [phone, setPhone] = useState(props.enrollmentPhone ?? '+7');
+  return <SignInByCode {...props} channel="phone" />;
+}
+
+export function SignInByCode<T>(
+  props:
+    | (PhoneSignInProps<T> & { channel: 'phone' })
+    | (SessionSignInProps<T> & { channel: 'email' }),
+) {
+  const email = props.channel === 'email';
+  const path = email ? 'v1/auth/email-sign-in' : 'v1/auth/phone-sign-in';
+  const [destination, setDestination] = useState(
+    email ? '' : (props.enrollmentPhone ?? '+7'),
+  );
+  const [registrationRole, setRegistrationRole] = useState('buyer');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signupToken, setSignupToken] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [operation, setOperation] = useState<Operation | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const lock = useRef(false);
+  const [failedAction, setFailedAction] = useState<Operation | null>(null);
+  const [uncertainResend, setUncertainResend] = useState(false);
+  const lock = useRef<Operation | null>(null);
+  const epoch = useRef(0);
+  const destinationField = useRef<HTMLInputElement>(null);
+  const signupRole = useRef<HTMLSelectElement>(null);
+  const focusPhone = useRef(false);
+  const busy = operation !== null;
+  const committed =
+    operation === 'confirm' ||
+    operation === 'enroll' ||
+    operation === 'register';
   const browser = useRef('');
-  const requestKey = useRef('');
+  const lastSend = useRef<{
+    destination: string;
+    replaces: string | null;
+    key: string;
+  } | null>(null);
 
-  function resetChallenge() {
+  useEffect(() => {
+    const generation = epoch;
+    return () => {
+      generation.current++;
+    };
+  }, []);
+  useEffect(() => {
+    if (signupToken) signupRole.current?.focus();
+    else if (focusPhone.current && !challenge) {
+      focusPhone.current = false;
+      destinationField.current?.focus();
+    }
+  }, [signupToken, challenge]);
+  function resetChallenge(returnFocus = false) {
+    if (lock.current && lock.current !== 'request' && lock.current !== 'resend')
+      return;
+    epoch.current++;
+    lock.current = null;
+    setOperation(null);
+    focusPhone.current = returnFocus;
     setChallenge(null);
     setSignupToken('');
     setNotice('');
     setError('');
-    requestKey.current = '';
+    setFailedAction(null);
+    setUncertainResend(false);
+    if (props.enrollmentPhone || signupToken) lastSend.current = null;
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function execute(action: Operation, form?: FormData, code?: string) {
     if (lock.current) return;
-    const normalized = normalizePhoneInput(phone);
+    const normalized = email
+      ? destination.trim()
+      : normalizePhoneInput(destination);
     if (!normalized) {
-      setError(invalidPhoneInput);
+      setError(email ? 'Введите адрес электронной почты.' : invalidPhoneInput);
       return;
     }
-    const form = new FormData(event.currentTarget);
-    lock.current = true;
-    setBusy(true);
+    if (
+      action === 'resend' &&
+      (!challenge ||
+        !Number.isFinite(Date.parse(challenge.resendAfter)) ||
+        Date.parse(challenge.resendAfter) > Date.now())
+    )
+      return;
+    const request = ++epoch.current;
+    lock.current = action;
+    setOperation(action);
     setError('');
+    setFailedAction(null);
     try {
       browser.current ||= browserKey();
-      const proof = { phone: normalized, browserKey: browser.current };
-      if (challenge && props.onEnrolled) {
+      const proof = email
+        ? { email: normalized, browserKey: browser.current }
+        : { phone: normalized, browserKey: browser.current };
+      if (action === 'enroll' && challenge && props.onEnrolled && form) {
         await api(path + '/enroll', 'POST', {
           ...proof,
           challengeId: challenge.challengeId,
           code: form.get('code'),
           password: form.get('password'),
         });
-        props.onEnrolled();
-      } else if (signupToken && props.onSession) {
+        if (request === epoch.current) props.onEnrolled();
+      } else if (
+        action === 'register' &&
+        signupToken &&
+        props.onSession &&
+        form
+      ) {
         const session = await api<Session<T>>(path + '/register', 'POST', {
           ...proof,
           signupToken,
@@ -86,39 +159,102 @@ export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
           displayName: form.get('name'),
           role: form.get('role'),
         });
-        props.onSession(session);
-      } else if (challenge && props.onSession) {
-        const result = await api<Verification<T>>(path + '/confirm', 'POST', {
+        if (request === epoch.current) props.onSession(session);
+      } else if (action === 'confirm' && challenge && props.onSession && code) {
+        const confirmation = {
           ...proof,
           challengeId: challenge.challengeId,
-          code: form.get('code'),
-        });
+          code,
+        };
+        if (email) {
+          const session = await api<Session<T>>(path + '/confirm', 'POST', {
+            ...confirmation,
+            ...(props.recoveryMode
+              ? { existingOnly: true }
+              : registrationRole === 'buyer'
+                ? {}
+                : { registrationRole }),
+          });
+          if (request !== epoch.current) return;
+          setChallenge(null);
+          props.onSession(session);
+          return;
+        }
+        const result = await api<Verification<T>>(
+          path + '/confirm',
+          'POST',
+          confirmation,
+        );
+        if (request !== epoch.current) return;
+        setChallenge(null);
         if (result.kind === 'session') props.onSession(result);
-        else {
+        else if (props.recoveryMode) {
+          focusPhone.current = true;
+          lastSend.current = null;
+          setError(
+            'Восстановить доступ не удалось. Проверьте номер или выберите другой способ входа.',
+          );
+        } else {
           setSignupToken(result.signupToken);
           setNotice('Телефон подтверждён. Заполните профиль.');
         }
-      } else {
-        requestKey.current ||= crypto.randomUUID();
-        setPhone(normalized);
+      } else if (action === 'request' || action === 'resend') {
+        // Replaying a lost HTTP response must reuse the same key. Only an
+        // explicit resend for an acknowledged challenge starts another send.
+        if (
+          !lastSend.current ||
+          lastSend.current.destination !== normalized ||
+          (action === 'resend' &&
+            lastSend.current.replaces !== challenge!.challengeId)
+        ) {
+          lastSend.current = {
+            destination: normalized,
+            replaces: action === 'resend' ? challenge!.challengeId : null,
+            key: crypto.randomUUID(),
+          };
+        }
+        setDestination(normalized);
         const result = await api<Challenge>(path, 'POST', proof, {
-          idempotencyKey: requestKey.current,
+          idempotencyKey: lastSend.current.key,
         });
+        if (request !== epoch.current) return;
+        setUncertainResend(false);
         if (result.delivery === 'unavailable') {
-          requestKey.current = '';
-          setError(
-            'SMS сейчас недоступно. Попробуйте позже или войдите по почте.',
-          );
+          lastSend.current = null;
+          if (action === 'resend' && challenge)
+            setChallenge({ ...challenge, resendAfter: result.resendAfter });
+          setError('Сейчас не удалось отправить код. Попробуйте позже.');
         } else {
           setChallenge(result);
-          setNotice(
-            result.delivery === 'unknown'
-              ? 'Отправку не удалось подтвердить. Если SMS придёт, введите код.'
-              : 'Если SMS пришло, введите код из сообщения.',
-          );
+          if (props.onEnrolled)
+            setNotice(
+              result.delivery === 'unknown'
+                ? 'Отправку не удалось подтвердить. Если SMS придёт, введите код.'
+                : 'Если SMS пришло, введите код из сообщения.',
+            );
         }
       }
     } catch (failure) {
+      if (request !== epoch.current) return;
+      setFailedAction(action);
+      if (action === 'resend') {
+        const uncertain =
+          !(failure instanceof ApiError) ||
+          (failure.status >= 500 && failure.status !== 503);
+        setUncertainResend(uncertain);
+        if (
+          failure instanceof ApiError &&
+          failure.retryAfterSeconds &&
+          challenge
+        ) {
+          setChallenge({
+            ...challenge,
+            resendAfter: new Date(
+              Date.now() + failure.retryAfterSeconds * 1000,
+            ).toISOString(),
+          });
+        }
+      }
       if (failure instanceof ApiError && failure.status === 401)
         setError(
           props.enrollmentPhone
@@ -129,41 +265,87 @@ export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
         );
       else if (failure instanceof ApiError && failure.status === 429)
         setError('Слишком много запросов. Попробуйте позже.');
+      else if (
+        failure instanceof ApiError &&
+        failure.status === 503 &&
+        (action === 'request' || action === 'resend')
+      ) {
+        setError('Сейчас не удалось отправить код. Попробуйте позже.');
+      } else if (failure instanceof TypeError)
+        setError(
+          'Не удалось связаться с порталом. Проверьте подключение и попробуйте ещё раз.',
+        );
       else
         setError(
           failure instanceof Error ? failure.message : 'Попробуйте ещё раз.',
         );
     } finally {
-      lock.current = false;
-      setBusy(false);
+      if (request === epoch.current) {
+        lock.current = null;
+        setOperation(null);
+      }
     }
   }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    if (signupToken) void execute('register', form);
+    else if (challenge && props.onEnrolled) void execute('enroll', form);
+    else if (!challenge) void execute('request');
+  }
+  const codeDialog = Boolean(challenge && props.onSession);
 
   return (
     <>
       {props.enrollmentPhone ? (
         <h4>Подключить вход по SMS</h4>
       ) : (
-        <h1>Вход или регистрация</h1>
+        <h1>
+          {props.recoveryMode ? 'Восстановить доступ' : 'Вход или регистрация'}
+        </h1>
       )}
       <form className="account-form panel" onSubmit={submit}>
         <label>
-          Мобильный телефон
+          {email ? 'Email' : 'Мобильный телефон'}
           <input
-            type="tel"
-            autoComplete="tel"
-            value={phone}
+            ref={destinationField}
+            type={email ? 'email' : 'tel'}
+            autoComplete={email ? 'email' : 'tel'}
+            value={destination}
             disabled={
-              busy || Boolean(challenge) || Boolean(props.enrollmentPhone)
+              committed ||
+              Boolean(challenge) ||
+              Boolean(signupToken) ||
+              Boolean(props.enrollmentPhone)
             }
             required
             onChange={(event) => {
               resetChallenge();
-              setPhone(event.target.value);
+              setDestination(event.target.value);
             }}
           />
         </label>
-        {challenge && !signupToken && (
+        {email && !props.recoveryMode && !challenge && (
+          <details>
+            <summary>Роль при регистрации</summary>
+            <label>
+              Кто вы?
+              <select
+                value={registrationRole}
+                onChange={(event) => setRegistrationRole(event.target.value)}
+              >
+                <option value="buyer">Ищу недвижимость</option>
+                <option value="owner">Собственник</option>
+                <option value="agent">Агент</option>
+                <option value="agency">Агентство</option>
+                <option value="developer">Застройщик</option>
+              </select>
+            </label>
+            <p>Выбранная роль используется при создании аккаунта.</p>
+          </details>
+        )}
+        {challenge && props.onEnrolled && (
           <label>
             Код из SMS
             <input
@@ -194,7 +376,13 @@ export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
           <>
             <label>
               Кто вы?
-              <select name="role" defaultValue="" required disabled={busy}>
+              <select
+                ref={signupRole}
+                name="role"
+                defaultValue=""
+                required
+                disabled={busy}
+              >
                 <option value="" disabled>
                   Выберите роль
                 </option>
@@ -239,26 +427,56 @@ export default function PhoneSignIn<T>(props: PhoneSignInProps<T>) {
             </label>
           </>
         )}
-        <Button type="submit" disabled={busy}>
-          {signupToken
-            ? 'Создать аккаунт'
-            : challenge
-              ? props.enrollmentPhone
+        {!codeDialog && (
+          <Button type="submit" disabled={busy}>
+            {signupToken
+              ? 'Создать аккаунт'
+              : challenge
                 ? 'Подключить'
-                : 'Подтвердить код'
-              : 'Получить код'}
-        </Button>
-        {challenge && (
-          <Button disabled={busy} onClick={resetChallenge}>
+                : 'Получить код'}
+          </Button>
+        )}
+        {(signupToken || (challenge && props.onEnrolled)) && (
+          <Button disabled={busy} onClick={() => resetChallenge(true)}>
             Запросить новый код или изменить номер
           </Button>
         )}
-        <Button disabled={busy} onClick={props.onOther}>
+        <Button
+          disabled={committed}
+          onClick={() => {
+            if (
+              lock.current &&
+              lock.current !== 'request' &&
+              lock.current !== 'resend'
+            )
+              return;
+            resetChallenge();
+            props.onOther();
+          }}
+        >
           {props.enrollmentPhone ? 'Отмена' : 'Другой способ'}
         </Button>
         {notice && <p role="status">{notice}</p>}
-        {error && <p role="alert">{error}</p>}
+        {!codeDialog && error && <p role="alert">{error}</p>}
       </form>
+      {codeDialog && challenge && (
+        <CodeDialog
+          key={challenge.challengeId}
+          channel={props.channel}
+          destination={destination}
+          delivery={challenge.delivery ?? 'accepted'}
+          resendAfter={challenge.resendAfter}
+          expiresAt={challenge.expiresAt}
+          verifying={operation === 'confirm'}
+          sending={operation === 'resend'}
+          uncertainResend={uncertainResend}
+          error={error}
+          verificationFailed={failedAction === 'confirm'}
+          onConfirm={(code) => void execute('confirm', undefined, code)}
+          onResend={() => void execute('resend')}
+          onClose={() => resetChallenge(true)}
+        />
+      )}
     </>
   );
 }

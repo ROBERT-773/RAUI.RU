@@ -2188,6 +2188,9 @@ post /v1/commerce/webhook
 post /v1/auth/register
 post /v1/auth/login
 get /v1/auth/phone-sign-in/capabilities
+get /v1/auth/email-sign-in/capabilities
+post /v1/auth/email-sign-in
+post /v1/auth/email-sign-in/confirm
 post /v1/auth/phone-sign-in
 post /v1/auth/phone-sign-in/confirm
 post /v1/auth/phone-sign-in/register

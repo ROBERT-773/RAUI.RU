@@ -21,6 +21,30 @@ const user = {
   registration_approval_state: 'pending',
   registration_approval_reason: null,
 };
+
+test('sends a password change link to the verified email of the current profile on request', async () => {
+  vi.mocked(api).mockImplementation(async (path) =>
+    path === 'v1/auth/me'
+      ? { ...user, email_verified_at: 'now' }
+      : { accepted: true },
+  );
+  render(<AccountProfile />);
+  const action = await screen.findByRole('button', {
+    name: 'Установить или сменить пароль',
+  });
+  expect(api).not.toHaveBeenCalledWith(
+    'v1/auth/password-reset',
+    'POST',
+    expect.anything(),
+  );
+  fireEvent.click(action);
+  expect(
+    await screen.findByText(/Откройте письмо для смены пароля/),
+  ).toBeTruthy();
+  expect(api).toHaveBeenCalledWith('v1/auth/password-reset', 'POST', {
+    email: user.email,
+  });
+});
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();

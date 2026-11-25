@@ -40,6 +40,8 @@ const publicMutations = new Set([
   'v1/auth/phone-sign-in',
   'v1/auth/phone-sign-in/confirm',
   'v1/auth/phone-sign-in/register',
+  'v1/auth/email-sign-in',
+  'v1/auth/email-sign-in/confirm',
   'v1/auth/verification/email/confirm',
   'v1/auth/password-reset',
   'v1/auth/password-reset/confirm',
@@ -173,7 +175,9 @@ export async function api<T>(
         );
       }
       if (
-        path.startsWith('v1/auth/verification/phone/otp') &&
+        (path.startsWith('v1/auth/verification/phone/otp') ||
+          path === 'v1/auth/phone-sign-in' ||
+          path === 'v1/auth/email-sign-in') &&
         failure &&
         typeof failure === 'object' &&
         'code' in failure
@@ -196,6 +200,10 @@ export async function api<T>(
             phone_otp_rate_limited: {
               status: 429,
               message: 'Слишком много запросов SMS. Повторите запрос позже.',
+            },
+            email_sign_in_rate_limited: {
+              status: 429,
+              message: 'Слишком много запросов кода. Попробуйте позже.',
             },
           };
         const safe =
