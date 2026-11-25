@@ -13,12 +13,16 @@ test('a buyer returns to the same cabinet by public ID and password', async ({
   });
 
   await page.goto('/account');
+  const viewport = page.viewportSize();
+  if (viewport) await page.setViewportSize({ ...viewport, height: 360 });
   await page.getByLabel('Email', { exact: true }).fill('buyer@e2e.test');
   await page.getByLabel('Пароль', { exact: true }).fill('short');
-  await submit.click();
+  await page.getByLabel('Пароль', { exact: true }).press('Enter');
   const alert = page.locator('form').getByRole('alert');
   await expect(alert).toContainText('Проверьте адрес почты и пароль');
   await expect(alert).toBeInViewport();
+  await expect(alert).toBeFocused();
+  if (viewport) await page.setViewportSize(viewport);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
   await expect(alert).toHaveCount(0);
   await submit.click();

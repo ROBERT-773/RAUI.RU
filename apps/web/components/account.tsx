@@ -47,6 +47,9 @@ const inboxPrice = (minor: number) => {
 };
 const sessionExpired = (error: unknown) =>
   error instanceof Error && 'status' in error && error.status === 401;
+function focusPasswordNotice(element: HTMLParagraphElement | null) {
+  element?.focus();
+}
 const approved = (user: AccountUser) =>
   !user.registration_approval_state ||
   user.registration_approval_state === 'approved';
@@ -503,6 +506,17 @@ export default function Account({
               />
             </label>
           )}
+          {notice && (
+            <p
+              ref={focusPasswordNotice}
+              tabIndex={-1}
+              className="password-form-notice"
+              id="password-form-notice"
+              role="alert"
+            >
+              {notice}
+            </p>
+          )}
           <label>
             Пароль
             <input
@@ -518,15 +532,6 @@ export default function Account({
           <Button onClick={() => setPasswordVisible(!passwordVisible)}>
             {passwordVisible ? 'Скрыть пароль' : 'Показать пароль'}
           </Button>
-          {notice && (
-            <p
-              className="password-form-notice"
-              id="password-form-notice"
-              role="alert"
-            >
-              {notice}
-            </p>
-          )}
           <Button
             className="primary"
             type="submit"

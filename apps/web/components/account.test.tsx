@@ -143,6 +143,7 @@ test.each([
     fireEvent.click(screen.getByRole('button', { name: /^Войти$/ }));
     const alert = await screen.findByRole('alert');
     expect(password.form?.contains(alert)).toBe(true);
+    expect(document.activeElement).toBe(alert);
     expect(alert.textContent).toContain('Проверьте ' + hint + ' и пароль');
     expect(password.getAttribute('aria-describedby')).toBe(alert.id);
     expect(password.minLength).toBeLessThanOrEqual(1);
