@@ -47,16 +47,24 @@ async function prepareDraftPreview(
   await expect(
     page.getByRole('button', { name: 'Отправить на модерацию', exact: true }),
   ).toHaveCount(0);
-  await draft
-    .getByLabel('Описание', { exact: true })
-    .fill('Тестовое объявление для проверки публикации и поиска.');
+  const savedDescription =
+    'Тестовое объявление для проверки публикации и поиска.';
+  await expect(draft.getByLabel('Описание', { exact: true })).toBeEnabled();
+  await draft.getByLabel('Описание', { exact: true }).fill(savedDescription);
   const descriptionSaved = page.waitForResponse((value) =>
     endpoint(value, 'PATCH', `/api/v1/listings/${listingId}`),
   );
   await draft
     .getByRole('button', { name: 'Сохранить изменения', exact: true })
     .click();
-  expect((await descriptionSaved).status()).toBe(200);
+  const persistedDescription = await descriptionSaved;
+  expect(persistedDescription.status()).toBe(200);
+  expect((await persistedDescription.json()).description).toBe(
+    savedDescription,
+  );
+  await expect(
+    page.getByText('Изменения сохранены.', { exact: true }),
+  ).toBeVisible();
   for (let number = 1; number <= 5; number++) {
     await expect(photoInput).toBeEnabled();
     const uploaded = page.waitForResponse((value) =>
@@ -111,9 +119,24 @@ async function prepareDraftPreview(
   await draft
     .getByRole('button', { name: 'Обновить состояние', exact: true })
     .click();
-  await draft
-    .getByRole('button', { name: 'Перейти к предпросмотру', exact: true })
-    .click();
+  await expect(
+    page.getByText('Состояние обновлено.', { exact: true }),
+  ).toBeVisible();
+  const openPreview = draft.getByRole('button', {
+    name: 'Перейти к предпросмотру',
+    exact: true,
+  });
+  await expect(draft.getByLabel('Описание', { exact: true })).toHaveValue(
+    savedDescription,
+  );
+  await expect(
+    draft.locator('p').filter({
+      hasText:
+        /Для отправки нужно|Сохраните изменения перед отправкой|Перед отправкой сохраните описание|Заполните обязательные характеристики/,
+    }),
+  ).toHaveText([]);
+  await expect(openPreview).toBeEnabled();
+  await openPreview.click();
   const preview = page.getByRole('region', {
     name: 'Сохранённые данные объявления',
     exact: true,

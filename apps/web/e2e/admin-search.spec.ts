@@ -125,12 +125,33 @@ test('administrator finds the same account by phone and public ID and opens a pu
   await submit(page, 'listings', 'Несуществующая улица E2E');
   await expect(results.getByText(/^Объявления не найдены\./)).toBeVisible();
   const matches = await submit(page, 'listings', address);
-  const items = (await matches.json()).items as {
+  type AddressMatch = {
     id: string;
     title: string;
     publiclyVisible: boolean;
-  }[];
-  const match = items.find((item) => item.title === apartment);
+  };
+  type AddressPage = { items: AddressMatch[]; nextCursor: string | null };
+  let batch = (await matches.json()) as AddressPage;
+  let match = batch.items.find((item) => item.title === apartment);
+  const seen = new Set<string>();
+  while (!match && batch.nextCursor) {
+    const after = batch.nextCursor;
+    expect(seen.has(after)).toBe(false);
+    seen.add(after);
+    const next = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === apiPath + '/listings' &&
+        response.request().method() === 'POST' &&
+        response.request().postDataJSON().after === after,
+    );
+    await page
+      .getByRole('button', { name: 'Показать ещё', exact: true })
+      .click();
+    const response = await next;
+    expect(response.status()).toBe(200);
+    batch = (await response.json()) as AddressPage;
+    match = batch.items.find((item) => item.title === apartment);
+  }
   expect(match?.publiclyVisible).toBe(true);
   const row = results.getByRole('row').filter({
     has: page.getByRole('heading', { name: apartment, exact: true }),
