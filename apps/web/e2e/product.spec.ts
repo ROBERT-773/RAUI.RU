@@ -27,6 +27,54 @@ async function login(page: Page) {
 }
 
 type Bounds = [number, number, number, number];
+test('disabling a listing subscription in the cabinet takes precedence over an older open form', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  const card = await context.newPage();
+  await card.goto('/search');
+  await card
+    .getByRole('link', { name: 'Квартира 2 комнаты', exact: true })
+    .click();
+  const panel = card.getByRole('region', { name: 'Подписка на объявление' });
+  const open = panel.getByRole('button', { name: 'Подписаться на изменения' });
+  const consent = panel.getByRole('checkbox', {
+    name: /Согласен получать выбранные/,
+  });
+  const save = panel.getByRole('button', { name: 'Сохранить подписку' });
+  await open.click();
+  await consent.check();
+  await save.click();
+  await expect(panel.getByText(/Настройки подписки сохранены/)).toBeVisible();
+  await open.click();
+  await consent.check();
+  await page.getByRole('button', { name: 'Подписки', exact: true }).click();
+  const subscriptions = page.getByRole('region', {
+    name: 'Подписки на объявления',
+  });
+  const cardPath = new URL(card.url()).pathname;
+  const row = subscriptions.locator('article').filter({
+    has: page.locator(`a[href="${cardPath}"]`),
+  });
+  await row.getByRole('button', { name: 'Отключить подписку' }).click();
+  await expect(row).toHaveCount(0);
+  await save.click();
+  await expect(
+    panel.getByText(/Подписка изменилась в другой вкладке/),
+  ).toBeVisible();
+  await panel.getByRole('button', { name: 'Обновить настройки' }).click();
+  await expect(panel.getByText(/Подписка отключена/)).toBeVisible();
+  await expect(consent).not.toBeChecked();
+  await consent.check();
+  await save.click();
+  await expect(panel.getByText(/Настройки подписки сохранены/)).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: 'Подписки', exact: true }).click();
+  await row.getByRole('button', { name: 'Отключить подписку' }).click();
+  await expect(row).toHaveCount(0);
+  await card.close();
+});
 type SavedRow = { id: string; name: string; definition: unknown };
 const centerX = (b: Bounds) => (b[0] + b[2]) / 2;
 const width = (b: Bounds) => b[2] - b[0];

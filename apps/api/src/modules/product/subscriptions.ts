@@ -30,21 +30,43 @@ export class ListingSubscriptions {
     const listingId = parse(uuid, id);
     const input = parse(listingSubscriptionSchema, body);
     if (!(await this.access.visible(listingId))) throw new NotFoundException();
-    const [row] = await this.db.rows(
-      `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(user_id,listing_id) DO UPDATE SET events=EXCLUDED.events,channels=EXCLUDED.channels,frequency=EXCLUDED.frequency,consent_version=EXCLUDED.consent_version,consented_at=now(),disabled_at=NULL,version=listing_subscriptions.version+1,updated_at=now()
-       RETURNING listing_id,events,channels,frequency,version,consented_at`,
-      [
-        actor.id,
-        listingId,
-        input.events,
-        input.channels,
-        input.frequency,
-        listingSubscriptionConsentVersion,
-      ],
-    );
+    const args = [
+      actor.id,
+      listingId,
+      input.events,
+      input.channels,
+      input.frequency,
+      listingSubscriptionConsentVersion,
+    ];
+    const columns =
+      ' RETURNING listing_id,events,channels,frequency,version,consented_at';
+    const [row] =
+      input.version === 0
+        ? await this.db.rows(
+            `INSERT INTO listing_subscriptions(user_id,listing_id,events,channels,frequency,consent_version)
+           VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,listing_id) DO NOTHING` +
+              columns,
+            args,
+          )
+        : await this.db.rows(
+            `UPDATE listing_subscriptions SET events=$3,channels=$4,frequency=$5,consent_version=$6,
+             consented_at=now(),disabled_at=NULL,version=version+1,updated_at=now()
+           WHERE user_id=$1 AND listing_id=$2 AND version=$7` + columns,
+            [...args, input.version],
+          );
+    if (!row) throw new ConflictException('Stale subscription version');
     return row;
+  }
+
+  async get(actor: Actor, id: unknown) {
+    const listingId = parse(uuid, id);
+    if (!(await this.access.visible(listingId))) throw new NotFoundException();
+    const [row] = await this.db.rows(
+      `SELECT version,disabled_at IS NULL AS enabled,events,channels,frequency
+       FROM listing_subscriptions WHERE user_id=$1 AND listing_id=$2`,
+      [actor.id, listingId],
+    );
+    return row ?? { version: 0 };
   }
 
   async disable(actor: Actor, id: unknown, body: unknown) {

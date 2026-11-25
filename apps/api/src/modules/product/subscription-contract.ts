@@ -13,6 +13,7 @@ export const listingSubscriptionSchema = z
       .min(1)
       .max(2),
     frequency: z.enum(['immediate', 'daily']),
+    version: z.number().int().min(0).max(2147483647).default(0),
     consent: z.literal(true),
   })
   .strict()

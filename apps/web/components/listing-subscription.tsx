@@ -1,19 +1,67 @@
 'use client';
 import { useRef, useState } from 'react';
 import { Button } from '@raui/ui';
-import { api } from '../lib/client';
+import Link from 'next/link';
+import { api, ApiError } from '../lib/client';
+
+type SubscriptionSettings = {
+  version: number;
+  enabled?: boolean;
+  events?: string[];
+  channels?: string[];
+  frequency?: 'daily' | 'immediate';
+};
 
 export default function ListingSubscription({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [settings, setSettings] = useState<SubscriptionSettings | null>(null);
+  const [needsLogin, setNeedsLogin] = useState(false);
   const lock = useRef(false);
+  const endpoint = 'v1/account/listing-subscriptions/' + id;
+  async function loadSettings() {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setSettings(null);
+    setNotice('');
+    setNeedsLogin(false);
+    try {
+      setSettings(await api<SubscriptionSettings>(endpoint));
+    } catch (error) {
+      setNeedsLogin(error instanceof ApiError && error.status === 401);
+      setNotice((error as Error).message);
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
   return (
     <section aria-label="Подписка на объявление">
-      <Button onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <Button
+        onClick={() => {
+          setOpen(!open);
+          setNotice('');
+          if (!open) void loadSettings();
+        }}
+        disabled={busy}
+        aria-expanded={open}
+      >
         Подписаться на изменения
       </Button>
-      {open && (
+      {open &&
+        !settings &&
+        (busy ? (
+          <p role="status">Загружаем настройки подписки…</p>
+        ) : needsLogin ? (
+          <Link href="/account">Войти в кабинет</Link>
+        ) : (
+          <Button onClick={() => void loadSettings()}>
+            Обновить настройки
+          </Button>
+        ))}
+      {open && settings && (
         <form
           onSubmit={async (event) => {
             event.preventDefault();
@@ -33,23 +81,37 @@ export default function ListingSubscription({ id }: { id: string }) {
             setBusy(true);
             setNotice('');
             try {
-              await api('v1/account/listing-subscriptions/' + id, 'POST', {
+              await api(endpoint, 'POST', {
                 events,
                 channels,
                 frequency: data.get('frequency'),
                 consent: true,
+                version: settings.version,
               });
+              setOpen(false);
+              setSettings(null);
               setNotice(
                 'Настройки подписки сохранены. Доставка зависит от подключения канала и настроек аккаунта.',
               );
             } catch (error) {
-              setNotice((error as Error).message);
+              if (error instanceof ApiError && error.status === 409) {
+                setSettings(null);
+                setNotice(
+                  'Подписка изменилась в другой вкладке. Обновите настройки и подтвердите выбор ещё раз.',
+                );
+              } else setNotice((error as Error).message);
             } finally {
               lock.current = false;
               setBusy(false);
             }
           }}
         >
+          {settings.enabled === false && (
+            <p>
+              Подписка отключена. Чтобы возобновить её, выберите уведомления и
+              подтвердите согласие.
+            </p>
+          )}
           <fieldset disabled={busy}>
             <legend>Какие изменения вас интересуют?</legend>
             <label>
@@ -57,7 +119,7 @@ export default function ListingSubscription({ id }: { id: string }) {
                 type="checkbox"
                 name="events"
                 value="price_drop"
-                defaultChecked
+                defaultChecked={settings.events?.includes('price_drop') ?? true}
               />
               Снижение цены
             </label>
@@ -66,7 +128,9 @@ export default function ListingSubscription({ id }: { id: string }) {
                 type="checkbox"
                 name="events"
                 value="availability"
-                defaultChecked
+                defaultChecked={
+                  settings.events?.includes('availability') ?? true
+                }
               />
               Изменение доступности
             </label>
@@ -78,18 +142,27 @@ export default function ListingSubscription({ id }: { id: string }) {
                 type="checkbox"
                 name="channels"
                 value="in_app"
-                defaultChecked
+                defaultChecked={settings.channels?.includes('in_app') ?? true}
               />
               В аккаунте
             </label>
             <label>
-              <input type="checkbox" name="channels" value="email" />
+              <input
+                type="checkbox"
+                name="channels"
+                value="email"
+                defaultChecked={settings.channels?.includes('email') ?? false}
+              />
               На подтверждённый email
             </label>
           </fieldset>
           <label>
             Частота уведомлений
-            <select name="frequency" defaultValue="daily" disabled={busy}>
+            <select
+              name="frequency"
+              defaultValue={settings.frequency ?? 'daily'}
+              disabled={busy}
+            >
               <option value="daily">Ежедневная подборка</option>
               <option value="immediate">Сразу</option>
             </select>

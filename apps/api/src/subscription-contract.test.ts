@@ -31,6 +31,8 @@ test('listing subscription requires explicit consent, events, channel and freque
     { events: ['marketing'] },
     { userId: 'another-account' },
     { frequency: 'weekly' },
+    { version: -1 },
+    { version: 1.2 },
   ])
     assert.equal(
       listingSubscriptionSchema.safeParse({ ...preference, ...override })
@@ -60,7 +62,10 @@ test('OpenAPI exposes explicit subscription consent and version-protected disabl
     openapi: '3.0.0',
     info: { title: 'fixture', version: '1' },
     paths: {
-      '/v1/account/listing-subscriptions/{id}': { post: { responses: {} } },
+      '/v1/account/listing-subscriptions/{id}': {
+        get: { responses: {} },
+        post: { responses: {} },
+      },
       '/v1/account/listing-subscriptions/{id}/disable': {
         post: { responses: {} },
       },
@@ -72,6 +77,16 @@ test('OpenAPI exposes explicit subscription consent and version-protected disabl
   const disable =
     document.paths['/v1/account/listing-subscriptions/{id}/disable']!.post!;
   const body = JSON.stringify(subscribe.requestBody);
+  assert.match(body, /version/);
+  assert.ok(subscribe.responses['409']);
+  assert.match(
+    JSON.stringify(
+      document.paths['/v1/account/listing-subscriptions/{id}']!.get!.responses[
+        '200'
+      ],
+    ),
+    /enabled/,
+  );
   assert.match(body, /consent/);
   assert.match(body, /price_drop/);
   assert.match(body, /frequency/);
