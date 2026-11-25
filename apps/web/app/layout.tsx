@@ -21,28 +21,37 @@ export default async function Layout({ children }: { children: ReactNode }) {
           К содержимому
         </a>
         <header className="site-header">
-          {/* Use native fragment navigation when returning from the homepage map. */}
-          <a href="/#page-top" aria-label="RAUI.RU — главная">
-            <BrandLogo />
-          </a>
           <nav aria-label="Основная навигация">
-            <Link href="/search">Недвижимость</Link>
-            <AccountEntryLink href="/account?tab=favorite">
-              Избранное
-            </AccountEntryLink>
-            <AccountEntryLink href="/account?tab=messages">
-              Сообщения
-            </AccountEntryLink>
-            <AccountEntryLink href="/account?tab=notifications">
-              Уведомления
+            {/* Use native fragment navigation when returning from the homepage map. */}
+            <a
+              className="site-header-brand"
+              href="/#page-top"
+              aria-label="RAUI.RU — главная"
+            >
+              <BrandLogo />
+            </a>
+            <AccountEntryLink href="/account" className="site-header-login">
+              Войти в кабинет
             </AccountEntryLink>
             <AccountEntryLink
               href="/account/listings#new-listing"
               intent="publish"
+              className="site-header-publish"
             >
               Разместить объявление
             </AccountEntryLink>
-            <AccountEntryLink href="/account">Войти в кабинет</AccountEntryLink>
+            <div className="site-header-links">
+              <Link href="/search">Недвижимость</Link>
+              <AccountEntryLink href="/account?tab=favorite">
+                Избранное
+              </AccountEntryLink>
+              <AccountEntryLink href="/account?tab=messages">
+                Сообщения
+              </AccountEntryLink>
+              <AccountEntryLink href="/account?tab=notifications">
+                Уведомления
+              </AccountEntryLink>
+            </div>
           </nav>
         </header>
         <div className="site-sections">

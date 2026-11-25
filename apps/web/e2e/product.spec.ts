@@ -205,6 +205,7 @@ test('bounded and maximum-only room/area ranges survive submit and intentional e
       )
       .toEqual(attributes);
   }
+  await page.getByText('Все фильтры', { exact: true }).click();
   await page.getByLabel('Комнат от', { exact: true }).fill('0');
   await page.getByLabel('Площадь до, м²', { exact: true }).fill('');
   const changed = page.waitForResponse(
