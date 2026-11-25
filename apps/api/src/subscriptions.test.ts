@@ -70,3 +70,16 @@ test('disable rejects another account and stale versions without mutation', asyn
     );
   }
 });
+
+test('saving a stale version reports a conflict when the conditional write changes no row', async () => {
+  const db = {
+    rows: async () => [],
+  } as unknown as Database;
+  const service = new ListingSubscriptions(db, {
+    visible: async () => true,
+  } as unknown as ListingAccess);
+  await assert.rejects(
+    service.subscribe(actor, id, { ...preferences, version: 1 }),
+    ConflictException,
+  );
+});

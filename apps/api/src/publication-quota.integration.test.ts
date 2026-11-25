@@ -199,6 +199,68 @@ test(
     }
     try {
       await t.test(
+        'a stale preference form cannot resume an unsubscribed public listing',
+        async () => {
+          const owner = await account();
+          const buyer = await account('buyer');
+          const other = await account('buyer');
+          const { listing } = await offer(owner, 'published');
+          const path = '/account/listing-subscriptions/' + listing;
+          const preferences = {
+            events: ['price_drop'],
+            channels: ['in_app'],
+            frequency: 'daily',
+            consent: true,
+          };
+          const state = async () => (await call(path, buyer)).json();
+          assert.deepEqual(await state(), { version: 0 });
+          const creates = await Promise.all([
+            call(path, buyer, 'POST', preferences),
+            call(path, buyer, 'POST', { ...preferences, version: 0 }),
+          ]);
+          assert.deepEqual(creates.map((r) => r.status).sort(), [201, 409]);
+          assert.deepEqual(await (await call(path, other)).json(), {
+            version: 0,
+          });
+          assert.equal(
+            (await call(path + '/disable', buyer, 'POST', { version: 1 }))
+              .status,
+            201,
+          );
+          for (const stale of [preferences, { ...preferences, version: 1 }])
+            assert.equal((await call(path, buyer, 'POST', stale)).status, 409);
+          assert.deepEqual(await state(), {
+            version: 2,
+            enabled: false,
+            events: preferences.events,
+            channels: preferences.channels,
+            frequency: 'daily',
+          });
+          assert.equal(
+            (await call(path, other, 'POST', { ...preferences, version: 2 }))
+              .status,
+            409,
+          );
+          const updates = await Promise.all(
+            ['daily', 'immediate'].map((frequency) =>
+              call(path, buyer, 'POST', {
+                ...preferences,
+                frequency,
+                version: 2,
+              }),
+            ),
+          );
+          assert.deepEqual(updates.map((r) => r.status).sort(), [201, 409]);
+          const latest = (await state()) as {
+            version: number;
+            enabled: boolean;
+          };
+          assert.equal(latest.version, 3);
+          assert.equal(latest.enabled, true);
+          assert.equal((await call(path)).status, 401);
+        },
+      );
+      await t.test(
         'own snapshot counts all published listings and isolates sellers',
         async () => {
           const owner = await account(),

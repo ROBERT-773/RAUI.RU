@@ -1241,6 +1241,63 @@ export function enrichOpenApi(document: OpenAPIObject) {
               'Listing unavailable for subscription, or subscription not owned by current account',
           };
         }
+        if (operationId === 'get /v1/account/listing-subscriptions/{id}') {
+          operation.responses['200'] = {
+            description:
+              'Own saved settings including a disabled subscription, or version zero for a first subscription.',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      required: ['version'],
+                      additionalProperties: false,
+                      properties: { version: { type: 'integer', enum: [0] } },
+                    },
+                    {
+                      type: 'object',
+                      required: [
+                        'version',
+                        'enabled',
+                        'events',
+                        'channels',
+                        'frequency',
+                      ],
+                      properties: {
+                        version: { type: 'integer', minimum: 1 },
+                        enabled: { type: 'boolean' },
+                        events: {
+                          type: 'array',
+                          items: {
+                            type: 'string',
+                            enum: ['price_drop', 'availability'],
+                          },
+                        },
+                        channels: {
+                          type: 'array',
+                          items: { type: 'string', enum: ['in_app', 'email'] },
+                        },
+                        frequency: {
+                          type: 'string',
+                          enum: ['immediate', 'daily'],
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          };
+        }
+        if (operationId === 'post /v1/account/listing-subscriptions/{id}') {
+          operation.description +=
+            ' Version zero (also the default for older clients) creates once. Editing or explicitly resuming a subscription requires its current version.';
+          operation.responses['409'] = {
+            description:
+              'Preferences have changed. Reload the form and confirm the settings again.',
+          };
+        }
         if (path.endsWith('/disable')) {
           operation.responses['409'] = {
             description:
