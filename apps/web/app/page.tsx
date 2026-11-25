@@ -64,7 +64,7 @@ export default async function Home({
     <main id="content" className="home-page">
       <section className="home-hero" aria-labelledby="home-title">
         <div className="home-hero-content">
-          <h1 id="home-title">Найдите свою недвижимость</h1>
+          <h1 id="home-title">Доска объявлений недвижимости</h1>
           {regions.length > 0 && (
             <details className="home-region-picker" key={regionCode}>
               <summary

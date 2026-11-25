@@ -47,7 +47,8 @@
 .table summary {
   cursor: pointer;
 }
-.mobile {
+.mobile,
+.compactStatus {
   display: none;
 }
 @media (max-width: 700px) {
@@ -62,14 +63,34 @@
     display: block;
   }
   .table {
-    table-layout: fixed;
     font-size: 0.875rem;
   }
   .table :is(th, td) {
     padding: 0.5rem 0.25rem;
     overflow-wrap: anywhere;
   }
+  .table td:last-child {
+    overflow-wrap: normal;
+  }
   .table th:first-child {
     width: 41%;
+  }
+}
+
+@media (max-width: 30rem) {
+  .table .statusColumn {
+    display: none;
+  }
+  .table th:first-child {
+    width: 54%;
+  }
+  .table th .compactStatus {
+    display: inline;
+  }
+  .table td .compactStatus {
+    display: block;
+    margin-top: 0.25rem;
+    color: #435b6d;
+    overflow-wrap: normal;
   }
 }

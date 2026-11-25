@@ -1,6 +1,12 @@
 'use client';
 import { Button } from '@raui/ui';
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import Link from 'next/link';
 import type {
   AccountNotification,
@@ -24,7 +30,7 @@ import {
   clearFeedbackDraft,
   resumeFeedbackAfterLogin,
 } from '../lib/feedback-draft';
-interface AccountUser {
+export interface AccountUser {
   id: string;
   role: string;
   display_name: string;
@@ -84,6 +90,10 @@ export default function Account({
   emailAvailable = false,
   resetLinkAvailable = false,
   recoverAccess = false,
+  compactEntry = false,
+  entryTitle,
+  onAuthenticated,
+  renderEntry,
 }: {
   continueListing?: boolean;
   continueFeedback?: boolean;
@@ -93,7 +103,16 @@ export default function Account({
   emailAvailable?: boolean;
   resetLinkAvailable?: boolean;
   recoverAccess?: boolean;
+  compactEntry?: boolean;
+  entryTitle?: string;
+  onAuthenticated?: (user: AccountUser) => void;
+  renderEntry?: (content: ReactNode) => ReactNode;
 } = {}) {
+  const identifierEntry = compactEntry && !recoverAccess;
+  const externalAccount = Boolean(onAuthenticated);
+  const notifyAuthenticated = useEffectEvent((sessionUser: AccountUser) =>
+    onAuthenticated?.(sessionUser),
+  );
   const [user, setUser] = useState<AccountUser | null>(null),
     [profileOpen, setProfileOpen] = useState(initialContacts),
     [checking, setChecking] = useState(true),
@@ -101,6 +120,7 @@ export default function Account({
     [notice, setNotice] = useState(''),
     [register, setRegister] = useState(false),
     [loginById, setLoginById] = useState(false),
+    [identifier, setIdentifier] = useState(''),
     [signInMethod, setSignInMethod] = useState<
       'phone' | 'email' | 'password' | 'recovery'
     >(
@@ -108,7 +128,7 @@ export default function Account({
         ? 'recovery'
         : smsAvailable
           ? 'phone'
-          : emailAvailable
+          : identifierEntry || emailAvailable
             ? 'email'
             : 'password',
     ),
@@ -123,7 +143,7 @@ export default function Account({
     [cursor, setCursor] = useState<string | null>(null),
     [messageCursor, setMessageCursor] = useState<string | null>(null),
     [notificationEnabled, setNotificationEnabled] = useState(true);
-  const focusAfterCode = useRef(false);
+  const focusAfterCode = useRef(compactEntry && !externalAccount);
   const identityEpoch = useRef(0);
   const collectionRequest = useRef(0);
   const navigationEpoch = useRef(0);
@@ -142,6 +162,9 @@ export default function Account({
   }
   const feedbackUser = continueFeedback ? user?.id : undefined;
   useEffect(() => {
+    if (externalAccount && user) notifyAuthenticated(user);
+  }, [externalAccount, user]);
+  useEffect(() => {
     if (feedbackUser) resumeFeedbackAfterLogin(feedbackUser);
   }, [feedbackUser]);
   function clearPrivateState() {
@@ -151,6 +174,8 @@ export default function Account({
     setNotice('');
     setRegister(false);
     setLoginById(false);
+    setIdentifier('');
+    if (identifierEntry) setSignInMethod(smsAvailable ? 'phone' : 'email');
     setItems([]);
     setSaved([]);
     setThreads([]);
@@ -169,7 +194,7 @@ export default function Account({
       .then((u) => {
         if (epoch !== identityEpoch.current) return;
         setUser(u);
-        if (approved(u)) void load(initialTab);
+        if (approved(u) && !externalAccount) void load(initialTab);
       })
       .catch(() => {})
       .finally(() => {
@@ -178,7 +203,7 @@ export default function Account({
     return () => {
       epochRef.current++;
     };
-  }, [initialTab]);
+  }, [initialTab, externalAccount]);
   async function load(t: Tab, after?: string) {
     if (t === 'subscriptions') return;
     const epoch = identityEpoch.current;
@@ -321,19 +346,62 @@ export default function Account({
       else setNotice((error as Error).message);
     }
   }
+  function guestEntry(content: ReactNode) {
+    const entry = compactEntry ? (
+      <section className="raui-auth-surface">{content}</section>
+    ) : (
+      content
+    );
+    return renderEntry ? renderEntry(entry) : entry;
+  }
+  const recoveryHref =
+    smsAvailable || emailAvailable
+      ? '/account?action=recover'
+      : '/account/forgot-password';
+  function openPassword(value: string, registering = false) {
+    setIdentifier(value);
+    setRegister(registering);
+    setLoginById(!registering && !value.includes('@'));
+    setPasswordVisible(false);
+    setNotice('');
+    setSignInMethod('password');
+  }
+  function changeSignInMethod() {
+    if (recoverAccess) setSignInMethod('recovery');
+    else if (identifierEntry)
+      setSignInMethod(signInMethod === 'phone' ? 'email' : 'phone');
+    else setSignInMethod('password');
+  }
   if (checking) return <p role="status">Проверяем аккаунт…</p>;
+  if (user && externalAccount) return <p role="status">Открываем кабинет…</p>;
   if (feedbackUser) return <p role="status">Возвращаемся к предложению…</p>;
   if (!user && signInMethod === 'recovery')
-    return (
-      <section className="panel">
+    return guestEntry(
+      <section className={compactEntry ? undefined : 'panel'}>
         <h1>Восстановить доступ</h1>
         <p>Куда отправить код для входа в ваш кабинет?</p>
         <div className="actions">
           {emailAvailable && (
-            <Button onClick={() => setSignInMethod('email')}>На почту</Button>
+            <Button
+              className={compactEntry ? 'primary' : undefined}
+              onClick={() => setSignInMethod('email')}
+            >
+              На почту
+            </Button>
           )}
           {smsAvailable && (
-            <Button onClick={() => setSignInMethod('phone')}>На телефон</Button>
+            <Button
+              className={
+                compactEntry
+                  ? emailAvailable
+                    ? 'auth-secondary'
+                    : 'primary'
+                  : undefined
+              }
+              onClick={() => setSignInMethod('phone')}
+            >
+              На телефон
+            </Button>
           )}
           {resetLinkAvailable && (
             <Link href="/account/forgot-password?mode=password">
@@ -342,17 +410,30 @@ export default function Account({
           )}
           <Link href="/account">Вернуться ко входу</Link>
         </div>
-      </section>
+      </section>,
     );
   if (!user && (signInMethod === 'phone' || signInMethod === 'email')) {
     const CodeSignIn =
       signInMethod === 'phone'
         ? PhoneSignIn<AccountUser>
         : EmailCodeSignIn<AccountUser>;
-    return (
+    return guestEntry(
       <CodeSignIn
+        compactEntry={compactEntry}
+        entryTitle={entryTitle}
+        {...(identifierEntry &&
+          signInMethod === 'email' && {
+            identifierOptions: {
+              initialValue: identifier,
+              emailAvailable,
+              smsAvailable,
+              recoveryHref,
+              onPassword: openPassword,
+              onRegister: (value: string) => openPassword(value, true),
+            },
+          })}
         recoveryMode={recoverAccess}
-        onOther={() => setSignInMethod(recoverAccess ? 'recovery' : 'password')}
+        onOther={changeSignInMethod}
         onSession={({
           user: next,
           csrfToken,
@@ -372,17 +453,23 @@ export default function Account({
             setNotice(
               'Аккаунт создан. Запросите подтверждение почты повторно в профиле.',
             );
-          if (approved(next)) void load(initialTab);
+          if (approved(next) && !externalAccount) void load(initialTab);
         }}
-      />
+      />,
     );
   }
   if (!user)
-    return (
+    return guestEntry(
       <>
-        <h1>{register ? 'Создать аккаунт' : 'Войти в аккаунт'}</h1>
+        <h1>
+          {register
+            ? 'Создать аккаунт'
+            : identifierEntry
+              ? 'Введите пароль'
+              : 'Войти в аккаунт'}
+        </h1>
         <form
-          className="account-form panel"
+          className={compactEntry ? 'account-form' : 'account-form panel'}
           aria-busy={passwordSubmitting}
           onChange={() => setNotice('')}
           onSubmit={async (e) => {
@@ -427,7 +514,8 @@ export default function Account({
                 setNotice(
                   'Аккаунт создан. Не удалось подтвердить отправку письма. Запросите письмо повторно в профиле.',
                 );
-              if (approved(result.user)) void load(initialTab);
+              if (approved(result.user) && !externalAccount)
+                void load(initialTab);
             } catch (error) {
               if (epoch !== identityEpoch.current) return;
               setNotice(
@@ -481,7 +569,17 @@ export default function Account({
               </label>
             </>
           )}
-          {loginById && !register ? (
+          {identifierEntry && !register ? (
+            <>
+              <p className="auth-identifier">{identifier}</p>
+              <input
+                type="hidden"
+                name={loginById ? 'publicId' : 'email'}
+                autoComplete="username"
+                value={identifier}
+              />
+            </>
+          ) : loginById && !register ? (
             <label key="publicId">
               ID пользователя
               <input
@@ -501,6 +599,11 @@ export default function Account({
                 name="email"
                 type="email"
                 autoComplete="email"
+                defaultValue={
+                  identifierEntry && identifier.includes('@')
+                    ? identifier
+                    : undefined
+                }
                 readOnly={passwordSubmitting}
                 required
               />
@@ -523,13 +626,17 @@ export default function Account({
               name="password"
               type={passwordVisible ? 'text' : 'password'}
               autoComplete={register ? 'new-password' : 'current-password'}
+              autoFocus={identifierEntry && !register}
               minLength={register ? 12 : undefined}
               aria-describedby={notice ? 'password-form-notice' : undefined}
               readOnly={passwordSubmitting}
               required
             />
           </label>
-          <Button onClick={() => setPasswordVisible(!passwordVisible)}>
+          <Button
+            className={compactEntry ? 'auth-secondary' : undefined}
+            onClick={() => setPasswordVisible(!passwordVisible)}
+          >
             {passwordVisible ? 'Скрыть пароль' : 'Показать пароль'}
           </Button>
           <Button
@@ -547,64 +654,78 @@ export default function Account({
         {!register && (
           <p>
             <Link
-              href={
-                smsAvailable || emailAvailable
-                  ? '/account?action=recover'
-                  : '/account/forgot-password'
-              }
+              className={compactEntry ? 'auth-secondary' : undefined}
+              href={recoveryHref}
             >
               Забыли пароль?
             </Link>
           </p>
         )}
-        {!register && (
+        {identifierEntry ? (
           <Button
+            className="auth-secondary"
             disabled={passwordSubmitting}
             onClick={() => {
+              setRegister(false);
               setPasswordVisible(false);
               setNotice('');
-              setLoginById(!loginById);
-            }}
-          >
-            {loginById ? 'Войти по email' : 'Войти по ID'}
-          </Button>
-        )}
-        <Button
-          disabled={passwordSubmitting}
-          onClick={() => {
-            setPasswordVisible(false);
-            setLoginById(false);
-            setNotice('');
-            setRegister(!register);
-          }}
-        >
-          {register ? 'Уже есть аккаунт' : 'Регистрация'}
-        </Button>
-        {smsAvailable && (
-          <Button
-            disabled={passwordSubmitting}
-            onClick={() => {
-              setNotice('');
-              setPasswordVisible(false);
-              setSignInMethod('phone');
-            }}
-          >
-            Войти по SMS
-          </Button>
-        )}
-        {emailAvailable && (
-          <Button
-            disabled={passwordSubmitting}
-            onClick={() => {
-              setNotice('');
-              setPasswordVisible(false);
               setSignInMethod('email');
             }}
           >
-            Получить код на почту
+            Назад
           </Button>
+        ) : (
+          <>
+            {!register && (
+              <Button
+                disabled={passwordSubmitting}
+                onClick={() => {
+                  setPasswordVisible(false);
+                  setNotice('');
+                  setLoginById(!loginById);
+                }}
+              >
+                {loginById ? 'Войти по email' : 'Войти по ID'}
+              </Button>
+            )}
+            <Button
+              disabled={passwordSubmitting}
+              onClick={() => {
+                setPasswordVisible(false);
+                setLoginById(false);
+                setNotice('');
+                setRegister(!register);
+              }}
+            >
+              {register ? 'Уже есть аккаунт' : 'Регистрация'}
+            </Button>
+            {smsAvailable && (
+              <Button
+                disabled={passwordSubmitting}
+                onClick={() => {
+                  setNotice('');
+                  setPasswordVisible(false);
+                  setSignInMethod('phone');
+                }}
+              >
+                Войти по SMS
+              </Button>
+            )}
+            {emailAvailable && (
+              <Button
+                disabled={passwordSubmitting}
+                onClick={() => {
+                  setNotice('');
+                  setPasswordVisible(false);
+                  setSignInMethod('email');
+                }}
+              >
+                Получить код на почту
+              </Button>
+            )}
+          </>
         )}
-      </>
+      </>,
     );
   const logoutButton = (
     <Button

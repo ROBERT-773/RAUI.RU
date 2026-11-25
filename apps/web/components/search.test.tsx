@@ -73,6 +73,36 @@ async function submitReadySearch() {
   await vi.waitFor(() => expect(submit).toHaveProperty('disabled', false));
   fireEvent.click(submit);
 }
+test('uses the archived search heading and preserves the title for a regional catalog', () => {
+  captureSearch();
+  const view = render(<SearchProduct />);
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+    'Расширенный поиск',
+  );
+  view.rerender(<SearchProduct title="Квартиры в Москве" />);
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+    'Квартиры в Москве',
+  );
+});
+
+test('keeps unsaved search filters and returns focus when a guest closes favorites', async () => {
+  captureSearch();
+  window.history.replaceState({}, '', '/search?mode=list');
+  render(<SearchProduct />);
+  const price = screen.getByLabelText('Цена от') as HTMLInputElement;
+  fireEvent.change(price, { target: { value: '2500000' } });
+  const link = screen.getByRole('link', { name: 'Избранное и аккаунт' });
+  fireEvent.click(link);
+  expect(
+    screen.getByRole('dialog', { name: 'Вход или регистрация' }),
+  ).toBeTruthy();
+  expect(window.location.search).toBe('?mode=list');
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+  await vi.waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(document.activeElement).toBe(link);
+  expect(price.value).toBe('2500000');
+});
+
 test('short rental guest count uses a minimum capacity and clears on other deals', async () => {
   captureSearch();
   render(<SearchProduct initialDefinition={{ dealType: 'short_rent' }} />);

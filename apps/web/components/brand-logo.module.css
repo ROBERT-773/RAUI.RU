@@ -1,0 +1,29 @@
+.brand {
+  display: inline-grid;
+  width: 7.25rem;
+  justify-items: center;
+  vertical-align: middle;
+}
+
+/* The original artwork contains its historical caption below the wordmark. */
+.wordmark {
+  display: block;
+  width: 100%;
+  aspect-ratio: 232 / 68;
+  overflow: hidden;
+}
+
+.wordmark img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.caption {
+  color: #ba180d;
+  font-size: 0.625rem;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+}

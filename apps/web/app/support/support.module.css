@@ -1,0 +1,81 @@
+.page {
+  max-width: 46rem;
+  padding: clamp(1.25rem, 4vw, 3.5rem) 1.25rem;
+  color: #172b4a;
+}
+
+.page h1 {
+  margin: 0 0 1.5rem;
+}
+
+.search {
+  margin-bottom: 2rem;
+}
+
+.search label {
+  margin-bottom: 0.45rem;
+}
+
+.search > div {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.search input {
+  min-width: 0;
+}
+
+.search button {
+  background: #1558cc;
+  color: white;
+}
+
+.search button:hover {
+  background: #1048aa;
+}
+
+.questions {
+  padding: clamp(1rem, 4vw, 1.75rem);
+  border: 1px solid #dce4ef;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.questions h2 {
+  margin: 0 0 0.65rem;
+}
+
+.questions details {
+  border-bottom: 1px solid #e1e7f0;
+}
+
+.questions summary {
+  min-height: 44px;
+  padding-block: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.questions p {
+  margin: 0;
+  color: #42536c;
+  overflow-wrap: anywhere;
+}
+
+.questions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #1558cc;
+  text-underline-offset: 0.17em;
+}
+
+.questions > a {
+  margin-top: 0.5rem;
+}
+
+.page :focus-visible {
+  outline: 2px solid #1558cc;
+  outline-offset: 2px;
+}

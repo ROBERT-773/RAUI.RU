@@ -2,7 +2,7 @@
 import { Button } from '@raui/ui';
 import { useEffect, useState, useTransition } from 'react';
 import dynamic from 'next/dynamic';
-import Link from 'next/link';
+import { AccountEntryLink } from './account-entry-link';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
 import { api, track } from '../lib/client';
@@ -24,7 +24,7 @@ export default function SearchProduct({
   initialDefinition = { limit: 20 },
   initialMode = 'list',
   initialPage = null,
-  title = 'Найдите своё место',
+  title = 'Расширенный поиск',
 }: {
   initialDefinition?: SearchDefinition;
   initialMode?: 'list' | 'map';
@@ -154,7 +154,7 @@ function SearchView({
     <>
       <h1>{title}</h1>
       <form
-        className="filters"
+        className="filters search-filters"
         key={definition.regionCode ?? 'all'}
         onSubmit={(e) => {
           e.preventDefault();
@@ -254,6 +254,15 @@ function SearchView({
           });
         }}
       >
+        <label className="search-query">
+          Поиск
+          <input
+            name="q"
+            defaultValue={definition.q}
+            placeholder="Квартира, район, адрес"
+            maxLength={200}
+          />
+        </label>
         <label>
           Регион
           <select
@@ -292,16 +301,17 @@ function SearchView({
             ))}
           </select>
         </label>
-        {regionError && <p role="alert">Не удалось загрузить регионы.</p>}
         <label>
-          Поиск
-          <input
-            name="q"
-            defaultValue={definition.q}
-            placeholder="Квартира, район, адрес"
-            maxLength={200}
+          Город
+          <LocationInput
+            kind="city"
+            name="locality"
+            initial={definition.locality}
+            region={definition.regionCode}
+            onValueChange={setLocalityDraft}
           />
         </label>
+        {regionError && <p role="alert">Не удалось загрузить регионы.</p>}
         <label>
           Объект
           <select
@@ -399,72 +409,6 @@ function SearchView({
           </>
         )}
         <label>
-          Город
-          <LocationInput
-            kind="city"
-            name="locality"
-            initial={definition.locality}
-            region={definition.regionCode}
-            onValueChange={setLocalityDraft}
-          />
-        </label>
-        <label>
-          Комнат от
-          <input
-            name="roomsMin"
-            defaultValue={
-              typeof definition.attributes?.rooms === 'object'
-                ? definition.attributes.rooms.min
-                : undefined
-            }
-            type="number"
-            min="0"
-            max="50"
-          />
-        </label>
-        <label>
-          Комнат до
-          <input
-            name="roomsMax"
-            defaultValue={
-              typeof definition.attributes?.rooms === 'object'
-                ? definition.attributes.rooms.max
-                : undefined
-            }
-            type="number"
-            min="0"
-            max="50"
-          />
-        </label>
-        <label>
-          Площадь от, м²
-          <input
-            name="areaMin"
-            defaultValue={
-              typeof definition.attributes?.area === 'object'
-                ? definition.attributes.area.min
-                : undefined
-            }
-            type="number"
-            step="any"
-            min="0"
-          />
-        </label>
-        <label>
-          Площадь до, м²
-          <input
-            name="areaMax"
-            defaultValue={
-              typeof definition.attributes?.area === 'object'
-                ? definition.attributes.area.max
-                : undefined
-            }
-            type="number"
-            step="any"
-            min="0"
-          />
-        </label>
-        <label>
           Сортировка
           <select name="sort" defaultValue={definition.sort ?? 'newest'}>
             <option value="newest">Сначала новые</option>
@@ -510,7 +454,9 @@ function SearchView({
         <Button onClick={save} disabled={loading || navigationPending}>
           Сохранить поиск
         </Button>
-        <Link href="/account">Избранное и аккаунт</Link>
+        <AccountEntryLink href="/account?tab=favorite">
+          Избранное и аккаунт
+        </AccountEntryLink>
       </div>
       {notice && <p role="status">{notice}</p>}
       {error && (

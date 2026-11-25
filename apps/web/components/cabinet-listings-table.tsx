@@ -36,8 +36,12 @@ export default function CabinetListingsTable({
             <th scope="col" className={styles.detail}>
               Этаж
             </th>
-            <th scope="col">Цена</th>
-            <th scope="col">Статус</th>
+            <th scope="col">
+              Цена<span className={styles.compactStatus}> и статус</span>
+            </th>
+            <th scope="col" className={styles.statusColumn}>
+              Статус
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -61,8 +65,13 @@ export default function CabinetListingsTable({
                   {row.price == null
                     ? '—'
                     : formatListingPrice(row.price, row.dealType ?? '')}
+                  <span className={styles.compactStatus}>
+                    {listingStatusLabel(row.status)}
+                  </span>
                 </td>
-                <td>{listingStatusLabel(row.status)}</td>
+                <td className={styles.statusColumn}>
+                  {listingStatusLabel(row.status)}
+                </td>
               </tr>
             );
           })}

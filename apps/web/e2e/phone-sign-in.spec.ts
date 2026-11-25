@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { continueWithIdentifier } from './sign-in';
 
 test.skip(process.env.E2E_SMS !== 'true', 'requires the isolated SMS fixture');
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -16,16 +17,20 @@ async function enterDeliveredCode(page: Page, phone: string, paste = false) {
   expect(capabilities.status()).toBe(200);
   expect(await capabilities.json()).toEqual({ available: true });
   await page.goto('/');
-  const entry = page.getByRole('link', {
+  const entry = page.getByRole('banner').getByRole('link', {
     name: 'Войти в кабинет',
     exact: true,
   });
   await expect(entry).toBeVisible();
   await entry.click();
+  const signIn = page.getByRole('dialog', { name: 'Вход или регистрация' });
+  const destination = signIn.getByLabel('Телефон', { exact: true });
+  await expect(signIn.getByRole('textbox')).toHaveCount(1);
   await expect(
-    page.getByRole('heading', { name: 'Вход или регистрация' }),
+    signIn.getByRole('button', { name: 'Другой способ', exact: true }),
   ).toBeVisible();
-  await page.getByLabel('Мобильный телефон').fill(phone);
+  await expect(signIn.getByLabel('Пароль', { exact: true })).toHaveCount(0);
+  await destination.fill(phone);
   const sent = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/v1/auth/phone-sign-in') &&
@@ -87,6 +92,28 @@ async function enterDeliveredCode(page: Page, phone: string, paste = false) {
   await expect(dialog).toBeHidden();
   return () => expect(confirmations).toBe(1);
 }
+
+test('a guest can choose password sign-in when SMS is available', async ({
+  page,
+}) => {
+  await page.goto('/account');
+  const signIn = page.getByRole('dialog', { name: 'Вход или регистрация' });
+  await expect(signIn.getByLabel('Телефон', { exact: true })).toBeVisible();
+  await signIn
+    .getByRole('button', { name: 'Другой способ', exact: true })
+    .click();
+  await continueWithIdentifier(page, 'buyer@e2e.test');
+  await page
+    .getByLabel('Пароль', { exact: true })
+    .fill('E2E-only-password-42!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Кабинет покупателя', exact: true }),
+  ).toBeVisible();
+  const session = await page.request.get('/api/v1/auth/me');
+  expect(session.status()).toBe(200);
+  expect(await session.json()).toMatchObject({ email: 'buyer@e2e.test' });
+});
 
 test('verified phone signs in to the existing cabinet', async ({
   page,

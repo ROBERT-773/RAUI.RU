@@ -179,7 +179,7 @@ export default function BetaFeedback({ onClose }: { onClose: () => void }) {
       </button>
       {sent ? (
         <p ref={result} tabIndex={-1} role="status">
-          Спасибо! Ваше предложение отправлено команде RAUI.
+          Спасибо! Ваше предложение отправлено.
         </p>
       ) : (
         <form

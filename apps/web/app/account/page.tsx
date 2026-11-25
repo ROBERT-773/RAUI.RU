@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import Account from '../../components/account';
+import AccountPageEntry from '../../components/account-page-entry';
 import { signInCapabilities } from '../../lib/sign-in-capabilities';
 export const metadata: Metadata = {
   title: 'Аккаунт — RAUI.RU',
@@ -29,7 +29,7 @@ export default async function Page({
     tab === 'messages' || tab === 'notifications' ? tab : 'favorite';
   return (
     <main id="content">
-      <Account
+      <AccountPageEntry
         key={[initialTab, section === 'contacts', action === 'recover'].join(
           '-',
         )}

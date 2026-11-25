@@ -475,6 +475,47 @@ label textarea {
   background: #fff;
   border-radius: 1rem;
 }
+.search-filters {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+.search-filters .search-query,
+.search-filters > button[type='submit'] {
+  grid-column: span 2;
+}
+.search-filters > [role='status'],
+.search-filters > [role='alert'],
+.search-filters > .advanced-filters[open] {
+  grid-column: 1 / -1;
+}
+.search-filters > .advanced-filters:not([open]) {
+  grid-column: auto;
+}
+.search-filters summary {
+  border: 1px solid #c6d2df;
+  border-radius: 0.75rem;
+  color: #17384b;
+  font-weight: 600;
+}
+.search-filters .advanced-filters > .filters {
+  padding: 1rem 0 0;
+}
+@media (max-width: 740px) {
+  .search-filters,
+  .search-filters .advanced-filters > .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+  .search-filters {
+    padding: 0.75rem;
+  }
+  .search-filters label {
+    min-width: 0;
+  }
+  .search-filters fieldset {
+    grid-column: 1 / -1;
+  }
+}
 .toolbar,
 .catalog-navigation,
 .map-controls,
@@ -528,7 +569,7 @@ label textarea {
   aspect-ratio: 4/3;
   background: #e0e8ef;
   color: #3e596c;
-  font-size: 2rem;
+  font-size: 1rem;
 }
 .price {
   font-size: 1.4rem;
