@@ -1498,6 +1498,15 @@ export default function OwnerListings({
             После отправки модератор проверит объявление. Оно появится в
             каталоге после одобрения.
           </p>
+          <p>
+            <Link
+              href="/support/placement-rules"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Правила размещения объявлений (в новой вкладке)
+            </Link>
+          </p>
           <div className="actions">
             <button
               type="button"

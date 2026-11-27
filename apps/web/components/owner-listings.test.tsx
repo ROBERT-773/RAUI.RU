@@ -980,6 +980,11 @@ test.each([null, 'processing', 'moderation'])(
     fireEvent.click(
       await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
     );
+    const rules = await screen.findByRole('link', {
+      name: 'Правила размещения объявлений (в новой вкладке)',
+    });
+    expect(rules.getAttribute('href')).toBe('/support/placement-rules');
+    expect(rules.getAttribute('target')).toBe('_blank');
     fireEvent.click(
       await screen.findByRole('button', { name: 'Отправить на модерацию' }),
     );
