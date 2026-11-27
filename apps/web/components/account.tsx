@@ -820,6 +820,7 @@ export default function Account({
           <Link href="/admin/search">Поиск пользователей и объявлений</Link>
           <Link href="/admin/feeds">Автопубликация из XML</Link>
           <Link href="/admin/feedback">Предложения о портале</Link>
+          <Link href="/admin/support">Обращения в поддержку</Link>
         </nav>
       )}
       {user.role === 'agent' && (

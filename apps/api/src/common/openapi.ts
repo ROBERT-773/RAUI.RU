@@ -64,6 +64,11 @@ import {
 } from '../modules/auth/contact-settings';
 import { listingContactSelectionSchema } from '../modules/listings/contact-settings';
 import { feedbackInput } from '../modules/product/feedback';
+import {
+  ticketInput,
+  ticketReceipt,
+  ticketAnswer,
+} from '../modules/product/support';
 import { professionalImageInput } from '../modules/professional/profile-image';
 import {
   adminDirectorySearchSchema,
@@ -179,6 +184,9 @@ const bodyContracts: Record<string, z.ZodType> = {
   'put /v1/search/professional-profile/agency/{id}/image':
     professionalImageInput,
   'post /v1/account/feedback': feedbackInput,
+  'post /v1/support/tickets': ticketInput,
+  'post /v1/support/tickets/status': ticketReceipt,
+  'post /v1/admin/support/{id}/reply': ticketAnswer,
   'patch /v1/account/contact-settings': contactSettingsPatchSchema,
   'post /v1/account/contact-phones/request': contactPhoneRequestSchema,
   'post /v1/account/contact-phones/verify': contactPhoneVerifySchema,
@@ -414,6 +422,8 @@ get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
 get /v1/listings/{id}/public/contact
 get /v1/media/{id}/{variant}
+post /v1/support/tickets
+post /v1/support/tickets/status
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
 get /v1/search/locations

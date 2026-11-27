@@ -1,6 +1,7 @@
 import { eligibleInboxRows, InboxRow } from './subscription-inbox';
 import { ListingSubscriptions } from './subscriptions';
 import { FeedbackController } from './feedback';
+import { SupportController, SupportTickets } from './support';
 import {
   Body,
   Controller,
@@ -486,9 +487,10 @@ export class ProductController {
 }
 @Module({
   imports: [ListingAccessModule, SearchModule, PublicationQuotaModule],
-  controllers: [ProductController, FeedbackController],
+  controllers: [ProductController, FeedbackController, SupportController],
   providers: [
     Product,
+    SupportTickets,
     ListingSubscriptions,
     {
       provide: NotificationTransport,

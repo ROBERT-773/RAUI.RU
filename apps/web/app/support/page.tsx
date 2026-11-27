@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import styles from './support.module.css';
+import { NewSupportTicket } from '../../components/support-ticket';
+import { isSupportTopic, supportUuid } from '../../lib/support';
 
 export const metadata: Metadata = {
   title: 'Служба поддержки — RAUI.RU',
@@ -115,7 +117,13 @@ function normalize(value: string) {
 export default async function SupportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string | string[]; all?: string | string[] }>;
+  searchParams: Promise<{
+    q?: string | string[];
+    all?: string | string[];
+    write?: string;
+    topic?: string;
+    listing?: string;
+  }>;
 }) {
   const params = await searchParams;
   const query =
@@ -132,6 +140,25 @@ export default async function SupportPage({
   return (
     <main id="content" className={styles.page}>
       <h1>Служба поддержки</h1>
+      {params.write === '1' ? (
+        <section aria-labelledby="write-title">
+          <h2 id="write-title">Напишите нам</h2>
+          <NewSupportTicket
+            initialTopic={isSupportTopic(params.topic) ? params.topic : 'other'}
+            listingId={
+              typeof params.listing === 'string' &&
+              supportUuid.test(params.listing)
+                ? params.listing
+                : undefined
+            }
+            articles={[...commonQuestions, ...moreQuestions]}
+          />
+        </section>
+      ) : (
+        <p>
+          <Link href="/support?write=1">Напишите нам</Link>
+        </p>
+      )}
       <form
         className={styles.search}
         role="search"
