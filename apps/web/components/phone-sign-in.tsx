@@ -376,6 +376,13 @@ export function SignInByCode<T>(
     else if (!challenge) void execute('request');
   }
   const codeDialog = Boolean(challenge && props.onSession);
+  const hasOtherMethods =
+    identifier && (identifier.emailAvailable || identifier.smsAvailable);
+  const recoveryLink = identifier && (
+    <Link className="auth-secondary" href={identifier.recoveryHref}>
+      Забыли пароль?
+    </Link>
+  );
   const roleChoice = email && !props.recoveryMode && !challenge && (
     <details>
       <summary>Роль при регистрации</summary>
@@ -565,7 +572,7 @@ export function SignInByCode<T>(
             Регистрация
           </Button>
         )}
-        {identifier ? (
+        {hasOtherMethods && (
           <details className="auth-alternatives">
             <summary className="auth-secondary">Другой способ</summary>
             {identifier.emailAvailable && (
@@ -594,12 +601,12 @@ export function SignInByCode<T>(
                 Войти по SMS
               </Button>
             )}
-            <Link className="auth-secondary" href={identifier.recoveryHref}>
-              Забыли пароль?
-            </Link>
+            {recoveryLink}
             {identifier.emailAvailable && !passwordChosen && roleChoice}
           </details>
-        ) : (
+        )}
+        {!hasOtherMethods && recoveryLink}
+        {!identifier && (
           <Button
             className={props.compactEntry ? 'auth-secondary' : undefined}
             disabled={committed}
