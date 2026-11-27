@@ -64,6 +64,13 @@ afterEach(() => {
   document.cookie = 'raui_beta_closed=; Max-Age=0; Path=/';
 });
 
+test('guests can see the beta notice and open support without signing in', () => {
+  render(<BetaInvitation />);
+  expect(screen.getByText(/Портал работает в тестовом режиме/)).toBeTruthy();
+  const link = screen.getByRole('link', { name: 'Сообщить о сбое' });
+  expect(link.getAttribute('href')).toBe('/support?write=1');
+});
+
 test('dismissal persists, feedback stays available and closing with Escape restores keyboard focus', async () => {
   call.mockRejectedValue(new ApiError('guest', 401));
   const initial = render(<BetaInvitation />);
