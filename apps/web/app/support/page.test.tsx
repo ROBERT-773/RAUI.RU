@@ -44,3 +44,14 @@ test('offers the full question list when no article matches', async () => {
     screen.getByRole('link', { name: 'Все вопросы' }).getAttribute('href'),
   ).toBe('/support?all=1');
 });
+
+test('a blocked account can find the moderation form without signing in', async () => {
+  render(
+    await SupportPage({
+      searchParams: Promise.resolve({ q: 'аккаунт заблокирован' }),
+    }),
+  );
+  expect(screen.getByText(/Открыть обращение можно без входа/)).toBeTruthy();
+  const link = screen.getByText('Обратиться по поводу модерации');
+  expect(link.getAttribute('href')).toBe('/support?write=1&topic=moderation');
+});
