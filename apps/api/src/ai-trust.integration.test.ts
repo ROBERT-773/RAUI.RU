@@ -10,6 +10,7 @@ import { Test } from '@nestjs/testing';
 import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import { Database } from './modules/database/database';
 import { hash, token, Actor } from './common/security';
 import { AiService } from './modules/ai/ai';
@@ -167,11 +168,7 @@ test('Phase 4C real PostgreSQL/PostGIS HTTP acceptance', async (t) => {
         const flags = (await pool.query('SELECT * FROM ai_feature_flags')).rows;
         assert.equal(flags.length, 10);
         assert.ok(flags.every((x) => !x.enabled));
-        assert.equal(
-          (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
-            .count,
-          '44',
-        );
+        await assertAppliedMigrations(pool);
       },
     );
     await t.test(

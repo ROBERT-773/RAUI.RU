@@ -8,6 +8,7 @@ import { Pool } from 'pg';
 import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import { Database } from './modules/database/database';
 import { Organizations } from './modules/organizations/organizations';
 import { Actor, hash, token } from './common/security';
@@ -179,14 +180,7 @@ test('Phase 4B real PostgreSQL and HTTP acceptance', async (t) => {
     await t.test(
       'Migrations repeat safely and preferences retain existing default opt-out',
       async () => {
-        assert.equal(
-          (
-            await db.rows<{ count: string }>(
-              'SELECT count(*) FROM schema_migrations',
-            )
-          )[0]!.count,
-          '44',
-        );
+        await assertAppliedMigrations(db.pool);
         const p = await platform.preferences(actors[0]!);
         assert.equal(p!.email, false);
         const holder = await pool.connect();

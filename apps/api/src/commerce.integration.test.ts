@@ -12,6 +12,7 @@ import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { Database } from './modules/database/database';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import { Actor, hash, token } from './common/security';
 import {
   CommerceService,
@@ -185,11 +186,7 @@ test('Phase 4A real PostgreSQL and HTTP commercial acceptance', async (t) => {
     await t.test(
       'migration 004 is repeatable and commercial flags default off',
       async () => {
-        assert.equal(
-          (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
-            .count,
-          '44',
-        );
+        await assertAppliedMigrations(pool);
         assert.equal(
           (
             await pool.query(
