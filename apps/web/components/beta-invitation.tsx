@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { AccountEntryLink } from './account-entry-link';
 import { useEffect, useRef, useState } from 'react';
 import BetaFeedback from './beta-feedback';
@@ -82,8 +83,8 @@ export default function BetaInvitation({
           <div className={styles.copy}>
             <h2>Бесплатное размещение объявлений</h2>
             <p>
-              Мы развиваем портал недвижимости. Разместите базовое объявление
-              бесплатно и расскажите, что стоит улучшить.
+              Портал работает в тестовом режиме. Приносим извинения за возможные
+              сбои. <Link href="/support">Сообщить о сбое</Link>
             </p>
             <details>
               <summary>Условия размещения</summary>
