@@ -95,7 +95,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const snapshot = async () => {
       const tables = (
         await pool.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','email_sign_in_challenges','email_sign_in_failures','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors','professional_photo_cleanup','listing_form_drafts','seller_contact_phones','seller_contact_phone_challenges','listing_contact_phones','portal_feedback') ORDER BY tablename",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('attribute_definitions','schema_migrations','staff_permission_grants','registration_approval_requests','phone_otp_challenges','phone_otp_send_events','phone_sign_in_challenges','email_sign_in_challenges','email_sign_in_failures','listing_subscriptions','listing_daily_candidates','listing_daily_runs','listing_daily_items','subscription_visibility_generations','public_professional_profiles','public_professional_regions','staff_totp_factors','professional_photo_cleanup','listing_form_drafts','seller_contact_phones','seller_contact_phone_challenges','listing_contact_phones','portal_feedback','support_tickets') ORDER BY tablename",
         )
       ).rows;
       const legacyRows: Record<string, string> = {
@@ -164,7 +164,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
     const upgradedLedger = (
       await pool.query('SELECT * FROM schema_migrations ORDER BY name')
     ).rows;
-    assert.equal(upgradedLedger.length, 44);
+    assert.equal(upgradedLedger.length, 45);
     for (const [index, name] of [
       [13, '014_user_public_id.sql'],
       [14, '015_staff_permissions.sql'],
@@ -197,6 +197,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       [41, '042_professional_profile_image.sql'],
       [42, '043_email_sign_in.sql'],
       [43, '044_session_password_change.sql'],
+      [44, '046_support_tickets.sql'],
     ] as const) {
       assert.equal(upgradedLedger[index].name, name);
       assert.equal(
@@ -221,6 +222,7 @@ test('Populated current-master upgrade preserves facts, ledger, PostGIS and sequ
       'seller_contact_phone_challenges',
       'listing_contact_phones',
       'portal_feedback',
+      'support_tickets',
     ]) {
       assert.equal(
         (await pool.query(`SELECT count(*)::int AS count FROM ${quote(table)}`))

@@ -208,6 +208,15 @@ export default async function Page({
         messagesAllowed={data.contact?.messagesAllowed ?? true}
         callsAllowed={Boolean(data.contact?.phones.length)}
       />
+      <p>
+        <Link
+          href={
+            '/support?write=1&topic=complaint&listing=' + encodeURIComponent(id)
+          }
+        >
+          Пожаловаться на объявление
+        </Link>
+      </p>
       <ListingAuthors
         profiles={data.professionals}
         sellerType={data.sellerType}

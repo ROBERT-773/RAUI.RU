@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import {
   ListingAccess,
   readListingVisibility,
@@ -146,11 +147,7 @@ test('Visibility revisions real PostgreSQL acceptance: seed, writers, rollback a
       }
     }
     await migrate(pool);
-    assert.equal(
-      (await pool.query('SELECT count(*)::int AS n FROM schema_migrations'))
-        .rows[0].n,
-      44,
-    );
+    await assertAppliedMigrations(pool);
     assert.equal(await generation('seller', seller), '0');
     assert.ok(BigInt((await generation('seller', postMigrationSeller))!) > 0n);
     assert.equal(await generation('organization', organization), '0');

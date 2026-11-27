@@ -186,7 +186,8 @@ export default function OwnerListings({
   const focusSavedList = useRef(false);
   useEffect(() => {
     if (!listing && focusSavedList.current) {
-      savedHeading.current?.focus();
+      if (document.activeElement === document.body)
+        savedHeading.current?.focus();
       focusSavedList.current = false;
     }
   }, [listing]);
@@ -1497,6 +1498,15 @@ export default function OwnerListings({
           <p>
             После отправки модератор проверит объявление. Оно появится в
             каталоге после одобрения.
+          </p>
+          <p>
+            <Link
+              href="/support/placement-rules"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Правила размещения объявлений (в новой вкладке)
+            </Link>
           </p>
           <div className="actions">
             <button

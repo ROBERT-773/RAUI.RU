@@ -52,6 +52,7 @@ export const migrationNames = [
   '042_professional_profile_image.sql',
   '043_email_sign_in.sql',
   '044_session_password_change.sql',
+  '046_support_tickets.sql',
 ];
 export async function verifyMigrationPackage(root) {
   const directory = resolve(root, 'apps/api/migrations');

@@ -55,3 +55,14 @@ test('a blocked account can find the moderation form without signing in', async 
   const link = screen.getByText('Обратиться по поводу модерации');
   expect(link.getAttribute('href')).toBe('/support?write=1&topic=moderation');
 });
+
+test('finds the placement guide by its name', async () => {
+  render(
+    await SupportPage({
+      searchParams: Promise.resolve({ q: 'правила размещения' }),
+    }),
+  );
+  expect(
+    screen.getByText('Правила размещения объявлений').getAttribute('href'),
+  ).toBe('/support/placement-rules');
+});

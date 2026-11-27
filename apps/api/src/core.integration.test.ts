@@ -12,6 +12,7 @@ import { AppModule } from './app.module';
 import { configure } from './bootstrap';
 import { Database } from './modules/database/database';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import {
   VerificationDelivery,
   VerificationMessage,
@@ -207,11 +208,7 @@ test('Phase 2 PostgreSQL/PostGIS and HTTP acceptance', async (t) => {
     await t.test(
       'migrations are clean, repeatable, checksum-protected and atomic',
       async () => {
-        assert.equal(
-          (await pool.query('SELECT count(*) FROM schema_migrations')).rows[0]
-            .count,
-          '44',
-        );
+        await assertAppliedMigrations(pool);
         const directory = resolve(
           process.env.LOCAL_PRIVATE_DIR!,
           'migration-fixtures',
@@ -2200,6 +2197,8 @@ get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
 get /v1/listings/{id}/public/contact
 get /v1/media/{id}/{variant}
+post /v1/support/tickets
+post /v1/support/tickets/status
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
 get /v1/search/locations

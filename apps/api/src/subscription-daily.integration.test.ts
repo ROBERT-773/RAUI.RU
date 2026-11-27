@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from './modules/database/database';
 import { migrate } from './modules/database/migrate';
+import { assertAppliedMigrations } from './test-helpers/migration-ledger';
 import { ListingAccess } from './modules/listings/access';
 import { Organizations } from './modules/organizations/organizations';
 import { Product } from './modules/product/product';
@@ -114,10 +115,7 @@ test('Daily in-app real PostgreSQL acceptance: immutable release, late commits a
       );
       await migrate(db.pool);
       await migrate(db.pool);
-      assert.equal(
-        (await db.rows('SELECT * FROM schema_migrations')).length,
-        44,
-      );
+      await assertAppliedMigrations(db.pool);
       assert.deepEqual(
         (await db.rows('SELECT * FROM schema_migrations ORDER BY name')).slice(
           0,
