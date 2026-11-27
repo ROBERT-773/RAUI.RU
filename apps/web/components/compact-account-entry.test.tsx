@@ -166,7 +166,12 @@ test('keeps password registration and recovery accessible with delivery disabled
   ).toBe('/account/forgot-password');
   expect(screen.queryByText('Войти по SMS')).toBeNull();
   expect(screen.queryByText('Роль при регистрации')).toBeNull();
+  alternatives();
+  expect(
+    screen.getByRole('button', { name: 'Регистрация' }).closest('details'),
+  ).toBeNull();
   click('Регистрация');
+  expect(document.activeElement).toBe(screen.getByLabelText('Кто вы?'));
   expect(screen.getByLabelText<HTMLInputElement>('Email').value).toBe(
     'anna@example.test',
   );

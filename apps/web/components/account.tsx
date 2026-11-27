@@ -536,6 +536,7 @@ export default function Account({
                 Кто вы?
                 <select
                   name="role"
+                  autoFocus
                   defaultValue=""
                   disabled={passwordSubmitting}
                   required

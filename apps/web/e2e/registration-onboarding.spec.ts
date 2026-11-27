@@ -1,4 +1,4 @@
-import { continueWithIdentifier, openSignInOptions } from './sign-in';
+import { continueWithIdentifier } from './sign-in';
 import { test, expect, type Page, type Response } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -47,13 +47,12 @@ test('pending owner verifies onboarding boundaries and staff rejection revokes e
   const secondOwner = await secondOwnerContext.newPage();
   try {
     await page.goto('/account');
-    await openSignInOptions(page);
     await page
       .getByRole('button', { name: 'Регистрация', exact: true })
       .click();
-    await page
-      .getByRole('combobox', { name: 'Кто вы?', exact: true })
-      .selectOption('owner');
+    const role = page.getByRole('combobox', { name: 'Кто вы?', exact: true });
+    await expect(role).toBeFocused();
+    await role.selectOption('owner');
     await page.getByLabel('Имя', { exact: true }).fill(name);
     await page.getByLabel('Email', { exact: true }).fill(email);
     await page.getByLabel('Пароль', { exact: true }).fill(password);
@@ -205,13 +204,12 @@ test('new owner registers, saves a draft and publishes after moderation', async 
   const visitorContext = await browser.newContext();
   try {
     await page.goto('/account');
-    await openSignInOptions(page);
     await page
       .getByRole('button', { name: 'Регистрация', exact: true })
       .click();
-    await page
-      .getByRole('combobox', { name: 'Кто вы?', exact: true })
-      .selectOption('owner');
+    const role = page.getByRole('combobox', { name: 'Кто вы?', exact: true });
+    await expect(role).toBeFocused();
+    await role.selectOption('owner');
     await page.getByLabel('Имя', { exact: true }).fill(name);
     await page.getByLabel('Email', { exact: true }).fill(email);
     await page.getByLabel('Пароль', { exact: true }).fill(password);

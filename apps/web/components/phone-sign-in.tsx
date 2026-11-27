@@ -556,6 +556,15 @@ export function SignInByCode<T>(
             Запросить новый код или изменить номер
           </Button>
         )}
+        {identifier && (
+          <Button
+            className="auth-secondary"
+            disabled={committed}
+            onClick={() => identifier.onRegister(destination.trim())}
+          >
+            Регистрация
+          </Button>
+        )}
         {identifier ? (
           <details className="auth-alternatives">
             <summary className="auth-secondary">Другой способ</summary>
@@ -576,13 +585,6 @@ export function SignInByCode<T>(
                 {passwordChosen ? 'Войти по коду' : 'Войти с паролем'}
               </Button>
             )}
-            <Button
-              className="auth-secondary"
-              disabled={committed}
-              onClick={() => identifier.onRegister(destination.trim())}
-            >
-              Регистрация
-            </Button>
             {identifier.smsAvailable && (
               <Button
                 className="auth-secondary"
