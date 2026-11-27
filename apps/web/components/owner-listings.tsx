@@ -4,6 +4,7 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -185,7 +186,7 @@ export default function OwnerListings({
   const formId = useId();
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const focusSavedList = useRef(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!listing && focusSavedList.current) {
       if (document.activeElement === document.body)
         savedHeading.current?.focus();
@@ -195,7 +196,7 @@ export default function OwnerListings({
   const previewHeading = useRef<HTMLHeadingElement>(null);
   const restoreEditorFocus = useRef(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previewOpen) {
       restoreEditorFocus.current = true;
       previewHeading.current?.focus();
@@ -729,7 +730,7 @@ export default function OwnerListings({
         item.title.toLocaleLowerCase('ru').includes(currentQuery) ||
         item.address?.toLocaleLowerCase('ru').includes(currentQuery)),
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       !loading &&
       listingId &&
