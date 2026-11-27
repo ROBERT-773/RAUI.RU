@@ -4,10 +4,12 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 import Link from 'next/link';
+import { useBeforeUnload } from '../lib/use-before-unload';
 import ListingPublicationActions from './listing-publication-actions';
 import ListingMediaGallery from './listing-media-gallery';
 import ListingModerationActions from './listing-moderation-actions';
@@ -184,7 +186,7 @@ export default function OwnerListings({
   const formId = useId();
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const focusSavedList = useRef(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!listing && focusSavedList.current) {
       if (document.activeElement === document.body)
         savedHeading.current?.focus();
@@ -194,7 +196,7 @@ export default function OwnerListings({
   const previewHeading = useRef<HTMLHeadingElement>(null);
   const restoreEditorFocus = useRef(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previewOpen) {
       restoreEditorFocus.current = true;
       previewHeading.current?.focus();
@@ -702,16 +704,7 @@ export default function OwnerListings({
       description !== listing.description ||
       termsChanged);
   const hasUnsavedChanges = Boolean(dirty) || propertyDirty;
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    const warnAboutUnsavedChanges = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = true;
-    };
-    window.addEventListener('beforeunload', warnAboutUnsavedChanges);
-    return () =>
-      window.removeEventListener('beforeunload', warnAboutUnsavedChanges);
-  }, [hasUnsavedChanges]);
+  useBeforeUnload(hasUnsavedChanges);
   const readyPhotos = media.filter(
     (item) => item.kind === 'photo' && item.state === 'ready',
   ).length;
@@ -737,7 +730,7 @@ export default function OwnerListings({
         item.title.toLocaleLowerCase('ru').includes(currentQuery) ||
         item.address?.toLocaleLowerCase('ru').includes(currentQuery)),
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       !loading &&
       listingId &&
