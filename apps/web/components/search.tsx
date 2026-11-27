@@ -267,6 +267,13 @@ function SearchView({
             maxLength={200}
           />
         </label>
+        <Button
+          className="primary"
+          type="submit"
+          disabled={advancedCategory !== filterCategory}
+        >
+          Найти
+        </Button>
         <label>
           Регион
           <select
@@ -428,13 +435,6 @@ function SearchView({
           localityDraft={localityDraft}
           onReadyCategory={setAdvancedCategory}
         />
-        <Button
-          className="primary"
-          type="submit"
-          disabled={advancedCategory !== filterCategory}
-        >
-          Найти
-        </Button>
       </form>
       <div className="toolbar">
         <Button
