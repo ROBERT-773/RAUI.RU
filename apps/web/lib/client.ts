@@ -35,6 +35,8 @@ export class ListingContactSelectionChangedError extends ApiError {
 export const feedHostApprovalHint =
   'Домен выгрузки ещё не разрешён. Попросите администратора RAUI разрешить загрузку с этого домена.';
 const publicMutations = new Set([
+  'v1/support/tickets',
+  'v1/support/tickets/status',
   'v1/auth/register',
   'v1/auth/login',
   'v1/auth/phone-sign-in',

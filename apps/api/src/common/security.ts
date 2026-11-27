@@ -125,7 +125,8 @@ export class SessionGuard implements CanActivate {
     if (
       isPublic &&
       (req.url.startsWith('/v1/auth/') ||
-        req.url.split('?')[0] === '/v1/commerce/webhook')
+        req.url.split('?')[0] === '/v1/commerce/webhook' ||
+        publicSupportRequest(req))
     )
       return true;
 
@@ -234,6 +235,14 @@ export class SessionGuard implements CanActivate {
     return true;
   }
 }
+function publicSupportRequest(req: Request) {
+  return (
+    req.method === 'POST' &&
+    ['/v1/support/tickets', '/v1/support/tickets/status'].includes(
+      req.route?.path,
+    )
+  );
+}
 @Injectable()
 export class RateGuard implements CanActivate {
   constructor(private readonly db: Database) {}
@@ -242,7 +251,10 @@ export class RateGuard implements CanActivate {
     if (!req.url.startsWith('/v1/')) return true;
     const recoveryRead =
       req.method === 'GET' && req.url.split('?')[0] === '/v1/auth/csrf';
-    const sensitive = req.url.startsWith('/v1/auth/') && !recoveryRead;
+    const support = publicSupportRequest(req);
+    const sensitive =
+      support || (req.url.startsWith('/v1/auth/') && !recoveryRead);
+    const scope = support ? 'support' : sensitive ? 'auth' : 'api';
     const cfg = loadConfig();
     const peer = normalizeIp(req.socket?.remoteAddress ?? req.ip);
     const trusted = cfg.TRUSTED_PROXY_PEERS.split(',')
@@ -283,11 +295,8 @@ export class RateGuard implements CanActivate {
       }
     };
     if (forwarded)
-      await consume(
-        `proxy:${sensitive ? 'auth' : 'api'}:${peer}`,
-        sensitive ? 300 : 3000,
-      );
-    await consume(`${sensitive ? 'auth' : 'api'}:${client}`, limit);
+      await consume(`proxy:${scope}:${peer}`, sensitive ? 300 : 3000);
+    await consume(`${scope}:${client}`, limit);
     // Public credential endpoints reject cross-origin browser submissions too.
     if (
       sensitive &&

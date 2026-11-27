@@ -2200,6 +2200,8 @@ get /v1/categories/{code}/attributes
 get /v1/listings/{id}/public
 get /v1/listings/{id}/public/contact
 get /v1/media/{id}/{variant}
+post /v1/support/tickets
+post /v1/support/tickets/status
 get /v1/search/sitemap
 get /v1/search/sitemap/partitions
 get /v1/search/locations

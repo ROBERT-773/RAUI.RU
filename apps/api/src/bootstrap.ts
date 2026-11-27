@@ -55,6 +55,7 @@ export function configure(app: INestApplication) {
       },
     }),
   );
+  app.use('/v1/support/tickets', json({ limit: '16kb' }));
   app.use(json({ limit: '15mb' }));
   app.useGlobalFilters(new ApiErrors());
   app.enableCors({
