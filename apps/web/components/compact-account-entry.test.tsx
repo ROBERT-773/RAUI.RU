@@ -160,13 +160,17 @@ test('keeps password registration and recovery accessible with delivery disabled
   click('Продолжить');
   expect(screen.getByRole('alert').textContent).toMatch(/цифровой ID/);
   enter('Email или ID', 'anna@example.test');
-  alternatives();
+  expect(screen.queryByText('Другой способ', { exact: true })).toBeNull();
   expect(
     screen.getByRole('link', { name: 'Забыли пароль?' }).getAttribute('href'),
   ).toBe('/account/forgot-password');
   expect(screen.queryByText('Войти по SMS')).toBeNull();
   expect(screen.queryByText('Роль при регистрации')).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Регистрация' }).closest('details'),
+  ).toBeNull();
   click('Регистрация');
+  expect(document.activeElement).toBe(screen.getByLabelText('Кто вы?'));
   expect(screen.getByLabelText<HTMLInputElement>('Email').value).toBe(
     'anna@example.test',
   );

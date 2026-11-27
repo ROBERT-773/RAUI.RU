@@ -1,4 +1,4 @@
-import { continueWithIdentifier, openSignInOptions } from './sign-in';
+import { continueWithIdentifier } from './sign-in';
 import {
   test,
   expect,
@@ -857,7 +857,6 @@ test('Password recovery explains disabled delivery and removes invalid reset fra
   page,
 }) => {
   await page.goto('/account');
-  await openSignInOptions(page);
   await page.getByRole('link', { name: 'Забыли пароль?' }).click();
   await expect(
     page.getByRole('heading', { name: 'Восстановить доступ' }),
