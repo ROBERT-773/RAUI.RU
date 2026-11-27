@@ -7,6 +7,7 @@ import {
   type FormEvent,
 } from 'react';
 import Link from 'next/link';
+import { useBeforeUnload } from '../lib/use-before-unload';
 import { api, ApiError } from '../lib/client';
 import {
   commercialLand,
@@ -202,7 +203,7 @@ export default function NewListing({
   const [draftConflict, setDraftConflict] = useState(false);
   const draftListRequest = useRef(0);
   const pendingDraftId = useRef('');
-  const touched = useRef(false);
+  const [touched, setTouched] = useState(false);
   const formData: ListingForm = {
     step,
     category,
@@ -219,6 +220,10 @@ export default function NewListing({
     price,
     terms,
   };
+  const hasUnsavedChanges =
+    !completed &&
+    (activeDraft ? !sameListingForm(formData, activeDraft.form) : touched);
+  useBeforeUnload(hasUnsavedChanges);
   const reloadDrafts = useCallback(() => {
     const request = ++draftListRequest.current;
     return api<AccountListingDraft[]>('v1/account/listing-drafts')
@@ -251,7 +256,7 @@ export default function NewListing({
         record,
         ...previous.filter((item) => item.id !== record.id),
       ]);
-      touched.current = false;
+      setTouched(false);
       void reloadDrafts();
     }
     return record;
@@ -652,7 +657,7 @@ export default function NewListing({
     setActiveDraft(null);
     setDraftConflict(false);
     pendingDraftId.current = '';
-    touched.current = false;
+    setTouched(false);
     setDraftNotice('');
     setStep(0);
     setError('');
@@ -673,12 +678,8 @@ export default function NewListing({
     setOrganizationId(initialAgencyId);
   }
   function mayLeaveForm() {
-    const changed = activeDraft
-      ? !sameListingForm(formData, activeDraft.form)
-      : touched.current;
     return (
-      !changed ||
-      completed ||
+      !hasUnsavedChanges ||
       window.confirm(
         'В форме есть несохранённые изменения. Перейти без их сохранения?',
       )
@@ -696,7 +697,7 @@ export default function NewListing({
     setActiveDraft(record);
     setDraftConflict(false);
     pendingDraftId.current = record.id;
-    touched.current = false;
+    setTouched(false);
     invalidateAddressLookup();
     void chooseCategory(saved.category, saved.attributes);
     setDeal(saved.deal);
@@ -723,7 +724,7 @@ export default function NewListing({
       className="listing-wizard"
       onSubmit={save}
       onChange={() => {
-        touched.current = true;
+        setTouched(true);
         setDraftNotice('');
       }}
     >

@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import Link from 'next/link';
+import { useBeforeUnload } from '../lib/use-before-unload';
 import ListingPublicationActions from './listing-publication-actions';
 import ListingMediaGallery from './listing-media-gallery';
 import ListingModerationActions from './listing-moderation-actions';
@@ -702,16 +703,7 @@ export default function OwnerListings({
       description !== listing.description ||
       termsChanged);
   const hasUnsavedChanges = Boolean(dirty) || propertyDirty;
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    const warnAboutUnsavedChanges = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = true;
-    };
-    window.addEventListener('beforeunload', warnAboutUnsavedChanges);
-    return () =>
-      window.removeEventListener('beforeunload', warnAboutUnsavedChanges);
-  }, [hasUnsavedChanges]);
+  useBeforeUnload(hasUnsavedChanges);
   const readyPhotos = media.filter(
     (item) => item.kind === 'photo' && item.state === 'ready',
   ).length;

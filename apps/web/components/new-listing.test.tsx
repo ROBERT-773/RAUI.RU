@@ -210,6 +210,39 @@ test('an incomplete address and its step return from the account after a remount
   expect(screen.getByRole('button', { name: 'Далее' })).toBeTruthy();
 });
 
+test('protects unsaved address edits on reload and releases the warning after saving', async () => {
+  setup();
+  const view = render(<NewListing onCreated={() => {}} />);
+  const canLeave = () =>
+    window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+  await screen.findByRole('option', { name: 'Квартира' });
+  expect(canLeave()).toBe(true);
+  fireEvent.change(screen.getByLabelText('Категория'), {
+    target: { value: 'apartment' },
+  });
+  const next = screen.getByRole<HTMLButtonElement>('button', { name: 'Далее' });
+  await waitFor(() => expect(next.disabled).toBe(false));
+  fireEvent.click(next);
+  const address = screen.getByLabelText('Адрес');
+  fireEvent.change(address, { target: { value: 'Москва, Тверская' } });
+  expect(canLeave()).toBe(false);
+
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Сохранить в черновики' }),
+  );
+  await screen.findByText(/Черновик сохранён в кабинете/);
+  expect(canLeave()).toBe(true);
+
+  fireEvent.change(address, { target: { value: 'Москва, Тверская, 10' } });
+  expect(canLeave()).toBe(false);
+  fireEvent.change(address, { target: { value: 'Москва, Тверская' } });
+  expect(canLeave()).toBe(true);
+
+  fireEvent.change(address, { target: { value: 'Москва, Тверская, 12' } });
+  view.unmount();
+  expect(canLeave()).toBe(true);
+});
+
 test('conflicting partial saves keep local text and require an explicit reload', async () => {
   const drafts = setupListingDrafts();
   render(<NewListing onCreated={() => {}} />);
