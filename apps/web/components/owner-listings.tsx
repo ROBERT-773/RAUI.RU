@@ -186,7 +186,8 @@ export default function OwnerListings({
   const focusSavedList = useRef(false);
   useEffect(() => {
     if (!listing && focusSavedList.current) {
-      savedHeading.current?.focus();
+      if (document.activeElement === document.body)
+        savedHeading.current?.focus();
       focusSavedList.current = false;
     }
   }, [listing]);

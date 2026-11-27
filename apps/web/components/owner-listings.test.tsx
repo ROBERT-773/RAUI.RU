@@ -1902,3 +1902,37 @@ test('fresh non-applicable quota hides owner panel after a role change', async (
   );
   expect(screen.queryByText(/Активных объявлений:/)).toBeNull();
 });
+
+test('saving a preview preserves focus the user moved to the cabinet menu while waiting', async () => {
+  setup();
+  render(
+    <>
+      <button>Меню кабинета</button>
+      <OwnerListings />
+    </>,
+  );
+  fireEvent.click(await screen.findByRole('button', { name: listing.title }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Перейти к предпросмотру' }),
+  );
+  const save = await screen.findByRole('button', {
+    name: 'Сохранить в черновики',
+  });
+  const original = vi.mocked(api).getMockImplementation()!;
+  let release: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.mocked(api).mockImplementation(async (...args) => {
+    if (args[0] === 'v1/listings/' + listing.id && !args[1]) await waiting;
+    return original(...args);
+  });
+  fireEvent.click(save);
+  const menu = screen.getByRole('button', { name: 'Меню кабинета' });
+  menu.focus();
+  await act(async () => {
+    release();
+  });
+  await screen.findByText(/Черновик сохранён. Продолжить заполнение/);
+  expect(document.activeElement).toBe(menu);
+});
