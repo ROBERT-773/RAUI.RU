@@ -211,7 +211,7 @@ test('an incomplete address and its step return from the account after a remount
 });
 
 test('protects unsaved address edits on reload and releases the warning after saving', async () => {
-  setup();
+  setupListingDrafts();
   const view = render(<NewListing onCreated={() => {}} />);
   const canLeave = () =>
     window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
