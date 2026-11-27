@@ -51,7 +51,7 @@ test('a direct deal link searches nationwide or within its selected region on th
 test('the search button fits on a short phone before scrolling', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 320, height: 640 });
+  await page.setViewportSize({ width: 320, height: 568 });
   await page.goto('/search');
   const submit = page.getByRole('button', { name: 'Найти', exact: true });
   await expect(submit).toBeEnabled();
