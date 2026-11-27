@@ -47,3 +47,13 @@ test('a direct deal link searches nationwide or within its selected region on th
     page.getByRole('combobox', { name: 'Город', exact: true }),
   ).toHaveValue('Москва');
 });
+
+test('the search button fits on a short phone before scrolling', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto('/search');
+  const submit = page.getByRole('button', { name: 'Найти', exact: true });
+  await expect(submit).toBeEnabled();
+  await expect(submit).toBeInViewport({ ratio: 1 });
+});
