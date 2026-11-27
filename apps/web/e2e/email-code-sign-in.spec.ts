@@ -163,6 +163,19 @@ async function signInByPassword(page: Page, address: string, password: string) {
   await page.getByRole('button', { name: 'Войти', exact: true }).click();
 }
 
+async function signOut(page: Page) {
+  const loggedOut = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === '/api/v1/auth/logout' &&
+      r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  expect((await loggedOut).ok()).toBe(true);
+  await expect(
+    page.getByRole('heading', { name: 'Кабинет риелтора', level: 1 }),
+  ).toBeHidden();
+}
+
 test('an existing agent requests a fresh code from their profile and chooses a new password', async ({
   page,
 }, info) => {
@@ -182,7 +195,7 @@ test('an existing agent requests a fresh code from their profile and chooses a n
   await page.getByRole('button', { name: 'Получить код на почту' }).click();
   await enterEmailCode(page, address, { existingOnly: true });
   await setCabinetPassword(page);
-  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  await signOut(page);
   await openEmailSignIn(page);
   await signInByPassword(page, address, 'E2E-changed-password-84!');
   await expect(
@@ -212,19 +225,9 @@ test('forgotten password opens the existing agent cabinet with email code and pr
     expect(user.public_id).toMatch(/^[1-9][0-9]*$/);
     return { id: user.id as string, publicId: user.public_id as string };
   }
-  async function signOut() {
-    const loggedOut = page.waitForResponse(
-      (r) =>
-        new URL(r.url()).pathname === '/api/v1/auth/logout' &&
-        r.request().method() === 'POST',
-    );
-    await page.getByRole('button', { name: 'Выйти', exact: true }).click();
-    expect((await loggedOut).ok()).toBe(true);
-    await expect(cabinet).toBeHidden();
-  }
   await openEmailSignIn(page);
   const original = await passwordSignIn();
-  await signOut();
+  await signOut(page);
   await openEmailSignIn(page);
   await openSignInOptions(page);
   await page.getByRole('link', { name: 'Забыли пароль?', exact: true }).click();
@@ -243,7 +246,7 @@ test('forgotten password opens the existing agent cabinet with email code and pr
   await expect(
     page.getByText('ID: ' + original.publicId, { exact: true }),
   ).toBeVisible();
-  await signOut();
+  await signOut(page);
   await openEmailSignIn(page);
   expect(await passwordSignIn()).toEqual(original);
 });
