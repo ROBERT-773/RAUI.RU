@@ -483,6 +483,35 @@ test('a late previous-search response cannot replace the new route or finish its
   replies[1]!({ items: [], total: 7, facets: {} });
   expect(await screen.findByText('Найдено около 7 объявлений')).toBeTruthy();
 });
+test.each([
+  [0, false, 'Найдено 0 объявлений'],
+  [1, false, 'Найдено 1 объявление'],
+  [1, true, 'Найдено около 1 объявления'],
+  [2, false, 'Найдено 2 объявления'],
+  [2, true, 'Найдено около 2 объявлений'],
+  [5, false, 'Найдено 5 объявлений'],
+  [11, true, 'Найдено около 11 объявлений'],
+  [12, false, 'Найдено 12 объявлений'],
+  [21, true, 'Найдено около 21 объявления'],
+  [22, false, 'Найдено 22 объявления'],
+] as const)(
+  'search total %i (estimate: %s) reads naturally',
+  (total, totalIsEstimate, label) => {
+    captureSearch();
+    render(
+      <SearchProduct
+        initialPage={{
+          items: [],
+          total,
+          totalIsEstimate,
+          cursor: null,
+          facets: {},
+        }}
+      />,
+    );
+    expect(screen.getByText(label).getAttribute('role')).toBe('status');
+  },
+);
 test('loading → empty results and accessible filters', async () => {
   stubFetch(
     'fetch',
