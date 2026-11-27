@@ -6,7 +6,7 @@ import { AccountEntryLink } from './account-entry-link';
 import { useAccountAction } from './use-account-action';
 import { useRouter } from 'next/navigation';
 import type { SearchDefinition, SearchPage } from '@raui/types/product';
-import { api, track } from '../lib/client';
+import { api, ApiError, track } from '../lib/client';
 import AdvancedFilters, { advancedDefinition } from './advanced-filters';
 import { Card } from './card';
 import LocationInput from './location-input';
@@ -14,6 +14,14 @@ const MapPanel = dynamic(() => import('./map'), {
   loading: () => <p role="status">Загрузка карты…</p>,
   ssr: false,
 });
+
+function searchError(cause: unknown) {
+  if (cause instanceof TypeError)
+    return 'Не удалось загрузить объявления. Проверьте подключение к интернету.';
+  return cause instanceof ApiError
+    ? cause.message
+    : 'Не удалось загрузить объявления. Попробуйте ещё раз.';
+}
 
 function dateField(value: number | undefined) {
   const date = String(value ?? '');
@@ -59,6 +67,10 @@ function SearchView({
   const [navigationPending, startNavigation] = useTransition();
   const [requestRevision, setRequestRevision] = useState(0);
   const [advancedCategory, setAdvancedCategory] = useState<string | null>(null);
+  const [pagination, setPagination] = useState<{
+    page: SearchPage;
+    error: string;
+  } | null>(null);
   const [page, setPage] = useState<SearchPage | null>(initialPage),
     [error, setError] = useState(''),
     [loading, setLoading] = useState(!initialPage),
@@ -113,7 +125,7 @@ function SearchView({
         }
       })
       .catch((e) => {
-        if (active) setError((e as Error).message);
+        if (active) setError(searchError(e));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -141,6 +153,31 @@ function SearchView({
     setSelected(null);
     track({ type: 'filter_changed', fields: Object.keys(d) });
   }
+  const loadingMore =
+    pagination !== null && pagination.page === page && !pagination.error;
+  async function loadMore(current: SearchPage) {
+    if (!current.cursor) return;
+    const request = { page: current, error: '' };
+    setPagination(request);
+    try {
+      const next = await api<SearchPage>('v1/search', 'POST', {
+        ...definition,
+        cursor: current.cursor,
+      });
+      setPage((latest) =>
+        latest === current
+          ? { ...next, items: [...current.items, ...next.items] }
+          : latest,
+      );
+      setPagination((latest) => (latest === request ? null : latest));
+    } catch (cause) {
+      const error = searchError(cause);
+      setPagination((latest) =>
+        latest === request ? { page: current, error } : latest,
+      );
+    }
+  }
+
   async function save() {
     await api('v1/account/saved-searches', 'POST', {
       name: definition.q || 'Мой поиск',
@@ -495,7 +532,7 @@ function SearchView({
               );
               setPage(result);
             } catch (error) {
-              setError((error as Error).message);
+              setError(searchError(error));
             }
           }}
         />
@@ -559,21 +596,17 @@ function SearchView({
             </Button>
           )}
           {page.cursor && (
-            <Button
-              onClick={async () => {
-                try {
-                  const next = await api<SearchPage>('v1/search', 'POST', {
-                    ...definition,
-                    cursor: page.cursor,
-                  });
-                  setPage({ ...next, items: [...page.items, ...next.items] });
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-            >
-              Показать ещё
-            </Button>
+            <>
+              {pagination?.page === page && pagination.error && (
+                <p role="alert">{pagination.error}</p>
+              )}
+              <Button
+                disabled={loadingMore}
+                onClick={() => void loadMore(page)}
+              >
+                {loadingMore ? 'Загружаем…' : 'Показать ещё'}
+              </Button>
+            </>
           )}
         </>
       )}

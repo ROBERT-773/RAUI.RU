@@ -544,6 +544,74 @@ test('loading → empty results and accessible filters', async () => {
       .hasAttribute('disabled'),
   ).toBe(false);
 });
+test('a network failure explains how to retry without losing the search filters', async () => {
+  const attempts: unknown[] = [];
+  const definition = { dealType: 'sale', price: { max: 4000000 } } as const;
+  stubFetch('fetch', async (url, init) => {
+    if (url.includes('/categories/')) return { ok: true, json: async () => [] };
+    if (url === '/api/v1/search') {
+      attempts.push(JSON.parse(String(init?.body)));
+      if (attempts.length === 1) throw new TypeError('Failed to fetch');
+    }
+    return {
+      ok: true,
+      json: async () => ({ items: [], total: 0, facets: {}, cursor: null }),
+    };
+  });
+  render(<SearchProduct initialDefinition={definition} />);
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'Проверьте подключение к интернету',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+  await screen.findByText(/Объявления не найдены/);
+  expect(attempts).toEqual([definition, definition]);
+});
+
+test('retrying the next page keeps visible offers and uses the same cursor', async () => {
+  const requests: (string | null)[] = [];
+  stubFetch('fetch', async (url, init) => {
+    if (url.includes('/categories/')) return { ok: true, json: async () => [] };
+    if (url !== '/api/v1/search')
+      return { ok: true, json: async () => ({ items: [] }) };
+    const { cursor } = JSON.parse(String(init?.body));
+    requests.push(cursor ?? null);
+    if (requests.length === 2) throw new TypeError('Failed to fetch');
+    const title = cursor ? 'Квартира у парка' : 'Квартира у метро';
+    return {
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            id: cursor ? 'second' : 'first',
+            title,
+            media: [],
+            attributes: {},
+            price: 1000000,
+            deal_type: 'sale',
+          },
+        ],
+        total: 2,
+        facets: {},
+        cursor: cursor ? null : 'next-page',
+      }),
+    };
+  });
+  render(<SearchProduct />);
+  await screen.findByRole('heading', { name: 'Квартира у метро' });
+  fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }));
+  await screen.findByRole('alert');
+  expect(
+    screen.getByRole('heading', { name: 'Квартира у метро' }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }));
+  await screen.findByRole('heading', { name: 'Квартира у парка' });
+  expect(
+    screen.getAllByRole('heading', { name: 'Квартира у метро' }),
+  ).toHaveLength(1);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(requests).toEqual([null, 'next-page', 'next-page']);
+});
+
 test('API error is actionable and retry reissues the request', async () => {
   const fetch = vi.fn(async (url: string) =>
     url === '/api/v1/regions'
