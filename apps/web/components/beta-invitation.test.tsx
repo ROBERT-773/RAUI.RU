@@ -67,10 +67,8 @@ afterEach(() => {
 test('guests can see the beta notice and open support without signing in', () => {
   render(<BetaInvitation />);
   expect(screen.getByText(/Портал работает в тестовом режиме/)).toBeTruthy();
-  expect(screen.getByRole('link', { name: 'Сообщить о сбое' })).toHaveProperty(
-    'pathname',
-    '/support',
-  );
+  const link = screen.getByRole('link', { name: 'Сообщить о сбое' });
+  expect(link.getAttribute('href')).toBe('/support?write=1');
 });
 
 test('dismissal persists, feedback stays available and closing with Escape restores keyboard focus', async () => {

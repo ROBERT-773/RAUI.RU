@@ -84,7 +84,7 @@ export default function BetaInvitation({
             <h2>Бесплатное размещение объявлений</h2>
             <p>
               Портал работает в тестовом режиме. Приносим извинения за возможные
-              сбои. <Link href="/support">Сообщить о сбое</Link>
+              сбои. <Link href="/support?write=1">Сообщить о сбое</Link>
             </p>
             <details>
               <summary>Условия размещения</summary>
