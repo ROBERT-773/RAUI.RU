@@ -56,4 +56,7 @@ test('the search button fits on a short phone before scrolling', async ({
   const submit = page.getByRole('button', { name: 'Найти', exact: true });
   await expect(submit).toBeEnabled();
   await expect(submit).toBeInViewport({ ratio: 1 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(320);
 });
