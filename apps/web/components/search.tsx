@@ -15,6 +15,23 @@ const MapPanel = dynamic(() => import('./map'), {
   ssr: false,
 });
 
+const listingPlural = new Intl.PluralRules('ru');
+function resultCountLabel({ total, totalIsEstimate }: SearchPage) {
+  const form = listingPlural.select(total);
+  if (totalIsEstimate !== false) {
+    const noun = form === 'one' ? 'объявления' : 'объявлений';
+    return `Найдено около ${total} ${noun}`;
+  }
+  switch (form) {
+    case 'one':
+      return `Найдено ${total} объявление`;
+    case 'few':
+      return `Найдено ${total} объявления`;
+    default:
+      return `Найдено ${total} объявлений`;
+  }
+}
+
 function dateField(value: number | undefined) {
   const date = String(value ?? '');
   return /^\d{8}$/.test(date)
@@ -552,7 +569,7 @@ function SearchView({
       )}
       {!loading && !error && page && (
         <>
-          <p role="status">Найдено около {page.total} объявлений</p>
+          <p role="status">{resultCountLabel(page)}</p>
           {page.items.length === 0 ? (
             definition.dealType === 'short_rent' &&
             definition.attributes?.rental_available_from &&
